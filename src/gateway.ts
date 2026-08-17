@@ -75,6 +75,10 @@ const DISCOVERY_INTERVAL_MS = 3_000
 const MDNS_SERVICE_TYPE = 'dsh-mobile'
 const MOBILE_LAYOUT_MODULE = '@deepseek-ai/dsh-client-ui-layout'
 const MOBILE_LAYOUT_PATH = `${AUTH_PREFIX}/mobile-layout.js`
+const MOBILE_LAYOUT_DEPENDENCIES = Object.freeze([
+  '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-client-ui-theme',
+])
 const PAIR_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -118,6 +122,10 @@ export function rewriteMobileIndex(html: string): string {
   const layout = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === MOBILE_LAYOUT_MODULE)
   if (layout.length !== 1 || typeof layout[0]?.url !== 'string' || typeof layout[0].rev !== 'string') {
     throw new Error('upstream DSH boot manifest has no unique layout module')
+  }
+  if (!Array.isArray(layout[0].inject)
+    || MOBILE_LAYOUT_DEPENDENCIES.some(dependency => !layout[0]?.inject?.includes(dependency))) {
+    throw new Error('upstream DSH layout module has unsupported dependencies')
   }
   layout[0].url = MOBILE_LAYOUT_PATH
   layout[0].rev = 'dsh-mobile-layout-v1'

@@ -1,8 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { parseControlFile, parseGatewayConfig, type PluginConfig } from './config.js'
+import { assertSupportedDshVersion } from './compatibility.js'
 import {
   FollowingMobileAccessRuntime,
   JsonMobileAccessControlStore,
@@ -32,6 +34,12 @@ export const name = 'dsh-mobile'
 
 /** The stock WebServer is the only DSH Host service this plugin requires. */
 export const inject = ['webServer']
+
+function installedDshVersion(): unknown {
+  const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
+  if (manifest === null || typeof manifest !== 'object') return undefined
+  return (manifest as { readonly version?: unknown }).version
+}
 
 function mapAdminError(error: unknown): HttpError {
   if (error instanceof HttpError) return error
@@ -96,6 +104,7 @@ async function loadSetup(config: PluginConfig): Promise<LoadedSetup> {
 
 /** Mount the resident control route and its optional authenticated LAN gateway. */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
+  assertSupportedDshVersion(installedDshVersion())
   const loaded = await loadSetup(config)
   let gateway: MobileAccessGateway | undefined
   const startGateway = async (candidateConfig: PluginConfig): Promise<MobileAccessRuntime> => {

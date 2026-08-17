@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  dsh-compatibility:
+    name: Current DSH frontend contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: mobile
+      - uses: actions/checkout@v7
+        with:
+          repository: deepseek-ai/deepseek-harness
+          path: dsh
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - run: node mobile/scripts/check-dsh-compatibility.mjs dsh
+
   gateway:
     name: Gateway (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}

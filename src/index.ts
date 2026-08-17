@@ -12,6 +12,7 @@ export type {
   SessionAuthorization,
 } from './access.js'
 export { Config, parseControlFile, parseGatewayConfig } from './config.js'
+export { assertSupportedDshVersion, SUPPORTED_DSH_VERSIONS } from './compatibility.js'
 export type {
   DisabledTlsConfig,
   PluginConfig,

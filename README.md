@@ -7,9 +7,9 @@
 <p align="center">在手机上安全、实时地使用电脑中的 DeepSeek Harness。</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&amp;label=npm&amp;color=CB3837" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&label=npm&color=CB3837" alt="npm 版本"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 10+"></a>
+  <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
 </p>
 
@@ -20,7 +20,7 @@
   <a href="README.en.md">English</a>
 </p>
 
-> Alpha 版本，当前原生 App 仅支持 Android。本项目是社区插件，不是 DeepSeek 官方产品。
+> Alpha 版本，当前原生 App 仅支持 Android。本项目为 DeepSeek Harness 社区插件。
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
@@ -65,12 +65,21 @@ pnpm dsh --profile web
 
 插件不会修改 DeepSeek Harness 源码。设置、证书、设备和自定义文件保存在 `$DSH_HOME/mobile-access/`。
 
+## 兼容性
+
+| DSH Mobile | 已验证的 DeepSeek Harness |
+| --- | --- |
+| `0.1.0-alpha.20` | `0.1.0-rc.5`、`0.1.0-rc.6` |
+
+插件会在启动时检查 DSH Host 版本和移动布局所需的前端依赖；遇到未经验证的版本会直接给出错误，不会带着不兼容页面继续启动。CI 也会持续检查 DSH 主分支的布局插槽和移动端语义标记。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
+
 ## 连接方式
 
-| 方式 | 适合场景 | 说明 |
-| --- | --- | --- |
-| Android App | 日常使用 | 自动发现、无浏览器栏、App 内私有证书固定 |
-| 手机浏览器 | 临时或跨平台访问 | 打开“移动访问”卡片显示的 HTTPS 地址 |
+
+| 方式        | 适合场景         | 说明                                     |
+| ------------- | ------------------ | ------------------------------------------ |
+| Android App | 日常使用         | 自动发现、无浏览器栏、App 内私有证书固定 |
+| 手机浏览器  | 临时或跨平台访问 | 打开“移动访问”卡片显示的 HTTPS 地址    |
 
 Android 同时使用 mDNS/NSD、UDP 公告、主动 UDP 查询和 HTTPS 探测发现 DeepSeek Harness。发现只广播设备名、地址、端口、协议版本和稳定 `instanceId`，不会广播密钥或令牌。
 

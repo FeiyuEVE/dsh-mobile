@@ -181,7 +181,7 @@ async function upstream(): Promise<{
       return
     }
     if (incoming.url === '/' && incoming.headers.accept?.includes('text/html')) {
-      const body = '<!doctype html><html><head><script>window.__DSH_BOOT__ = {"rev":"stock","entries":[{"id":"@deepseek-ai/dsh-client-ui-layout","url":"/plugins/layout.js","rev":"stock-layout","inject":["runtime"]},{"id":"feature","url":"/plugins/feature.js","rev":"feature"}]};</script></head><body></body></html>'
+      const body = '<!doctype html><html><head><script>window.__DSH_BOOT__ = {"rev":"stock","entries":[{"id":"@deepseek-ai/dsh-client-ui-layout","url":"/plugins/layout.js","rev":"stock-layout","inject":["@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-theme"]},{"id":"feature","url":"/plugins/feature.js","rev":"feature"}]};</script></head><body></body></html>'
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(body) })
       response.end(body)
       return

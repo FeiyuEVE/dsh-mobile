@@ -44,6 +44,14 @@ pnpm dsh --profile web
 
 Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, and select **Create and copy key**. In the Android app, tap **Scan**, select the computer, and enter the key. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
 
+## Compatibility
+
+| DSH Mobile | Verified DeepSeek Harness releases |
+| --- | --- |
+| `0.1.0-alpha.20` | `0.1.0-rc.5`, `0.1.0-rc.6` |
+
+At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
+
 ## Connection options
 
 | Client | Best for | Notes |

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile",
-  "version": "0.1.0-alpha.19",
+  "version": "0.1.0-alpha.20",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全局域网访问插件，支持 Android App 和手机浏览器。",
   "type": "module",
@@ -51,6 +51,7 @@
   "scripts": {
     "build": "tsdown",
     "check:mobile-release": "node ./scripts/check-mobile-release.mjs",
+    "check:dsh-compatibility": "node ./scripts/check-dsh-compatibility.mjs",
     "check:release-tag": "node ./scripts/check-release-version.mjs --tag-env",
     "check:version": "node ./scripts/check-release-version.mjs",
     "clean": "node ./scripts/clean.mjs",
@@ -88,7 +89,7 @@
   "license": "Apache-2.0",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.5 <0.1.0",
+    "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.5 || 0.1.0-rc.6",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
