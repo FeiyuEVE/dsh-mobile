@@ -65,14 +65,6 @@ pnpm dsh --profile web
 
 插件不会修改 DeepSeek Harness 源码。设置、证书、设备和自定义文件保存在 `$DSH_HOME/mobile-access/`。
 
-## 兼容性
-
-| DSH Mobile | 已验证的 DeepSeek Harness |
-| --- | --- |
-| `0.1.0-alpha.20` | `0.1.0-rc.5`、`0.1.0-rc.6` |
-
-插件会在启动时检查 DSH Host 版本和移动布局所需的前端依赖；遇到未经验证的版本会直接给出错误，不会带着不兼容页面继续启动。CI 也会持续检查 DSH 主分支的布局插槽和移动端语义标记。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
-
 ## 连接方式
 
 
@@ -132,6 +124,14 @@ flowchart LR
 ```
 
 插件包含两部分：Host face 提供发现、配对、HTTPS 和回环代理；Client face 替换移动端的布局入口，并复用原生功能插件。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载仍完全通过插件机制完成。
+
+## 兼容性
+
+| DSH Mobile | 已验证的 DeepSeek Harness |
+| --- | --- |
+| `0.1.0-alpha.21` | `0.1.0-rc.5`、`0.1.0-rc.6` |
+
+插件会在启动时检查 DSH Host 版本和移动布局所需的前端依赖；遇到未经验证的版本会直接给出错误，不会带着不兼容页面继续启动。CI 也会持续检查 DSH 主分支的布局插槽和移动端语义标记。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 
 ## 安全
 
