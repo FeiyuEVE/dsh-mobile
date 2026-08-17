@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&amp;color=CB3837" alt="npm 版本"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/下载-Android_App-3DDC84?logo=android&amp;logoColor=white" alt="下载 Android App"></a>
-  <img src="https://img.shields.io/badge/DSH-插件-2563EB" alt="DSH 插件">
+  <img src="https://img.shields.io/badge/DeepSeek_Harness-Mobile-2563EB" alt="DeepSeek Harness Mobile">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
 </p>
 
