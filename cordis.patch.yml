@@ -1,0 +1,29 @@
+# Community bundle for the stock DSH Web profile. Installation contributes a
+# Host gateway and a browser Client face; it does not patch DSH source files.
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+
+- insert:
+    - id: directory-picker-mobile-host
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+
+    - id: directory-picker-mobile-surface
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+
+    - id: mobile-access
+      name: dsh-mobile
+      inject: [webServer]
+      config:
+        setupFile: !!js dshHomePath('mobile-access/setup.json')
+        stateFile: !!js dshHomePath('mobile-access/devices.json')
+        controlFile: !!js dshHomePath('mobile-access/control.json')
+        customCssFile: !!js dshHomePath('mobile-access/mobile.css')
+        customScriptFile: !!js dshHomePath('mobile-access/mobile.js')
+        initiallyEnabled: false
+        listenHost: 127.0.0.1
+        listenPort: 3443
+        upstreamOrigin: http://127.0.0.1:3080
+        allowedCidrs: [127.0.0.0/8]
+        tls:
+          mode: disabled

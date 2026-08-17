@@ -1,0 +1,120 @@
+{
+  "name": "dsh-mobile",
+  "version": "0.1.0-alpha.14",
+  "private": false,
+  "description": "DeepSeek Harness 移动端适配与安全局域网访问插件，支持 Android App 和手机浏览器。",
+  "type": "module",
+  "bin": {
+    "dsh-mobile": "lib/cli.js"
+  },
+  "main": "./lib/index.mjs",
+  "types": "./lib/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.mts",
+      "default": "./lib/index.mjs"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.mjs",
+    "lib/cli.js",
+    "lib/**/*.d.mts",
+    "lib/client.js",
+    "lib/client.js.map",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "assets/brand/*.png",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ],
+      "immediately": true
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check:mobile-release": "node ./scripts/check-mobile-release.mjs",
+    "check:release-tag": "node ./scripts/check-release-version.mjs --tag-env",
+    "check:version": "node ./scripts/check-release-version.mjs",
+    "clean": "node ./scripts/clean.mjs",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run check:version && npm run build",
+    "verify": "npm run check:version && npm run check:mobile-release && npm run typecheck && npm run test && npm run build && npm pack --dry-run"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saya-ch/dsh-mobile.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saya-ch/dsh-mobile/issues"
+  },
+  "homepage": "https://github.com/saya-ch/dsh-mobile#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "plugin",
+    "android",
+    "lan",
+    "mobile",
+    "https"
+  ],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.5 <0.1.0",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "bonjour-service": "^1.4.4",
+    "selfsigned": "^5.5.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.3.0",
+    "@types/react": "~18.3.1",
+    "js-yaml": "^4.3.1",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

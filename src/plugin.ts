@@ -1,0 +1,189 @@
+import type { Context } from '@deepseek-ai/cordis'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { readFile } from 'node:fs/promises'
+import { isAbsolute, resolve } from 'node:path'
+import { parseControlFile, parseGatewayConfig, type PluginConfig } from './config.js'
+import {
+  FollowingMobileAccessRuntime,
+  JsonMobileAccessControlStore,
+  MobileAccessGatewayController,
+  type MobileAccessRuntime,
+} from './control.js'
+import { MobileAccessGateway } from './gateway.js'
+import {
+  HttpError,
+  LOCAL_ADMIN_PREFIX,
+  assertLocalAdminTrust,
+  parseRequestTarget,
+  readJsonObject,
+  sendFailure,
+  sendJson,
+} from './http-security.js'
+import { JsonDeviceStore } from './storage.js'
+import {
+  materializeManagedSetup,
+  parseManagedSetup,
+  selectLanNetwork,
+  type ManagedSetup,
+} from './managed-setup.js'
+
+/** Stable Cordis plugin name. */
+export const name = 'dsh-mobile'
+
+/** The stock WebServer is the only DSH Host service this plugin requires. */
+export const inject = ['webServer']
+
+function mapAdminError(error: unknown): HttpError {
+  if (error instanceof HttpError) return error
+  const code = (error as NodeJS.ErrnoException).code
+  if (code === 'EADDRNOTAVAIL') return new HttpError(409, 'network_address_changed')
+  if (code === 'EADDRINUSE') return new HttpError(409, 'listen_port_in_use')
+  if (error instanceof Error && error.message.startsWith('saved LAN interface ')) {
+    return new HttpError(409, 'network_interface_unavailable')
+  }
+  return new HttpError(500, 'internal_error')
+}
+
+const SETUP_KEYS = new Set([
+  'version', 'publicOrigin', 'listenHost', 'listenPort', 'upstreamOrigin',
+  'publicAuthorities', 'allowedCidrs', 'instanceId', 'pairingCaFile', 'tls',
+])
+
+type LoadedSetup = {
+  readonly kind: 'fixed'
+  readonly config: PluginConfig
+} | {
+  readonly kind: 'managed'
+  readonly config: PluginConfig
+  readonly setup: ManagedSetup
+}
+
+function withoutSetupKeys(config: PluginConfig): PluginConfig {
+  const merged = { ...config } as Record<string, unknown>
+  for (const key of SETUP_KEYS) if (key !== 'version') delete merged[key]
+  return merged as unknown as PluginConfig
+}
+
+async function loadSetup(config: PluginConfig): Promise<LoadedSetup> {
+  if (config.setupFile === undefined) return { kind: 'fixed', config }
+  if (!isAbsolute(config.setupFile)) throw new Error('setupFile must be an absolute file path')
+  let source: string
+  try {
+    source = await readFile(resolve(config.setupFile), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'fixed', config }
+    throw error
+  }
+  let parsed: unknown
+  try { parsed = JSON.parse(source) as unknown }
+  catch (error) { throw new Error('mobile setup file is not valid JSON', { cause: error }) }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('mobile setup file must be an object')
+  }
+  const record = parsed as Record<string, unknown>
+  if (record.version === 2) {
+    return { kind: 'managed', config: withoutSetupKeys(config), setup: parseManagedSetup(record) }
+  }
+  if (record.version !== 1 || Reflect.ownKeys(record).some(key => typeof key !== 'string' || !SETUP_KEYS.has(key))) {
+    throw new Error('mobile setup file has an unsupported format')
+  }
+  const { version: _version, ...setup } = record
+  return {
+    kind: 'fixed',
+    config: { ...withoutSetupKeys(config), ...setup } as unknown as PluginConfig,
+  }
+}
+
+/** Mount the resident control route and its optional authenticated LAN gateway. */
+export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
+  const loaded = await loadSetup(config)
+  let gateway: MobileAccessGateway | undefined
+  const startGateway = async (candidateConfig: PluginConfig): Promise<MobileAccessRuntime> => {
+    const resolved = parseGatewayConfig(candidateConfig)
+    const candidate = new MobileAccessGateway(
+      resolved,
+      new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
+    )
+    await candidate.start()
+    gateway = candidate
+    return {
+      close: async () => {
+        if (gateway === candidate) gateway = undefined
+        await candidate.close()
+      },
+    }
+  }
+  const startRuntime = async (): Promise<MobileAccessRuntime> => {
+    if (loaded.kind === 'fixed') return startGateway(loaded.config)
+    const following = new FollowingMobileAccessRuntime(async () => {
+      const network = selectLanNetwork(undefined, loaded.setup.networkInterface)
+      return {
+        key: `${network.name}\0${network.address}\0${network.cidr}`,
+        start: async () => startGateway({
+          ...loaded.config,
+          ...await materializeManagedSetup(loaded.setup),
+        }),
+      }
+    }, (error) => {
+      process.emitWarning(`DSH Mobile could not follow the current LAN address: ${error instanceof Error ? error.message : String(error)}`, {
+        code: 'DSH_MOBILE_NETWORK_REFRESH',
+      })
+    })
+    await following.initialize(2_000)
+    return following
+  }
+  const controller = new MobileAccessGatewayController(
+    new JsonMobileAccessControlStore(parseControlFile(config.controlFile), config.initiallyEnabled),
+    startRuntime,
+  )
+
+  const adminRoute: WebRoute = {
+    kind: 'prefix',
+    path: LOCAL_ADMIN_PREFIX,
+    handler: async (request, response) => {
+      try {
+        const target = parseRequestTarget(request.url)
+        assertLocalAdminTrust(request, request.method === 'POST')
+        if (target.search !== '') throw new HttpError(400, 'bad_request')
+        if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/control`) {
+          sendJson(response, 200, {
+            running: controller.isRunning(),
+            origin: gateway?.address().origin,
+          }, false)
+          return
+        }
+        if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/control`) {
+          const body = await readJsonObject(request, 4096)
+          if (typeof body.running !== 'boolean') throw new HttpError(400, 'bad_request')
+          await controller.setRunning(body.running)
+          sendJson(response, 200, {
+            running: controller.isRunning(),
+            origin: gateway?.address().origin,
+          }, false)
+          return
+        }
+        const active = gateway
+        if (active === undefined) throw new HttpError(409, 'gateway_stopped')
+        await active.localAdminRoute().handler(request, response)
+      } catch (error) {
+        const mapped = mapAdminError(error)
+        if (response.headersSent) response.destroy()
+        else sendFailure(response, mapped.status, mapped.code, false)
+      }
+    },
+  }
+
+  await ctx.effect(async () => {
+    const unregister = ctx.webServer.register(adminRoute)
+    try {
+      await controller.initialize()
+    } catch (error) {
+      unregister()
+      throw error
+    }
+    return async () => {
+      unregister()
+      await controller.close()
+    }
+  }, 'dsh-mobile: local control and authenticated LAN gateway')
+}

@@ -1,0 +1,104 @@
+import { Context } from '@deepseek-ai/cordis'
+import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
+import { createServer, request as requestHttp } from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Config } from '../src/config.js'
+import { apply, inject } from '../src/plugin.js'
+
+const contexts: Context[] = []
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(contexts.splice(0).map(context => context.fiber.dispose()))
+  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
+
+async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, body = ''): Promise<{ status: number; body: string }> {
+  const server = createServer((request, response) => { void route.handler(request, response) })
+  await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
+  const port = (server.address() as AddressInfo).port
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = requestHttp({
+        host: '127.0.0.1',
+        port,
+        method,
+        path,
+        headers: {
+          host: `127.0.0.1:${String(port)}`,
+          ...(method === 'POST' ? {
+            origin: `http://127.0.0.1:${String(port)}`,
+            'sec-fetch-site': 'same-origin',
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+          } : {}),
+        },
+      }, (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+        response.on('end', () => resolve({
+          status: response.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString('utf8'),
+        }))
+      })
+      request.once('error', reject)
+      if (body !== '') request.write(body)
+      request.end()
+    })
+  } finally {
+    await new Promise<void>(resolve => { server.close(() => resolve()) })
+  }
+}
+
+async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute }> {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
+  temporaryDirectories.push(directory)
+  let route: WebRoute | undefined
+  const context = new Context()
+  contexts.push(context)
+  context.provide('webServer', {
+    register(candidate: WebRoute) {
+      route = candidate
+      return () => { if (route === candidate) route = undefined }
+    },
+  } as WebServer)
+  await context.plugin({ Config, inject, apply }, {
+    listenPort: 0,
+    stateFile: join(directory, 'devices.json'),
+    controlFile: join(directory, 'control.json'),
+    customCssFile: join(directory, 'mobile.css'),
+    customScriptFile: join(directory, 'mobile.js'),
+    initiallyEnabled,
+    tls: { mode: 'disabled' },
+  })
+  if (route === undefined) throw new Error('plugin did not register its control route')
+  return { context, route }
+}
+
+describe('stock DSH lifecycle', () => {
+  it('requires only the stock WebServer service', () => {
+    expect(inject).toEqual(['webServer'])
+  })
+
+  it('keeps a loopback control route available while the LAN listener is stopped', async () => {
+    const mounted = await mount()
+    expect(mounted.route).toMatchObject({ kind: 'prefix', path: '/api/mobile-access' })
+    const status = await invoke(mounted.route, 'GET', '/api/mobile-access/control')
+    expect(status.status).toBe(200)
+    expect(JSON.parse(status.body)).toEqual({ running: false })
+  })
+
+  it('starts and stops the gateway through the local control route', async () => {
+    const mounted = await mount()
+    const started = await invoke(mounted.route, 'POST', '/api/mobile-access/control', JSON.stringify({ running: true }))
+    expect(started.status).toBe(200)
+    expect(JSON.parse(started.body)).toMatchObject({ running: true })
+    const stopped = await invoke(mounted.route, 'POST', '/api/mobile-access/control', JSON.stringify({ running: false }))
+    expect(stopped.status).toBe(200)
+    expect(JSON.parse(stopped.body)).toEqual({ running: false })
+  })
+})
