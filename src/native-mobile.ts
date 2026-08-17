@@ -82,28 +82,10 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [class*="_card"]:has(textarea) button[aria-label^="选择模型"] [class*="_triggerLabel"] { max-width:78px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
-  .dsh-native-mobile-attach { display:inline-flex; align-items:center; justify-content:center; flex:0 0 44px; width:44px; height:44px; padding:0; border:0; border-radius:12px; background:transparent; color:var(--dsw-text-secondary,#5e6673); cursor:pointer; }
-  .dsh-native-mobile-attach:active { background:var(--dsw-bg-subtle,#f1f3f6); }
-  .dsh-native-mobile-attach:focus-visible { outline:2px solid var(--dsw-accent,#4c7eea); outline-offset:2px; }
-  .dsh-native-mobile-attach:disabled { cursor:not-allowed; opacity:.38; }
-  .dsh-native-mobile-attach svg { width:22px; height:22px; }
-  .dsh-native-mobile-sheet-mask { position:fixed; z-index:1080; inset:0; border:0; background:rgb(15 23 42 / 32%); }
-  .dsh-native-mobile-sheet-mask[hidden] { display:none; }
-  .dsh-native-mobile-sheet { position:fixed; z-index:1081; right:0; bottom:0; left:0; display:flex; flex-direction:column; gap:8px; max-height:min(78dvh,680px); padding:8px 16px max(18px,env(safe-area-inset-bottom)); overflow-y:auto; border-radius:22px 22px 0 0; background:var(--dsw-alias-bg-layer-2,#fff); box-shadow:0 -16px 44px rgb(15 23 42 / 16%); animation:dsh-mobile-sheet-in 220ms var(--dsh-mobile-motion-ease); }
-  .dsh-native-mobile-sheet[hidden] { display:none; }
-  .dsh-native-mobile-sheet__header { position:sticky; z-index:1; top:-8px; display:flex; align-items:center; justify-content:space-between; min-height:48px; padding:8px 0; background:var(--dsw-alias-bg-layer-2,#fff); }
-  .dsh-native-mobile-sheet__header strong { font-size:17px; font-weight:600; }
-  .dsh-native-mobile-sheet__close { width:44px; height:44px; border:0; border-radius:12px; background:transparent; color:inherit; font-size:24px; }
-  .dsh-native-mobile-sheet__path { margin:0 0 4px; overflow-wrap:anywhere; color:var(--dsw-alias-label-secondary,#6b7280); font-size:12px; }
-  .dsh-native-mobile-sheet__choice { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:56px; padding:10px 14px; border:1px solid var(--dsw-alias-border-subtle,#e2e6eb); border-radius:14px; background:var(--dsw-alias-bg-layer-2,#fff); color:inherit; text-align:left; }
-  .dsh-native-mobile-sheet__choice:active { background:var(--dsw-alias-interactive-bg-hover,#f1f3f6); }
-  .dsh-native-mobile-sheet__choice small { color:var(--dsw-alias-label-secondary,#6b7280); }
-  .dsh-native-mobile-sheet__error { margin:4px 0; color:var(--dsw-alias-status-error,#b42318); font-size:13px; }
 }
 @keyframes dsh-mobile-fade-in { from { opacity:0; } }
 @keyframes dsh-mobile-panel-in { from { opacity:.72; transform:translateY(6px); } }
 @keyframes dsh-mobile-view-in { from { opacity:.58; transform:translateY(5px); } }
-@keyframes dsh-mobile-sheet-in { from { opacity:.7; transform:translateY(18px); } }
 @media (max-width:420px) {
   [data-dsh-mobile-header] [class*="_headerActions"] { max-width:42vw; }
   [data-dsh-mobile-header] [class*="_titleRow"] { min-height:50px; }
@@ -114,8 +96,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-sidebar-root],[data-dsh-mobile-details] { transition:none !important; }
   .dsh-native-mobile-backdrop:not([hidden]),[data-dsh-mobile-settings],
   [data-dsh-mobile-settings-content][data-dsh-mobile-view-transition="true"],
-  [data-dsh-mobile-view][data-dsh-mobile-view-transition="true"],
-  .dsh-native-mobile-sheet { animation:none !important; }
+  [data-dsh-mobile-view][data-dsh-mobile-view-transition="true"] { animation:none !important; }
 }
 `
 
@@ -127,29 +108,7 @@ function firstByClassSuffix(root: ParentNode, suffix: string): HTMLElement | und
   return Array.from(root.querySelectorAll<HTMLElement>('[class]')).find(element => classToken(element, suffix))
 }
 
-function composerCard(textarea: HTMLTextAreaElement): HTMLElement | undefined {
-  let candidate: HTMLElement | null = textarea.parentElement
-  while (candidate !== null && !classToken(candidate, '_card')) candidate = candidate.parentElement
-  return candidate ?? undefined
-}
-
-function paperclipIcon(): SVGSVGElement {
-  const namespace = 'http://www.w3.org/2000/svg'
-  const svg = document.createElementNS(namespace, 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('fill', 'none')
-  svg.setAttribute('stroke', 'currentColor')
-  svg.setAttribute('stroke-width', '2')
-  svg.setAttribute('stroke-linecap', 'round')
-  svg.setAttribute('stroke-linejoin', 'round')
-  svg.setAttribute('aria-hidden', 'true')
-  const path = document.createElementNS(namespace, 'path')
-  path.setAttribute('d', 'm21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.7 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9')
-  svg.append(path)
-  return svg
-}
-
-/** Add mobile semantics and phone-local file actions without replacing feature trees. */
+/** Add mobile semantics without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
   const setInputMode = (mode: 'keyboard' | 'touch'): void => {
@@ -179,145 +138,6 @@ export function installNativeMobileSurface(): () => void {
   let transitionRestartFrame = 0
   let transitionTimer = 0
   let transitionTarget: HTMLElement | undefined
-  const fileInput = document.createElement('input')
-  fileInput.type = 'file'
-  fileInput.accept = 'image/*'
-  fileInput.multiple = true
-  fileInput.hidden = true
-  fileInput.setAttribute('aria-hidden', 'true')
-  const attach = document.createElement('button')
-  attach.type = 'button'
-  attach.className = 'dsh-native-mobile-attach'
-  attach.setAttribute('aria-label', '添加图片')
-  attach.setAttribute('title', '添加图片')
-  attach.append(paperclipIcon())
-  document.body.append(fileInput)
-  const sheetMask = document.createElement('button')
-  sheetMask.type = 'button'
-  sheetMask.className = 'dsh-native-mobile-sheet-mask'
-  sheetMask.hidden = true
-  sheetMask.setAttribute('aria-label', '关闭图片选择')
-  const sheet = document.createElement('section')
-  sheet.className = 'dsh-native-mobile-sheet'
-  sheet.hidden = true
-  sheet.setAttribute('aria-label', '添加图片')
-  document.body.append(sheetMask, sheet)
-
-  const handFilesToComposer = (files: readonly File[]): void => {
-    const textarea = document.querySelector<HTMLTextAreaElement>('[data-dsh-mobile-center] textarea')
-    if (textarea === null || files.length === 0) return
-    const paste = new Event('paste', { bubbles: true, cancelable: true })
-    Object.defineProperty(paste, 'clipboardData', {
-      value: Object.freeze({
-        files,
-        items: Object.freeze(files.map(file => Object.freeze({
-          kind: 'file',
-          type: file.type,
-          getAsFile: () => file,
-        }))),
-        getData: () => '',
-      }),
-    })
-    textarea.dispatchEvent(paste)
-  }
-
-  const closeSheet = (): void => {
-    sheet.hidden = true
-    sheetMask.hidden = true
-    sheet.replaceChildren()
-  }
-  const sheetHeader = (title: string): void => {
-    const header = document.createElement('header')
-    header.className = 'dsh-native-mobile-sheet__header'
-    const heading = document.createElement('strong')
-    heading.textContent = title
-    const close = document.createElement('button')
-    close.type = 'button'
-    close.className = 'dsh-native-mobile-sheet__close'
-    close.setAttribute('aria-label', '关闭')
-    close.textContent = '×'
-    close.addEventListener('click', closeSheet)
-    header.append(heading, close)
-    sheet.append(header)
-  }
-  const choice = (title: string, detail: string, action: () => void): HTMLButtonElement => {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'dsh-native-mobile-sheet__choice'
-    const label = document.createElement('span')
-    label.textContent = title
-    const hint = document.createElement('small')
-    hint.textContent = detail
-    button.append(label, hint)
-    button.addEventListener('click', action)
-    return button
-  }
-  const showSheet = (): void => {
-    sheet.hidden = false
-    sheetMask.hidden = false
-  }
-  const openComputerImages = async (path?: string): Promise<void> => {
-    sheet.replaceChildren()
-    sheetHeader('电脑图片')
-    const progress = document.createElement('p')
-    progress.className = 'dsh-native-mobile-sheet__path'
-    progress.textContent = '正在读取电脑目录…'
-    sheet.append(progress)
-    showSheet()
-    try {
-      const suffix = path === undefined ? '' : `?path=${encodeURIComponent(path)}`
-      const response = await fetch(`/mobile-access/computer-images${suffix}`, { credentials: 'same-origin', cache: 'no-store' })
-      if (!response.ok) throw new Error(`读取失败（${String(response.status)}）`)
-      const listing = await response.json() as {
-        readonly path: string
-        readonly parent?: string
-        readonly entries: readonly { readonly kind: 'directory' | 'image'; readonly name: string; readonly path: string }[]
-      }
-      progress.textContent = listing.path
-      if (listing.parent !== undefined) sheet.append(choice('返回上一级', listing.parent, () => { void openComputerImages(listing.parent) }))
-      for (const entry of listing.entries) {
-        if (entry.kind === 'directory') {
-          sheet.append(choice(entry.name, '文件夹', () => { void openComputerImages(entry.path) }))
-          continue
-        }
-        const row = choice(entry.name, '添加这张电脑图片', () => {
-          row.disabled = true
-          void fetch(`/mobile-access/computer-image?path=${encodeURIComponent(entry.path)}`, { credentials: 'same-origin', cache: 'no-store' })
-            .then(async response => {
-              if (!response.ok) throw new Error(`读取失败（${String(response.status)}）`)
-              const blob = await response.blob()
-              handFilesToComposer([new File([blob], entry.name, { type: blob.type })])
-              closeSheet()
-            })
-            .catch(error => {
-              row.disabled = false
-              progress.className = 'dsh-native-mobile-sheet__error'
-              progress.textContent = error instanceof Error ? error.message : String(error)
-            })
-        })
-        sheet.append(row)
-      }
-    } catch (error) {
-      progress.className = 'dsh-native-mobile-sheet__error'
-      progress.textContent = error instanceof Error ? error.message : String(error)
-    }
-  }
-  const openAttachmentSources = (): void => {
-    sheet.replaceChildren()
-    sheetHeader('添加图片')
-    sheet.append(
-      choice('从手机选择', '相册、相机或手机存储', () => { closeSheet(); fileInput.click() }),
-      choice('从电脑选择', '在手机页面浏览电脑中的图片', () => { void openComputerImages() }),
-    )
-    showSheet()
-  }
-  attach.addEventListener('click', openAttachmentSources)
-  sheetMask.addEventListener('click', closeSheet)
-  fileInput.addEventListener('change', () => {
-    handFilesToComposer([...(fileInput.files ?? [])])
-    fileInput.value = ''
-  })
-
   const animateNavigation = (event: MouseEvent): void => {
     if (!(event.target instanceof Element)) return
     const trigger = event.target.closest<HTMLElement>('button,a,[role="tab"],[aria-selected]')
@@ -401,11 +221,6 @@ export function installNativeMobileSurface(): () => void {
         firstByClassSuffix(content, '_options')?.setAttribute('data-dsh-mobile-settings-options', 'true')
       }
     }
-    const textarea = center?.querySelector<HTMLTextAreaElement>('textarea')
-    const card = textarea === null || textarea === undefined ? undefined : composerCard(textarea)
-    const tools = card === undefined ? undefined : firstByClassSuffix(card, '_tools')
-    attach.disabled = textarea === undefined || textarea === null || textarea.disabled || textarea.readOnly
-    if (tools !== undefined && attach.parentElement !== tools) tools.append(attach)
     if (sidebar === undefined) return
     sidebar.dataset.dshMobileSidebar = 'true'
     toggle = firstByClassSuffix(sidebar, '_toggle') as HTMLButtonElement | undefined
@@ -435,10 +250,6 @@ export function installNativeMobileSurface(): () => void {
     document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('click', animateNavigation)
     backdrop.remove()
-    attach.remove()
-    fileInput.remove()
-    sheet.remove()
-    sheetMask.remove()
     document.documentElement.classList.remove('dsh-native-mobile-active')
     delete document.documentElement.dataset.dshMobileInput
   }

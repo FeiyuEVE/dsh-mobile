@@ -14,12 +14,13 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-disclosure-row]')
     expect(NATIVE_MOBILE_STYLES).toContain('grid-template-columns:16px minmax(0,1fr)')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-context-fields]')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-attach')
   })
 
   it('uses bounded motion and disables every added animation for reduced motion', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('--dsh-mobile-motion-duration:200ms')
     expect(NATIVE_MOBILE_STYLES).toContain('@keyframes dsh-mobile-view-in')
     expect(NATIVE_MOBILE_STYLES).toContain('@media (prefers-reduced-motion:reduce)')
-    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-native-mobile-sheet { animation:none !important; }')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-sheet')
   })
 })
