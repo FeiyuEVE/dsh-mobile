@@ -6,7 +6,7 @@ describe('DeepSeek Harness compatibility', () => {
     expect(() => { assertSupportedDshVersion(version) }).not.toThrow()
   })
 
-  it.each(['0.1.0-rc.4', '0.1.0-rc.7', '0.1.0', undefined])('rejects unverified release %s', version => {
+  it.each(['0.1.0-rc.4', '0.1.0-rc.8', '0.1.0', undefined])('rejects unverified release %s', version => {
     expect(() => { assertSupportedDshVersion(version) }).toThrow(/unsupported DeepSeek Harness version/u)
   })
 })
