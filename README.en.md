@@ -39,6 +39,8 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
+`setup` follows the operating system's preferred physical Wi-Fi or Ethernet route, ignores common VPN, WSL, Docker, and proxy adapters, and remembers the selected interface. Later Wi-Fi, hotspot, or DHCP address changes automatically rebind the gateway without replacing the paired-device trust. Add `--address 192.168.x.x` only when the computer truly has two indistinguishable physical LAN routes.
+
 Open **Mobile** in the lower-left DeepSeek Harness sidebar, enable access, and create a pairing key. In the Android app, tap **Scan**, select the computer, and enter the key. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
 
 ## Connection options

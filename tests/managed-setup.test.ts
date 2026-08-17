@@ -7,6 +7,7 @@ import {
   ensureManagedCa,
   materializeManagedSetup,
   parseManagedSetup,
+  preferredLanInterfaceNames,
   selectLanNetwork,
   type ManagedSetup,
 } from '../src/managed-setup.js'
@@ -21,6 +22,17 @@ function interfaceTable(address: string) {
       internal: false,
       cidr: `${address}/24`,
     }],
+  }
+}
+
+function interfaceEntry(address: string, prefix = 24) {
+  return {
+    address,
+    netmask: '255.255.255.0',
+    family: 'IPv4' as const,
+    mac: '00:00:00:00:00:00',
+    internal: false,
+    cidr: `${address}/${String(prefix)}`,
   }
 }
 
@@ -48,6 +60,50 @@ describe('managed DHCP setup', () => {
       address: '192.168.50.23',
       cidr: '192.168.50.0/24',
     })
+  })
+
+  it('uses the physical default route instead of active virtual networks', async () => {
+    const table = {
+      Mihomo: [interfaceEntry('10.0.0.2')],
+      WLAN: [interfaceEntry('192.168.50.23')],
+      'vEthernet (WSL)': [interfaceEntry('172.18.176.1', 20)],
+    }
+    const preferred = await preferredLanInterfaceNames('win32', async () => 'WLAN\r\n')
+
+    expect(selectLanNetwork(undefined, undefined, table, preferred)).toEqual({
+      name: 'WLAN',
+      address: '192.168.50.23',
+      cidr: '192.168.50.0/24',
+    })
+  })
+
+  it('selects the only physical-looking LAN when route inspection is unavailable', () => {
+    expect(selectLanNetwork(undefined, undefined, {
+      Ethernet: [interfaceEntry('192.168.10.8')],
+      'vEthernet (Default Switch)': [interfaceEntry('172.20.0.1')],
+      'Radmin VPN': [interfaceEntry('10.20.30.40')],
+    })).toMatchObject({ name: 'Ethernet', address: '192.168.10.8' })
+  })
+
+  it('keeps an explicit address and reports genuinely ambiguous physical LANs', () => {
+    const table = {
+      Ethernet: [interfaceEntry('192.168.10.8')],
+      WLAN: [interfaceEntry('192.168.50.23')],
+    }
+    expect(selectLanNetwork('192.168.50.23', undefined, table, ['Ethernet']))
+      .toMatchObject({ name: 'WLAN', address: '192.168.50.23' })
+    expect(() => selectLanNetwork(undefined, undefined, table)).toThrow(
+      'Ethernet=192.168.10.8, WLAN=192.168.50.23',
+    )
+  })
+
+  it('parses Linux default routes by metric and ignores tunnel interfaces', async () => {
+    const routes = [
+      'default dev tun0 metric 1',
+      'default via 192.168.50.1 dev wlan0 metric 600',
+      'default via 192.168.10.1 dev eth0 metric 100',
+    ].join('\n')
+    await expect(preferredLanInterfaceNames('linux', async () => routes)).resolves.toEqual(['eth0', 'wlan0'])
   })
 
   it('keeps one CA while signing a leaf for the current address', async () => {

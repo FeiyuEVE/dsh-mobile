@@ -3,9 +3,11 @@ import {
   createPrivateKey,
   createPublicKey,
 } from 'node:crypto'
+import { execFile as execFileCallback } from 'node:child_process'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { generate } from 'selfsigned'
 
 /** One active private IPv4 address tied to a stable operating-system interface name. */
@@ -31,6 +33,13 @@ export interface ManagedSetup {
 }
 
 type InterfaceTable = NodeJS.Dict<NetworkInterfaceInfo[]>
+type RouteCommand = (file: string, args: readonly string[]) => Promise<string>
+
+const execFile = promisify(execFileCallback)
+const VIRTUAL_INTERFACE_MARKERS = [
+  'bridge', 'docker', 'hyper-v', 'mihomo', 'radmin', 'tailscale', 'tap', 'tun',
+  'utun', 'vbox', 'veth', 'virtual', 'vmware', 'vpn', 'vethernet', 'wsl', 'zerotier',
+]
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} must be a non-empty string`)
@@ -98,11 +107,69 @@ export function availableLanNetworks(table: InterfaceTable = networkInterfaces()
   return [...new Map(candidates.map(entry => [`${entry.name}\0${entry.address}`, entry])).values()]
 }
 
+function likelyVirtualInterface(name: string): boolean {
+  const normalized = name.toLowerCase().replaceAll(/[^a-z0-9]+/gu, ' ')
+  return VIRTUAL_INTERFACE_MARKERS.some(marker => normalized.includes(marker.replaceAll('-', ' ')))
+    || /^(?:br|wg)\d*\b/u.test(normalized)
+}
+
+async function runRouteCommand(file: string, args: readonly string[]): Promise<string> {
+  const result = await execFile(file, [...args], { encoding: 'utf8', windowsHide: true })
+  return result.stdout
+}
+
+function uniqueLines(output: string): string[] {
+  return [...new Set(output.split(/\r?\n/gu).map(line => line.trim()).filter(Boolean))]
+}
+
+/** Return operating-system default-route interfaces in routing preference order. */
+export async function preferredLanInterfaceNames(
+  platform: NodeJS.Platform = process.platform,
+  run: RouteCommand = runRouteCommand,
+): Promise<string[]> {
+  try {
+    if (platform === 'win32') {
+      const script = [
+        "$routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop",
+        "$ranked = $routes | Where-Object { $_.State -eq 'Alive' -and $_.NextHop -ne '0.0.0.0' } | ForEach-Object {",
+        '  $route = $_',
+        '  $adapter = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue',
+        '  $ip = Get-NetIPInterface -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue',
+        "  if ($adapter -and $ip -and $adapter.Status -eq 'Up' -and $adapter.HardwareInterface -eq $true -and $adapter.Virtual -ne $true) {",
+        '    [pscustomobject]@{ Name = $route.InterfaceAlias; Metric = [int]$route.RouteMetric + [int]$ip.InterfaceMetric }',
+        '  }',
+        '}',
+        '$ranked | Sort-Object Metric | Select-Object -ExpandProperty Name -Unique',
+      ].join('; ')
+      return uniqueLines(await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]))
+    }
+    if (platform === 'linux') {
+      const routes = uniqueLines(await run('ip', ['-o', '-4', 'route', 'show', 'default']))
+        .map(line => ({
+          name: /(?:^|\s)dev\s+(\S+)/u.exec(line)?.[1],
+          metric: Number(/(?:^|\s)metric\s+(\d+)/u.exec(line)?.[1] ?? 0),
+        }))
+        .filter((route): route is { name: string; metric: number } => route.name !== undefined
+          && !likelyVirtualInterface(route.name))
+        .sort((left, right) => left.metric - right.metric)
+      return [...new Set(routes.map(route => route.name))]
+    }
+    if (platform === 'darwin') {
+      const name = /^\s*interface:\s*(\S+)\s*$/mu.exec(await run('route', ['-n', 'get', 'default']))?.[1]
+      return name === undefined || likelyVirtualInterface(name) ? [] : [name]
+    }
+  } catch {
+    // Route discovery is advisory; deterministic candidate checks below remain the fallback.
+  }
+  return []
+}
+
 /** Select an active LAN, optionally by address or by a previously saved interface name. */
 export function selectLanNetwork(
   requestedAddress?: string,
   requestedInterface?: string,
   table?: InterfaceTable,
+  preferredInterfaces: readonly string[] = [],
 ): LanNetwork {
   const candidates = availableLanNetworks(table)
   if (requestedAddress !== undefined) {
@@ -120,7 +187,13 @@ export function selectLanNetwork(
   }
   if (candidates.length === 1) return candidates[0]!
   if (candidates.length === 0) throw new Error('no active private LAN address was found; connect to Wi-Fi or Ethernet')
-  throw new Error(`more than one LAN address is active; rerun with --address and one of: ${candidates.map(entry => entry.address).join(', ')}`)
+  for (const name of preferredInterfaces) {
+    const matches = candidates.filter(candidate => candidate.name === name)
+    if (matches.length === 1) return matches[0]!
+  }
+  const physicalCandidates = candidates.filter(candidate => !likelyVirtualInterface(candidate.name))
+  if (physicalCandidates.length === 1) return physicalCandidates[0]!
+  throw new Error(`more than one LAN address is active; rerun with --address and one of: ${candidates.map(entry => `${entry.name}=${entry.address}`).join(', ')}`)
 }
 
 function assertMatchingCa(certPem: string, keyPem: string): X509Certificate {

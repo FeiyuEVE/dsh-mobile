@@ -54,6 +54,8 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
+`setup` 会根据系统默认路由自动选择真实的 Wi-Fi 或以太网，忽略常见 VPN、WSL、Docker 和代理虚拟网卡，并记住所选网卡。以后切换 Wi-Fi、手机热点或 DHCP 地址变化时，网关会自动重绑并沿用原有设备信任。只有系统确实无法区分两条真实局域网时，才需要追加 `--address 192.168.x.x`。
+
 启动后：
 
 1. 在 DeepSeek Harness 左下角打开“移动端”，确认移动访问已开启。

@@ -51,7 +51,7 @@ gradle wrapper --gradle-version 8.11.1
 ./gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。当前私有 Alpha 的 GitHub Release 只提供临时 debug 签名构建；正式发布必须使用仓库外保存的稳定签名密钥生成 release APK 或 AAB。
+Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。当前 Alpha 的 GitHub Release 只提供临时 debug 签名构建；正式发布必须使用仓库外保存的稳定签名密钥生成 release APK 或 AAB。
 
 ## 验收
 

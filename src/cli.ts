@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   ensureManagedCa,
+  preferredLanInterfaceNames,
   refreshManagedServerCertificate,
   selectLanNetwork,
   type ManagedSetup,
@@ -94,7 +95,8 @@ async function removeWindowsFirewall(): Promise<void> {
 
 async function setup(args: readonly string[]): Promise<void> {
   const options = parseOptions(args)
-  const network = selectLanNetwork(options.address)
+  const preferredInterfaces = options.address === undefined ? await preferredLanInterfaceNames() : []
+  const network = selectLanNetwork(options.address, undefined, undefined, preferredInterfaces)
   const home = dshHome()
   const directory = join(home, 'mobile-access')
   const tls = join(directory, 'tls')

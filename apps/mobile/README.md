@@ -54,7 +54,7 @@ gradle wrapper --gradle-version 8.11.1
 ./gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Private alpha Releases use ephemeral debug signing. A production release requires a stable signing key kept outside the repository and a signed release APK or AAB.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Alpha Releases use ephemeral debug signing. A production release requires a stable signing key kept outside the repository and a signed release APK or AAB.
 
 ## Acceptance
 
