@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/repository-hero.png" alt="使用手机连接 DeepSeek Harness" width="100%">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/brand/repository-hero.png" alt="使用手机连接 DeepSeek Harness" width="100%">
 </p>
 
 <h1 align="center">DSH Mobile</h1>
