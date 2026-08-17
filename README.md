@@ -7,7 +7,7 @@
 <p align="center">在手机上安全、实时地使用电脑中的 DeepSeek Harness。</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&amp;color=CB3837" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&amp;label=npm&amp;color=CB3837" alt="npm 版本"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
@@ -40,7 +40,7 @@ DSH Mobile 提供专属移动端布局入口，并直接组合 DeepSeek Harness 
 已经安装 `dsh` 命令：
 
 ```powershell
-dsh plugin --profile web add dsh-mobile
+dsh plugin --profile web add dsh-mobile@alpha
 dsh plugin --profile web exec dsh-mobile setup
 dsh --profile web
 ```
@@ -49,17 +49,17 @@ dsh --profile web
 
 ```powershell
 corepack enable; pnpm install
-pnpm dsh plugin --profile web add dsh-mobile
+pnpm dsh plugin --profile web add dsh-mobile@alpha
 pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
-`setup` 会根据系统默认路由自动选择真实的 Wi-Fi 或以太网，忽略常见 VPN、WSL、Docker 和代理虚拟网卡，并记住所选网卡。以后切换 Wi-Fi、手机热点或 DHCP 地址变化时，网关会自动重绑并沿用原有设备信任。只有系统确实无法区分两条真实局域网时，才需要追加 `--address 192.168.x.x`。
+`setup` 会自动选择并记住当前局域网。切换 Wi-Fi、热点或 IP 后通常会自动恢复；仅在自动选择失败时使用 `--address 192.168.x.x`。
 
 启动后：
 
-1. 在 DeepSeek Harness 左下角打开“移动端”，确认移动访问已开启。
-2. 点击“生成配对密钥”。
+1. 在 DeepSeek Harness 左下角打开“移动访问”，确认功能已开启。
+2. 点击“生成并复制密钥”。
 3. Android App 点击“扫描”，选择电脑并输入密钥。
 4. 配对完成后会建立持久设备信任，以后打开 App 无需重复输入。
 
@@ -70,15 +70,17 @@ pnpm dsh --profile web
 | 方式 | 适合场景 | 说明 |
 | --- | --- | --- |
 | Android App | 日常使用 | 自动发现、无浏览器栏、App 内私有证书固定 |
-| 手机浏览器 | 临时或跨平台访问 | 打开“移动端”卡片显示的 HTTPS 地址 |
+| 手机浏览器 | 临时或跨平台访问 | 打开“移动访问”卡片显示的 HTTPS 地址 |
 
 Android 同时使用 mDNS/NSD、UDP 公告、主动 UDP 查询和 HTTPS 探测发现 DeepSeek Harness。发现只广播设备名、地址、端口、协议版本和稳定 `instanceId`，不会广播密钥或令牌。
 
 App 配对后保存可撤销的设备凭据和私有证书信任；Wi-Fi、热点或 DHCP 导致 IP 变化时不需要重新配对。手机浏览器不能使用 App 的私有信任，因此需要浏览器本身信任该 HTTPS 证书。
 
+新浏览器首次访问时，在电脑端开启配对并生成密钥，然后打开 HTTPS 地址中的 `/mobile-access/pair`，输入密钥最后一个点号后的 43 位配对码。配对完成后，浏览器会保存可撤销的设备凭据。
+
 ## 移动端界面
 
-手机端使用插件自带的独立布局外壳，不再依赖桌面三栏页面的 DOM 结构；内部功能仍由原生 DeepSeek Harness 插件渲染。你也可以通过“自定义移动布局与功能”继续调整页面结构并扩展交互：
+手机端使用插件自带的独立布局外壳，主布局不再依赖桌面三栏 DOM；原生功能组件保留少量移动端适配。你也可以通过“自定义移动布局与功能”继续调整页面结构并扩展交互：
 
 - 左上角打开工作区与会话抽屉。
 - 对话、轨迹、工具详情和 Session log 保持原有能力。

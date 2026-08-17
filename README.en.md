@@ -7,7 +7,7 @@
 <p align="center">Secure, live LAN access to DeepSeek Harness from a phone.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&amp;color=CB3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&amp;label=npm&amp;color=CB3837" alt="npm version"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
@@ -26,7 +26,7 @@ DSH Mobile provides a dedicated phone layout that composes the native DeepSeek H
 With an installed `dsh` command:
 
 ```powershell
-dsh plugin --profile web add dsh-mobile
+dsh plugin --profile web add dsh-mobile@alpha
 dsh plugin --profile web exec dsh-mobile setup
 dsh --profile web
 ```
@@ -35,27 +35,29 @@ From a DeepSeek Harness source checkout:
 
 ```powershell
 corepack enable; pnpm install
-pnpm dsh plugin --profile web add dsh-mobile
+pnpm dsh plugin --profile web add dsh-mobile@alpha
 pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
-`setup` follows the operating system's preferred physical Wi-Fi or Ethernet route, ignores common VPN, WSL, Docker, and proxy adapters, and remembers the selected interface. Later Wi-Fi, hotspot, or DHCP address changes automatically rebind the gateway without replacing the paired-device trust. Add `--address 192.168.x.x` only when the computer truly has two indistinguishable physical LAN routes.
+`setup` automatically selects and remembers the current LAN. Wi-Fi, hotspot, and IP changes normally recover automatically; use `--address 192.168.x.x` only when automatic selection fails.
 
-Open **Mobile** in the lower-left DeepSeek Harness sidebar, enable access, and create a pairing key. In the Android app, tap **Scan**, select the computer, and enter the key. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
+Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, and select **Create and copy key**. In the Android app, tap **Scan**, select the computer, and enter the key. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
 
 ## Connection options
 
 | Client | Best for | Notes |
 | --- | --- | --- |
 | Android app | Everyday use | Automatic discovery, no browser chrome, private certificate pinning |
-| Mobile browser | Temporary or cross-platform access | Open the HTTPS origin shown by the Mobile card |
+| Mobile browser | Temporary or cross-platform access | Open the HTTPS origin shown by Mobile Access |
 
 Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It publishes only the device name, address, port, protocol version, and stable `instanceId`. Keys and device tokens are never discoverable. IP changes do not require another Android pairing.
 
+For a browser's first connection, open pairing on the computer, generate a key, then visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
+
 ## Mobile UI
 
-Phones use a dedicated layout shell instead of depending on the desktop three-column DOM. Native DeepSeek Harness feature plugins still render the content. You can freely redesign the page structure and extend its interactions through **Customize from DeepSeek Harness**. By default, the session sidebar becomes a drawer, details open as an overlay, settings use a single-column layout, and the native composer is adapted for touch. Adding a Workspace browses computer folders inside the phone page. Images can come from the phone or the computer.
+Phones use a dedicated layout shell, so the main layout no longer depends on the desktop three-column DOM. Native feature components retain a small mobile adaptation layer. You can freely redesign the page structure and extend its interactions through **Customize from DeepSeek Harness**. By default, the session sidebar becomes a drawer, details open as an overlay, settings use a single-column layout, and the native composer is adapted for touch. Adding a Workspace browses computer folders inside the phone page. Images can come from the phone or the computer.
 
 The Android app is a thin Kotlin WebView shell and contains no frontend copy.
 
