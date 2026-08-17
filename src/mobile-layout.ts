@@ -1,4 +1,4 @@
-import { createElement, useEffect, useSyncExternalStore } from 'react'
+import { createElement, useEffect, useRef, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 
 interface SessionState {
@@ -103,14 +103,11 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-shell{position:relative;display:grid;width:100%;height:100dvh;min-width:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff)}
 .dshm-main{grid-area:1/1;min-width:0;min-height:0;overflow:hidden}
 .dshm-main>*,.dshm-main>*>*{min-width:0}
-.dshm-menu{position:fixed;z-index:62;top:max(4px,env(safe-area-inset-top));left:4px;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#171a21);cursor:pointer;-webkit-tap-highlight-color:transparent}
-.dshm-menu:hover,.dshm-menu:active{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
-.dshm-menu:focus-visible,.dshm-close:focus-visible{outline:2px solid var(--dsw-alias-border-focus,#2563eb);outline-offset:2px}
-.dshm-menu svg,.dshm-close svg{width:22px;height:22px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
-.dshm-drawer{position:fixed;z-index:70;inset:0 auto 0 0;box-sizing:border-box;width:min(88vw,340px);max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#f8fafc);box-shadow:18px 0 46px rgb(15 23 42 / 18%);left:-104%;transition:left 190ms cubic-bezier(.22,1,.36,1)}
-.dshm-drawer[data-open=true]{left:0}
-.dshm-drawer[data-open=false]{pointer-events:none;visibility:hidden;transition:left 190ms cubic-bezier(.22,1,.36,1),visibility 0s linear 190ms}
+.dshm-drawer{position:fixed;z-index:70;inset:0 auto 0 0;box-sizing:border-box;width:56px;max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#f8fafc);box-shadow:none;transition:width 190ms cubic-bezier(.22,1,.36,1)}
+.dshm-drawer[data-open=true]{width:min(88vw,340px);box-shadow:18px 0 46px rgb(15 23 42 / 18%)}
+.dshm-drawer[data-open=false]{pointer-events:auto;visibility:visible}
 .dshm-drawer>*{width:100%!important;height:100%!important}
+.dshm-drawer[data-open=false]>*{width:56px!important}
 .dshm-details{position:fixed;z-index:80;inset:0 0 0 auto;box-sizing:border-box;width:min(94vw,460px);max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:-18px 0 46px rgb(15 23 42 / 18%);transform:translateX(104%);transition:transform 190ms cubic-bezier(.22,1,.36,1)}
 .dshm-details[data-open=true]{transform:translateX(0)}
 .dshm-details[data-open=false]{pointer-events:none;visibility:hidden;transition:transform 190ms cubic-bezier(.22,1,.36,1),visibility 0s linear 190ms}
@@ -130,13 +127,9 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 @media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim{transition:none!important}}
 `
 
-function icon(paths: readonly string[]): ReactNode {
-  return createElement('svg', { 'aria-hidden': true, viewBox: '0 0 24 24' },
-    ...paths.map((path, index) => createElement('path', { d: path, key: index })))
-}
-
 function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
   const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot)
+  const suppressKeyboardUntil = useRef(0)
   const hasSession = props.useSessions(session => {
     const current = session.current
     return current !== undefined && session.byId[current]?.blank === false
@@ -146,22 +139,34 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     if (!hasSession) props.controller.closeDetails()
   }, [hasSession, props.controller])
 
-  const closeDrawerAfterAction = (event: { readonly target: EventTarget | null; readonly currentTarget: EventTarget & HTMLElement }): void => {
+  useEffect(() => {
+    const suppressAutofocus = (event: FocusEvent): void => {
+      if (performance.now() >= suppressKeyboardUntil.current) return
+      const target = event.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.blur()
+    }
+    document.addEventListener('focusin', suppressAutofocus, true)
+    return () => { document.removeEventListener('focusin', suppressAutofocus, true) }
+  }, [])
+
+  const closeDrawerAfterSessionAction = (event: { readonly target: EventTarget | null }): void => {
     if (!(event.target instanceof Element)) return
-    const action = event.target.closest('button,a,[role="button"],[role="option"],[role="treeitem"]')
-    if (action === null || action.closest('[data-dshm-keep-open],[aria-haspopup="dialog"]') !== null) return
-    window.setTimeout(() => { props.controller.closeSidebar() }, 80)
+    const row = event.target.closest<HTMLElement>('[role="treeitem"][aria-selected]')
+    const action = event.target.closest('button,[role="button"]')
+    const startsSession = action?.matches('button[class*="_newSession"],button[class*="_brand"]') ?? false
+    if (row === null && !startsSession) return
+    if (row !== null && action !== null && action !== row) return
+    suppressKeyboardUntil.current = performance.now() + 500
+    // Let the session row finish its own click handler before unmounting the drawer.
+    window.setTimeout(() => {
+      props.controller.closeSidebar()
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+    }, 0)
   }
 
   return createElement('div', { className: 'dshm-shell' },
     createElement('main', { className: 'dshm-main' }, props.renderSlot('conversation', {})),
-    createElement('button', {
-      'aria-expanded': state.sidebarOpen,
-      'aria-label': state.sidebarOpen ? '关闭导航' : '打开导航',
-      className: 'dshm-menu',
-      onClick: () => { props.controller.toggleSidebar() },
-      type: 'button',
-    }, icon(['M4 6h16', 'M4 12h16', 'M4 18h16'])),
     createElement('button', {
       'aria-label': '关闭浮层',
       className: 'dshm-scrim',
@@ -171,12 +176,14 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       type: 'button',
     }),
     createElement('aside', {
-      'aria-hidden': !state.sidebarOpen,
+      'aria-label': '工作区与会话导航',
       className: 'dshm-drawer',
       'data-open': state.sidebarOpen,
-      onClickCapture: closeDrawerAfterAction,
-      ...(state.sidebarOpen ? {} : { inert: '' }),
-    }, props.renderSlot('sidebar', { collapsed: false, width: 340 })),
+      onClickCapture: closeDrawerAfterSessionAction,
+    }, props.renderSlot('sidebar', {
+      collapsed: !state.sidebarOpen,
+      width: state.sidebarOpen ? 340 : 56,
+    })),
     createElement('aside', {
       'aria-hidden': !state.detailsOpen,
       className: 'dshm-details',

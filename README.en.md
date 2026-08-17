@@ -90,7 +90,7 @@ The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face rep
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0-alpha.22` | `0.1.0-rc.5`, `0.1.0-rc.6` |
+| `0.1.0-alpha.23` | `0.1.0-rc.5`, `0.1.0-rc.6` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 
