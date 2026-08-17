@@ -24,7 +24,7 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
-DSH Mobile 不复制 DeepSeek Harness 前端。它为原生 React/Cordis 页面增加移动布局，并通过受保护的局域网 HTTPS 网关让 Android App 或手机浏览器访问同一份工作区、会话、消息和运行状态。
+DSH Mobile 提供专属移动端布局入口，并直接组合 DeepSeek Harness 原生的对话、工作区、设置和插件组件。它通过受保护的局域网 HTTPS 网关，让 Android App 或手机浏览器访问电脑端同一份工作区、会话、消息和运行状态。
 
 ## 能做什么
 
@@ -78,7 +78,7 @@ App 配对后保存可撤销的设备凭据和私有证书信任；Wi-Fi、热�
 
 ## 移动端界面
 
-手机端仍然渲染原生 DeepSeek Harness 页面。插件提供轻量的默认移动适配；你也可以通过“自定义移动布局与功能”自由调整页面结构并扩展交互：
+手机端使用插件自带的独立布局外壳，不再依赖桌面三栏页面的 DOM 结构；内部功能仍由原生 DeepSeek Harness 插件渲染。你也可以通过“自定义移动布局与功能”继续调整页面结构并扩展交互：
 
 - 左上角打开工作区与会话抽屉。
 - 对话、轨迹、工具详情和 Session log 保持原有能力。
@@ -87,6 +87,8 @@ App 配对后保存可撤销的设备凭据和私有证书信任；Wi-Fi、热�
 - “添加工作区”在手机上展示电脑目录，不会在电脑上弹系统选择器。
 
 Android App 只是 Kotlin WebView 薄壳，不内置另一份网页。手机浏览器访问的也是同一页面。
+
+需要排查兼容性时，可在浏览器地址后追加 `?frontend=stock`，临时回到旧的桌面页面适配模式。
 
 ## 自定义移动布局与功能
 
@@ -118,7 +120,7 @@ flowchart LR
   DSH -->|"同一工作区、会话和事件流"| Phone
 ```
 
-插件包含两部分：Host face 提供发现、配对、HTTPS 和回环代理；Client face 为原生 DeepSeek Harness 页面安装移动响应式适配。安装和卸载都通过 DeepSeek Harness 插件机制完成。
+插件包含两部分：Host face 提供发现、配对、HTTPS 和回环代理；Client face 替换移动端的布局入口，并复用原生功能插件。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载仍完全通过插件机制完成。
 
 ## 安全
 

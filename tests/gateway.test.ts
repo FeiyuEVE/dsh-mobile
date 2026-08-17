@@ -180,6 +180,12 @@ async function upstream(): Promise<{
       held.push(() => { response.writeHead(200); response.end('released') })
       return
     }
+    if (incoming.url === '/' && incoming.headers.accept?.includes('text/html')) {
+      const body = '<!doctype html><html><head><script>window.__DSH_BOOT__ = {"rev":"stock","entries":[{"id":"@deepseek-ai/dsh-client-ui-layout","url":"/plugins/layout.js","rev":"stock-layout","inject":["runtime"]},{"id":"feature","url":"/plugins/feature.js","rev":"feature"}]};</script></head><body></body></html>'
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(body) })
+      response.end(body)
+      return
+    }
     const body = `${JSON.stringify({ ok: true, method: incoming.method, url: incoming.url })}\n`
     response.writeHead(200, {
       'content-type': 'application/json',
@@ -355,9 +361,11 @@ describe('HTTP gateway', () => {
     cleanups.push(() => rm(directory, { recursive: true, force: true }))
     const customCssFile = join(directory, 'mobile.css')
     const customScriptFile = join(directory, 'mobile.js')
+    const mobileLayoutFile = join(directory, 'mobile-layout.js')
     await writeFile(customCssFile, ':root { --preview: first; }\n', 'utf8')
     await writeFile(customScriptFile, 'window.dshMobile.register(() => undefined)\n', 'utf8')
-    const instance = await gateway(inner.port, { customCssFile, customScriptFile })
+    await writeFile(mobileLayoutFile, 'window.__ModuleLoader__.load({ id: "@deepseek-ai/dsh-client-ui-layout" })\n', 'utf8')
+    const instance = await gateway(inner.port, { customCssFile, customScriptFile, mobileLayoutFile })
     const paired = await pair(instance)
     const headers = {
       ...browserHeaders(instance),
@@ -375,11 +383,38 @@ describe('HTTP gateway', () => {
     expect(script.headers['cache-control']).toBe('no-store')
     expect(script.body).toContain('dshMobile.register')
 
+    const layout = await request(instance.address().port, '/mobile-access/mobile-layout.js', { headers })
+    expect(layout.status).toBe(200)
+    expect(layout.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(layout.body).toContain('@deepseek-ai/dsh-client-ui-layout')
+
     await writeFile(customCssFile, ':root { --preview: second; }\n', 'utf8')
     const second = await request(instance.address().port, '/mobile-access/custom.css', { headers })
     expect(second.status).toBe(200)
     expect(second.body).toContain('--preview: second')
     expect(inner.observations).toHaveLength(0)
+  })
+
+  it('serves the dedicated layout at the authenticated root while retaining a stock escape hatch', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    expect(mobile.body).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
+    expect(mobile.body).toContain('/mobile-access/mobile-layout.js')
+    expect(mobile.body).toContain('/plugins/feature.js')
+
+    const stock = await request(instance.address().port, '/?frontend=stock', { headers })
+    expect(stock.status).toBe(200)
+    expect(stock.body).not.toContain('__DSH_MOBILE_FRONTEND__')
+    expect(stock.body).toContain('/plugins/layout.js')
   })
 
   it('keeps pairing and device management on a loopback Host-fenced route', async () => {

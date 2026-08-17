@@ -73,6 +73,8 @@ const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
 const MDNS_SERVICE_TYPE = 'dsh-mobile'
+const MOBILE_LAYOUT_MODULE = '@deepseek-ai/dsh-client-ui-layout'
+const MOBILE_LAYOUT_PATH = `${AUTH_PREFIX}/mobile-layout.js`
 const PAIR_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -90,6 +92,38 @@ const PAIR_PAGE = `<!doctype html>
 <script src="/mobile-access/pair.js" defer></script>
 </html>
 `
+
+interface BootGraphEntry {
+  id: string
+  url: string
+  rev: string
+  inject?: string[]
+  immediately?: boolean
+}
+
+/** Replace only DSH's layout client module while retaining its complete plugin graph. */
+export function rewriteMobileIndex(html: string): string {
+  const assignment = 'window.__DSH_BOOT__ = '
+  const start = html.indexOf(assignment)
+  if (start < 0) throw new Error('upstream DSH index has no boot manifest')
+  const valueStart = start + assignment.length
+  const scriptEnd = html.indexOf('</script>', valueStart)
+  if (scriptEnd < 0) throw new Error('upstream DSH boot manifest script is incomplete')
+  const source = html.slice(valueStart, scriptEnd).trim().replace(/;$/u, '')
+  const parsed = JSON.parse(source) as { rev?: unknown; entries?: unknown }
+  if (typeof parsed.rev !== 'string' || !Array.isArray(parsed.entries)) {
+    throw new Error('upstream DSH boot manifest is malformed')
+  }
+  const entries = parsed.entries as BootGraphEntry[]
+  const layout = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === MOBILE_LAYOUT_MODULE)
+  if (layout.length !== 1 || typeof layout[0]?.url !== 'string' || typeof layout[0].rev !== 'string') {
+    throw new Error('upstream DSH boot manifest has no unique layout module')
+  }
+  layout[0].url = MOBILE_LAYOUT_PATH
+  layout[0].rev = 'dsh-mobile-layout-v1'
+  const replacement = `window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment}${JSON.stringify(parsed)};`
+  return `${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`
+}
 
 const PAIR_SCRIPT = `(() => {
   const form = document.getElementById('pair-form')
@@ -800,6 +834,12 @@ export class MobileAccessGateway {
               contentType: 'text/javascript; charset=utf-8',
               fallback: 'window.dshMobile?.register(() => undefined)\n',
             }
+          : target.decodedPathname === MOBILE_LAYOUT_PATH
+            ? {
+                file: this.config.mobileLayoutFile,
+                contentType: 'text/javascript; charset=utf-8',
+                fallback: undefined,
+              }
           : undefined
       : undefined
     if (customAsset === undefined && !computerImages && !computerImage
@@ -844,6 +884,7 @@ export class MobileAccessGateway {
         body = await readFile(customAsset.file)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (customAsset.fallback === undefined) throw new HttpError(503, 'mobile_frontend_unavailable')
         body = Buffer.from(customAsset.fallback)
       }
       if (body.byteLength > 256 * 1024) throw new HttpError(413, 'payload_too_large')
@@ -873,7 +914,78 @@ export class MobileAccessGateway {
       response.end(image.body)
       return
     }
+    const stockFrontend = new URL(target.raw, this.address().origin).searchParams.get('frontend') === 'stock'
+    const acceptsHtml = request.headers.accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false
+    if (request.method === 'GET' && target.decodedPathname === '/' && acceptsHtml && !stockFrontend) {
+      await this.proxyMobileIndex(request, response, authorization)
+      return
+    }
+    if (stockFrontend && target.decodedPathname === '/') request.url = '/'
     await this.proxyHttp(request, response, authorization)
+  }
+
+  private async proxyMobileIndex(
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): Promise<void> {
+    const holder: { request?: ClientRequest } = {}
+    const operation = this.allocateRequest(authorization, response, holder)
+    try {
+      const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
+      upstreamHeaders['accept-encoding'] = 'identity'
+      const proxied = await new Promise<IncomingMessage>((resolve, reject) => {
+        const upstreamRequest = requestHttp({
+          protocol: 'http:',
+          hostname: stripIpv6Brackets(this.config.upstreamOrigin.hostname),
+          port: Number(this.config.upstreamOrigin.port),
+          method: 'GET',
+          path: '/',
+          headers: upstreamHeaders,
+          agent: false,
+        })
+        holder.request = upstreamRequest
+        upstreamRequest.setTimeout(this.config.upstreamTimeoutMs, () => {
+          upstreamRequest.destroy(new Error('upstream timeout'))
+        })
+        upstreamRequest.once('response', resolve)
+        upstreamRequest.once('error', reject)
+        upstreamRequest.end()
+      })
+      if ((proxied.statusCode ?? 502) !== 200) throw new HttpError(502, 'upstream_unavailable')
+      const chunks: Buffer[] = []
+      let bytes = 0
+      for await (const chunk of proxied) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        bytes += buffer.byteLength
+        if (bytes > 4 * 1024 * 1024) throw new HttpError(502, 'upstream_unavailable')
+        chunks.push(buffer)
+      }
+      let body: Buffer
+      try {
+        body = Buffer.from(rewriteMobileIndex(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        throw new HttpError(502, 'upstream_unavailable')
+      }
+      const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
+      delete headers['content-length']
+      delete headers['content-encoding']
+      delete headers.etag
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, {
+        ...headers,
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': body.byteLength,
+      })
+      response.end(body)
+    } catch (error) {
+      holder.request?.destroy()
+      if (error instanceof HttpError) throw error
+      if (response.headersSent) response.destroy()
+      else throw new HttpError(502, 'upstream_unavailable')
+    } finally {
+      operation.release()
+    }
   }
 
   private allocateRequest(

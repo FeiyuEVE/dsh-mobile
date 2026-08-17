@@ -19,7 +19,7 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
-DSH Mobile adapts the stock DeepSeek Harness React/Cordis surface for phones and exposes it through an authenticated HTTPS LAN gateway. Desktop, Android, and mobile browsers use the same Workspaces, sessions, messages, tools, settings, and event streams.
+DSH Mobile provides a dedicated phone layout that composes the native DeepSeek Harness conversation, Workspace, settings, and plugin components. An authenticated HTTPS LAN gateway keeps desktop, Android, and mobile browsers on the same Workspaces, sessions, messages, tools, settings, and event streams.
 
 ## Quick start
 
@@ -55,9 +55,11 @@ Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It p
 
 ## Mobile UI
 
-Phones still render the stock DeepSeek Harness page. The plugin provides a lightweight default mobile adaptation, and you can freely redesign the page structure and extend its interactions through **Customize from DeepSeek Harness**. By default, the session sidebar becomes a drawer, details open as an overlay, settings use a single-column layout, and the native composer is adapted for touch. Adding a Workspace browses computer folders inside the phone page. Images can come from the phone or the computer.
+Phones use a dedicated layout shell instead of depending on the desktop three-column DOM. Native DeepSeek Harness feature plugins still render the content. You can freely redesign the page structure and extend its interactions through **Customize from DeepSeek Harness**. By default, the session sidebar becomes a drawer, details open as an overlay, settings use a single-column layout, and the native composer is adapted for touch. Adding a Workspace browses computer folders inside the phone page. Images can come from the phone or the computer.
 
 The Android app is a thin Kotlin WebView shell and contains no frontend copy.
+
+For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
 ## Customize from DeepSeek Harness
 
@@ -80,7 +82,7 @@ flowchart LR
   Gateway -->|"loopback proxy"| DSH["Stock DSH Web and Host"]
 ```
 
-The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face installs the responsive adapter on the stock DeepSeek Harness page. No DeepSeek Harness source files are modified.
+The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face replaces only the phone layout entry while reusing native feature plugins. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
 
 ## Security
 

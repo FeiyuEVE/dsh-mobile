@@ -21,6 +21,7 @@ type MobileExtensionMount = (context: MobileExtensionContext) => void | (() => v
 declare global {
   interface Window {
     dshMobile?: { register(mount: MobileExtensionMount): void }
+    __DSH_MOBILE_FRONTEND__?: 'dedicated'
   }
 }
 
@@ -132,14 +133,17 @@ const CONTROL_STYLES = `
 .dsh-mobile-control__trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px;padding:6px 2px 6px 10px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#16181d);font:14px/22px system-ui;cursor:pointer}.dsh-mobile-control__trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.dsh-mobile-control__trigger.is-rail{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%}.dsh-mobile-control__trigger-icon{position:relative;box-sizing:border-box;flex:none;width:14px;height:19px;border:1.7px solid currentColor;border-radius:3px}.dsh-mobile-control__trigger-icon::after{position:absolute;right:4px;bottom:2px;width:4px;height:1.5px;border-radius:2px;background:currentColor;content:""}.dsh-mobile-control__trigger-label{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 `
 
-/** Mount the desktop control or the stock DSH mobile adaptation. */
+/** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
-    const style = element('style'); style.dataset.plugin = 'dsh-mobile'; style.textContent = `${NATIVE_MOBILE_STYLES}\n${CONTROL_STYLES}`; document.head.append(style)
     const loopback = isLoopbackHost(location.hostname) && !new URLSearchParams(location.search).has('dsh-mobile-preview')
+    const style = element('style'); style.dataset.plugin = 'dsh-mobile'; style.textContent = loopback
+      ? CONTROL_STYLES
+      : NATIVE_MOBILE_STYLES
+    document.head.append(style)
     if (!loopback) {
-      const removeSurface = installNativeMobileSurface()
       const removeCustom = installCustomAssets()
+      const removeSurface = installNativeMobileSurface()
       return () => { removeCustom(); removeSurface(); style.remove() }
     }
     const control = installControl()

@@ -29,7 +29,7 @@ export type {
   MobileAccessControlStore,
   MobileAccessRuntime,
 } from './control.js'
-export { MobileAccessGateway } from './gateway.js'
+export { MobileAccessGateway, rewriteMobileIndex } from './gateway.js'
 export {
   AUTH_PREFIX,
   CSRF_COOKIE,

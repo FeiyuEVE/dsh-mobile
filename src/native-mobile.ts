@@ -1,7 +1,10 @@
-/** Mobile layout rules applied to the stock DSH React surface. */
+/** Mobile feature and compatibility rules applied to DSH React surfaces. */
 export const NATIVE_MOBILE_STYLES = `
 @media (max-width:720px) {
   html.dsh-native-mobile-active,html.dsh-native-mobile-active body { width:100%; height:100%; overflow:hidden; }
+  html.dsh-native-mobile-active { --dsh-mobile-motion-duration:200ms; --dsh-mobile-motion-ease:cubic-bezier(.22,1,.36,1); }
+  html.dsh-native-mobile-active :is(a,button,[role="button"],[role="tab"],[tabindex]) { -webkit-tap-highlight-color:transparent; }
+  html.dsh-native-mobile-active[data-dsh-mobile-input="touch"] :is(a,button,[role="button"],[role="tab"],[tabindex]):focus { outline:none !important; }
   [data-dsh-mobile-frame] { grid-template-columns:0 minmax(0,1fr) 0 !important; width:100% !important; height:100dvh !important; overflow:hidden !important; }
   [data-dsh-mobile-center] { grid-column:2 !important; width:100vw !important; min-width:0 !important; }
   [data-dsh-mobile-center] > * { min-width:0 !important; }
@@ -19,7 +22,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-header] [class*="_tabs"] { min-height:42px; overflow-x:auto; scrollbar-width:none; }
   [data-dsh-mobile-header] [class*="_tabs"]::-webkit-scrollbar { display:none; }
   [data-dsh-mobile-sidebar] { position:fixed !important; z-index:240 !important; inset:0 auto 0 0 !important; width:0 !important; overflow:visible !important; }
-  [data-dsh-mobile-sidebar-root] { position:fixed !important; z-index:241 !important; inset:0 auto 0 0 !important; height:100dvh !important; transition:transform 160ms ease !important; }
+  [data-dsh-mobile-sidebar-root] { position:fixed !important; z-index:241 !important; inset:0 auto 0 0 !important; height:100dvh !important; transition:transform var(--dsh-mobile-motion-duration) var(--dsh-mobile-motion-ease) !important; }
   [data-dsh-mobile-sidebar][data-open="true"] [data-dsh-mobile-sidebar-root] { width:min(88vw,340px) !important; box-shadow:18px 0 46px rgb(15 23 42 / 18%); }
   [data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-sidebar-root] { width:0 !important; border:0 !important; background:transparent !important; box-shadow:none !important; overflow:visible !important; }
   [data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-sidebar-root] > :not(:has([data-dsh-mobile-toggle])) { display:none !important; }
@@ -29,27 +32,47 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle] svg { display:none !important; }
   [data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle]::after { width:20px; height:2px; border-radius:2px; background:currentColor; box-shadow:0 -6px 0 currentColor,0 6px 0 currentColor; content:""; }
   .dsh-native-mobile-backdrop { position:fixed; z-index:235; inset:0; border:0; background:rgb(15 23 42 / 32%); }
+  .dsh-native-mobile-backdrop:not([hidden]) { animation:dsh-mobile-fade-in var(--dsh-mobile-motion-duration) ease-out; }
   .dsh-native-mobile-backdrop[hidden] { display:none; }
-  [data-dsh-mobile-details] { position:fixed !important; z-index:250 !important; inset:0 0 0 auto !important; width:min(94vw,460px) !important; max-width:none !important; transform:translateX(100%); transition:transform 160ms ease; background:var(--dsw-bg, #fff); box-shadow:-18px 0 46px rgb(15 23 42 / 18%); }
+  [data-dsh-mobile-details] { position:fixed !important; z-index:250 !important; inset:0 0 0 auto !important; width:min(94vw,460px) !important; max-width:none !important; transform:translateX(100%); transition:transform var(--dsh-mobile-motion-duration) var(--dsh-mobile-motion-ease); background:var(--dsw-bg, #fff); box-shadow:-18px 0 46px rgb(15 23 42 / 18%); }
   [data-dsh-mobile-details][data-open="true"] { transform:translateX(0); }
   [data-dsh-mobile-handle] { display:none !important; }
-  [data-dsh-mobile-settings] { flex-direction:column !important; width:100vw !important; height:100dvh !important; max-width:none !important; border-radius:0 !important; }
+  [data-dsh-mobile-settings] { flex-direction:column !important; width:100vw !important; height:100dvh !important; max-width:none !important; border-radius:0 !important; animation:dsh-mobile-panel-in var(--dsh-mobile-motion-duration) var(--dsh-mobile-motion-ease); }
   [data-dsh-mobile-settings-nav] { flex:none !important; width:100% !important; padding:max(14px,env(safe-area-inset-top)) 12px 8px !important; gap:10px !important; border-bottom:1px solid var(--dsw-alias-border-subtle,#e8ebef); }
   [data-dsh-mobile-settings-nav] [class*="_navTitle"] { padding:0 8px !important; font-size:18px !important; line-height:28px !important; }
   [data-dsh-mobile-settings-list] { flex-direction:row !important; gap:4px !important; overflow-x:auto !important; scrollbar-width:none; }
   [data-dsh-mobile-settings-list]::-webkit-scrollbar { display:none; }
   [data-dsh-mobile-settings-list] [class*="_navCell"] { flex:0 0 auto !important; min-width:max-content !important; height:44px !important; padding:10px 12px !important; }
+  [data-dsh-mobile-settings-list] [aria-current="true"] { border-color:transparent !important; outline:0 !important; box-shadow:none !important; }
   [data-dsh-mobile-settings-content] { flex:1 1 auto !important; width:100% !important; min-height:0 !important; }
   [data-dsh-mobile-settings-header] { height:48px !important; min-height:48px !important; padding:10px 12px 6px !important; }
   [data-dsh-mobile-settings-header] [class*="_close"] { width:36px !important; height:36px !important; }
   [data-dsh-mobile-settings-options] { box-sizing:border-box !important; width:100% !important; padding:4px 16px max(24px,env(safe-area-inset-bottom)) !important; overflow-x:hidden !important; }
   [data-dsh-mobile-settings-options] > * { width:100% !important; min-width:0 !important; }
+  [data-dsh-mobile-settings-options] [data-slot="settings.general.item"] > [class*="_row"] { flex-direction:column !important; align-items:stretch !important; gap:12px !important; }
+  [data-dsh-mobile-settings-options] [data-slot="settings.general.item"] [class*="_rowText"] { width:100% !important; padding-right:0 !important; }
+  [data-dsh-mobile-settings-options] [data-slot="settings.general.item"] [class*="_selector"] { box-sizing:border-box !important; align-self:flex-start !important; justify-content:space-between !important; min-width:0 !important; min-height:44px !important; max-width:100% !important; }
+  [data-dsh-mobile-settings-options] :is(input,select,textarea,button) { max-width:100%; }
+  [data-dsh-mobile-settings-options] :is(input,select,textarea) { box-sizing:border-box; width:100%; min-width:0; }
+  [data-dsh-mobile-settings-options] [class*="_head"] { min-width:0; flex-wrap:wrap; }
+  [data-dsh-mobile-settings-content][data-dsh-mobile-view-transition="true"],
+  [data-dsh-mobile-view][data-dsh-mobile-view-transition="true"] { animation:dsh-mobile-view-in var(--dsh-mobile-motion-duration) var(--dsh-mobile-motion-ease); }
   [data-dsh-mobile-center] textarea { font-size:16px !important; }
   [data-dsh-mobile-center] table { display:block; max-width:100%; overflow-x:auto; }
   [data-dsh-mobile-center] pre { max-width:100%; overflow-x:auto; }
+  [data-dsh-mobile-center] :is(img,video,canvas,svg) { max-width:100%; }
   [data-dsh-mobile-message-scroll] { box-sizing:border-box !important; width:100% !important; padding:12px 16px 20px !important; }
   [data-dsh-mobile-message-column] { box-sizing:border-box !important; width:100% !important; max-width:none !important; margin:0 !important; padding:0 !important; gap:14px !important; }
   [data-dsh-mobile-message-column] > * { width:100% !important; max-width:100% !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] { box-sizing:border-box !important; display:grid !important; grid-template-columns:16px minmax(0,1fr) !important; grid-auto-rows:auto !important; align-items:center !important; column-gap:6px !important; width:100% !important; height:auto !important; min-height:44px !important; padding:5px 0 !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] > [class*="_leading"] { grid-column:1 !important; grid-row:1 !important; margin-right:0 !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] > [class*="_title"] { grid-column:2 !important; grid-row:1 !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] > :is([class*="_sep"],[class*="_separator"]) { display:none !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] > :is([class*="_summary"],[class*="_fileLink"]) { grid-column:2 !important; grid-row:2 !important; width:100% !important; min-width:0 !important; max-width:100% !important; overflow:hidden !important; line-height:20px !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
+  [data-dsh-mobile-message-column] [data-disclosure-row] > [class*="_summarySuffix"] { grid-column:2 !important; grid-row:3 !important; margin-left:0 !important; }
+  [data-dsh-mobile-message-column] [data-context-fields] > * { display:grid !important; grid-template-columns:minmax(72px,30%) minmax(0,1fr) !important; gap:4px 10px !important; }
+  [data-dsh-mobile-message-column] [class*="_ioSection"] { grid-template-columns:1fr !important; row-gap:4px !important; }
+  [data-dsh-mobile-message-column] [class*="_body"] { max-width:100% !important; overflow-wrap:anywhere; }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
   [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_row"] { display:flex !important; align-items:center !important; gap:4px !important; }
   [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_tools"] { flex:0 0 auto !important; width:auto !important; min-width:0 !important; gap:6px !important; }
@@ -66,7 +89,7 @@ export const NATIVE_MOBILE_STYLES = `
   .dsh-native-mobile-attach svg { width:22px; height:22px; }
   .dsh-native-mobile-sheet-mask { position:fixed; z-index:1080; inset:0; border:0; background:rgb(15 23 42 / 32%); }
   .dsh-native-mobile-sheet-mask[hidden] { display:none; }
-  .dsh-native-mobile-sheet { position:fixed; z-index:1081; right:0; bottom:0; left:0; display:flex; flex-direction:column; gap:8px; max-height:min(78dvh,680px); padding:8px 16px max(18px,env(safe-area-inset-bottom)); overflow-y:auto; border-radius:22px 22px 0 0; background:var(--dsw-alias-bg-layer-2,#fff); box-shadow:0 -16px 44px rgb(15 23 42 / 16%); }
+  .dsh-native-mobile-sheet { position:fixed; z-index:1081; right:0; bottom:0; left:0; display:flex; flex-direction:column; gap:8px; max-height:min(78dvh,680px); padding:8px 16px max(18px,env(safe-area-inset-bottom)); overflow-y:auto; border-radius:22px 22px 0 0; background:var(--dsw-alias-bg-layer-2,#fff); box-shadow:0 -16px 44px rgb(15 23 42 / 16%); animation:dsh-mobile-sheet-in 220ms var(--dsh-mobile-motion-ease); }
   .dsh-native-mobile-sheet[hidden] { display:none; }
   .dsh-native-mobile-sheet__header { position:sticky; z-index:1; top:-8px; display:flex; align-items:center; justify-content:space-between; min-height:48px; padding:8px 0; background:var(--dsw-alias-bg-layer-2,#fff); }
   .dsh-native-mobile-sheet__header strong { font-size:17px; font-weight:600; }
@@ -77,12 +100,22 @@ export const NATIVE_MOBILE_STYLES = `
   .dsh-native-mobile-sheet__choice small { color:var(--dsw-alias-label-secondary,#6b7280); }
   .dsh-native-mobile-sheet__error { margin:4px 0; color:var(--dsw-alias-status-error,#b42318); font-size:13px; }
 }
+@keyframes dsh-mobile-fade-in { from { opacity:0; } }
+@keyframes dsh-mobile-panel-in { from { opacity:.72; transform:translateY(6px); } }
+@keyframes dsh-mobile-view-in { from { opacity:.58; transform:translateY(5px); } }
+@keyframes dsh-mobile-sheet-in { from { opacity:.7; transform:translateY(18px); } }
 @media (max-width:420px) {
   [data-dsh-mobile-header] [class*="_headerActions"] { max-width:42vw; }
   [data-dsh-mobile-header] [class*="_titleRow"] { min-height:50px; }
+  [data-dsh-mobile-settings-options] [data-slot="settings.general.item"] [class*="_selector"] { align-self:stretch !important; width:100% !important; }
+  [data-dsh-mobile-message-column] [data-context-fields] > * { grid-template-columns:1fr !important; }
 }
 @media (prefers-reduced-motion:reduce) {
   [data-dsh-mobile-sidebar-root],[data-dsh-mobile-details] { transition:none !important; }
+  .dsh-native-mobile-backdrop:not([hidden]),[data-dsh-mobile-settings],
+  [data-dsh-mobile-settings-content][data-dsh-mobile-view-transition="true"],
+  [data-dsh-mobile-view][data-dsh-mobile-view-transition="true"],
+  .dsh-native-mobile-sheet { animation:none !important; }
 }
 `
 
@@ -116,9 +149,20 @@ function paperclipIcon(): SVGSVGElement {
   return svg
 }
 
-/** Add mobile semantics to the stock DSH layout without replacing its React tree. */
+/** Add mobile semantics and phone-local file actions without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
+  const setInputMode = (mode: 'keyboard' | 'touch'): void => {
+    document.documentElement.dataset.dshMobileInput = mode
+  }
+  const onPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch' || event.pointerType === 'pen') setInputMode('touch')
+  }
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Tab' || event.key.startsWith('Arrow')) setInputMode('keyboard')
+  }
+  document.addEventListener('pointerdown', onPointerDown, true)
+  document.addEventListener('keydown', onKeyDown, true)
   const backdrop = document.createElement('button')
   backdrop.type = 'button'
   backdrop.className = 'dsh-native-mobile-backdrop'
@@ -129,7 +173,12 @@ export function installNativeMobileSurface(): () => void {
   let sidebar: HTMLElement | undefined
   let sidebarRoot: HTMLElement | undefined
   let toggle: HTMLButtonElement | undefined
+  let viewArea: HTMLElement | undefined
   let scheduled = 0
+  let transitionFrame = 0
+  let transitionRestartFrame = 0
+  let transitionTimer = 0
+  let transitionTarget: HTMLElement | undefined
   const fileInput = document.createElement('input')
   fileInput.type = 'file'
   fileInput.accept = 'image/*'
@@ -269,18 +318,57 @@ export function installNativeMobileSurface(): () => void {
     fileInput.value = ''
   })
 
+  const animateNavigation = (event: MouseEvent): void => {
+    if (!(event.target instanceof Element)) return
+    const trigger = event.target.closest<HTMLElement>('button,a,[role="tab"],[aria-selected]')
+    if (trigger === null || trigger.hasAttribute('disabled') || trigger.getAttribute('aria-disabled') === 'true') return
+    if (trigger.getAttribute('aria-selected') === 'true' || trigger.getAttribute('aria-current') === 'true') return
+    const settingsNavigation = trigger.closest('[data-dsh-mobile-settings-list]') !== null
+    const conversationNavigation = trigger.matches('[role="tab"]')
+    const sidebarNavigation = trigger.closest('[data-dsh-mobile-sidebar-root]') !== null
+      && trigger.closest('[data-dsh-mobile-toggle]') === null
+    if (!settingsNavigation && !conversationNavigation && !sidebarNavigation) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
+    if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
+    transitionFrame = requestAnimationFrame(() => {
+      transitionFrame = 0
+      const target = settingsNavigation
+        ? document.querySelector<HTMLElement>('[data-dsh-mobile-settings-content]')
+        : viewArea
+      if (target === null || target === undefined) return
+      transitionTarget?.removeAttribute('data-dsh-mobile-view-transition')
+      target.removeAttribute('data-dsh-mobile-view-transition')
+      transitionRestartFrame = requestAnimationFrame(() => {
+        transitionRestartFrame = 0
+        transitionTarget = target
+        target.dataset.dshMobileViewTransition = 'true'
+        if (transitionTimer !== 0) clearTimeout(transitionTimer)
+        transitionTimer = window.setTimeout(() => {
+          target.removeAttribute('data-dsh-mobile-view-transition')
+          if (transitionTarget === target) transitionTarget = undefined
+          transitionTimer = 0
+        }, 240)
+      })
+    })
+  }
+  document.addEventListener('click', animateNavigation)
+
   const sync = (): void => {
     scheduled = 0
     frame = firstByClassSuffix(document, '_frame')
-    if (frame === undefined) return
-    frame.dataset.dshMobileFrame = 'true'
-    sidebar = firstByClassSuffix(frame, '_sidebarCol')
-    const center = firstByClassSuffix(frame, '_centerCol')
-    const details = firstByClassSuffix(frame, '_detailsCol')
-    const handle = firstByClassSuffix(frame, '_handle')
+    const dedicatedCenter = document.querySelector<HTMLElement>('.dshm-main') ?? undefined
+    if (frame !== undefined) frame.dataset.dshMobileFrame = 'true'
+    sidebar = frame === undefined ? undefined : firstByClassSuffix(frame, '_sidebarCol')
+    const center = frame === undefined ? dedicatedCenter : firstByClassSuffix(frame, '_centerCol')
+    const details = frame === undefined ? undefined : firstByClassSuffix(frame, '_detailsCol')
+    const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
+    if (center === undefined) return
     if (center !== undefined) {
       center.dataset.dshMobileCenter = 'true'
       center.querySelector<HTMLElement>('header')?.setAttribute('data-dsh-mobile-header', 'true')
+      viewArea = firstByClassSuffix(center, '_viewArea')
+      if (viewArea !== undefined) viewArea.dataset.dshMobileView = 'true'
       const conversation = center.querySelector<HTMLElement>('[data-conversation-scroll]')
       const messageColumn = conversation === null ? undefined : firstByClassSuffix(conversation, '_column')
       const messageScroll = messageColumn?.parentElement
@@ -292,7 +380,7 @@ export function installNativeMobileSurface(): () => void {
     if (handle !== undefined) handle.dataset.dshMobileHandle = 'true'
     if (details !== undefined) {
       details.dataset.dshMobileDetails = 'true'
-      const lastColumn = frame.style.gridTemplateColumns.trim().split(/\s+/).at(-1)
+      const lastColumn = frame?.style.gridTemplateColumns.trim().split(/\s+/).at(-1)
       details.dataset.open = String(lastColumn !== undefined && lastColumn !== '0px' && lastColumn !== '0')
     }
     const settings = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).find(dialog => {
@@ -339,11 +427,19 @@ export function installNativeMobileSurface(): () => void {
   return () => {
     observer.disconnect()
     if (scheduled !== 0) cancelAnimationFrame(scheduled)
+    if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
+    if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
+    if (transitionTimer !== 0) clearTimeout(transitionTimer)
+    transitionTarget?.removeAttribute('data-dsh-mobile-view-transition')
+    document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('click', animateNavigation)
     backdrop.remove()
     attach.remove()
     fileInput.remove()
     sheet.remove()
     sheetMask.remove()
     document.documentElement.classList.remove('dsh-native-mobile-active')
+    delete document.documentElement.dataset.dshMobileInput
   }
 }

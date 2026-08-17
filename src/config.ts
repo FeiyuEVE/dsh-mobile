@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 import { isIP } from 'node:net'
 import { isLoopbackAddress, parseAuthority, parseCidr, type AuthoritySpec, type ParsedCidr } from './network.js'
@@ -39,6 +40,8 @@ export interface PluginConfig {
   customCssFile?: string
   /** Optional user script that mounts authenticated mobile-only Web features. */
   customScriptFile?: string
+  /** Internal dedicated mobile layout browser bundle. */
+  mobileLayoutFile?: string
   /** Stable public discovery identifier; it is not an authentication secret. */
   instanceId?: string
   /** Managed CA certificate offered to the Android installer after fingerprint binding. */
@@ -76,6 +79,7 @@ export interface ResolvedGatewayConfig {
   readonly stateFile: string
   readonly customCssFile: string
   readonly customScriptFile: string
+  readonly mobileLayoutFile: string
   readonly instanceId: string
   readonly pairingCaFile?: string
   readonly tls: TlsConfig
@@ -107,6 +111,7 @@ export const Config: z<PluginConfig> = z.object({
   controlFile: z.string().hidden().required(),
   customCssFile: z.string().hidden(),
   customScriptFile: z.string().hidden(),
+  mobileLayoutFile: z.string().hidden(),
   instanceId: z.string().hidden(),
   pairingCaFile: z.string().hidden(),
   initiallyEnabled: z.boolean().hidden().required(),
@@ -278,6 +283,9 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     customScriptFile: value.customScriptFile === undefined
       ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.js')
       : absoluteFile(value.customScriptFile, 'customScriptFile'),
+    mobileLayoutFile: value.mobileLayoutFile === undefined
+      ? fileURLToPath(new URL('./mobile-layout.js', import.meta.url))
+      : absoluteFile(value.mobileLayoutFile, 'mobileLayoutFile'),
     instanceId: value.instanceId === undefined
       ? createHash('sha256').update(absoluteFile(value.stateFile, 'stateFile')).digest('hex')
       : /^[a-f\d]{64}$/u.test(value.instanceId)
