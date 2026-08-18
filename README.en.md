@@ -55,6 +55,11 @@ pnpm dsh --profile web
 After starting DSH, open **Mobile Access** in the lower-left sidebar, then:
 
 1. Select **Create and copy key** or **Copy pairing link**; the panel shows a pairing QR code.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/desktop-qr.png" width="70%" alt="Mobile Access panel with the pairing QR code">
+</p>
+
 2. In the Android app, tap **Scan QR code** and point the camera at the screen — or tap **Scan**, select the computer, and paste the key or pairing link.
 3. Pairing establishes persistent device trust; later launches do not ask again.
 

@@ -60,6 +60,11 @@ pnpm dsh --profile web
 启动后，在 DeepSeek Harness 左下角打开“移动访问”，然后：
 
 1. 点击“生成并复制密钥”或“复制配对链接”，面板会显示配对二维码。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/desktop-qr.png" width="70%" alt="桌面端移动访问面板与配对二维码">
+</p>
+
 2. Android App 点击“扫码配对”，把手机对准电脑屏幕上的二维码即可；也可以点击“扫描”选择电脑后粘贴密钥或配对链接。
 3. 配对完成后会建立持久设备信任，以后打开 App 无需重复输入。
 
