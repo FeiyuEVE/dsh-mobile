@@ -16,7 +16,7 @@
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
   <a href="#能做什么">能做什么</a> ·
-  <a href="#在-dsh-对话中自定义">自定义</a> ·
+  <a href="#扩展与自定义">扩展与自定义</a> ·
   <a href="README.en.md">English</a>
 </p>
 
@@ -24,9 +24,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
-DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DSH 源码，也不需要公网穿透。
+DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DeepSeek Harness 源码。
 
-它也能直接在 DSH 对话中修改手机端页面：改布局、交互或功能，保存后几秒内刷新。
+它也能直接在 DeepSeek Harness 对话中修改手机端页面：改布局、交互或功能，保存后几秒内刷新。
 
 ## 快速开始
 
@@ -61,11 +61,12 @@ pnpm dsh --profile web
 - **用对话定制手机端**：直接在 DSH 对话里改手机页面的布局、交互和功能，几秒内刷新。
 - **专属触屏布局**：会话抽屉、工具详情、设置和输入栏都按手机重新组织。
 - **自动发现、无需重新配对**：切换 Wi-Fi、热点或 IP 后通常自动恢复。
-- **三种配对方式任选**：扫码、配对链接、密钥。
+- **三种配对方式**：扫码、配对链接、密钥。
 
 配对设备被视为完全信任，可以操作电脑上的 DSH；建议只在可信的家庭、办公局域网或可信 VPN 中使用。
 
 ## App 与手机浏览器
+
 
 | 方式        | 适合场景         | 说明                                                                    |
 | ------------- | ------------------ | ------------------------------------------------------------------------- |
@@ -74,16 +75,11 @@ pnpm dsh --profile web
 
 Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏览器访问的是同一页面。需要排查兼容性时，可在浏览器地址后追加 `?frontend=stock`，临时回到旧的桌面页面适配模式。
 
-## 在 DSH 对话中自定义
+## 扩展与自定义
 
-默认文件：
+手机端的能力分两层扩展。
 
-```text
-$DSH_HOME/mobile-access/mobile.css
-$DSH_HOME/mobile-access/mobile.js
-```
-
-直接在 DeepSeek Harness 对话中提出修改即可，例如：
+**界面与交互**：编辑 `$DSH_HOME/mobile-access/mobile.css` 和 `mobile.js`，可以直接在 DSH 对话中提出修改，保存后几秒内刷新。例如：
 
 ```text
 请编辑 $DSH_HOME/mobile-access/mobile.css 和 mobile.js，
@@ -91,19 +87,15 @@ $DSH_HOME/mobile-access/mobile.js
 会话状态面板和长按语音入口。只影响窄屏，不修改 DSH 源码。
 ```
 
-保存后，已打开的 App 和浏览器通常会在几秒内应用变化。`mobile.css`/`mobile.js` 负责手机端样式和交互；浏览器按 Web API 能力降级，Android App 额外提供文件选择、拍照、分享、剪贴板和通知等原生能力。
-
-### 扩展电脑端能力
-
-需要手机调用新的电脑能力（读文件、跑命令、访问硬件）时，用命令生成扩展模板：
+**电脑端能力**：当手机需要读电脑文件、跑命令或访问硬件时，用命令生成扩展：
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-tools --name "媒体工具"
 ```
 
-扩展放在 `$DSH_HOME/mobile-access/extensions/<id>/`：`host.mjs` 在电脑端以可信本地代码运行并注册 Action/Route，`mobile.js`/`mobile.css` 在手机端加载，同一扩展热切换、失败自动回退上一版。手机没有写入扩展文件的接口。发布型 DSH 插件也可调用 `ctx.mobileAccess.registerExtension(definition)` 注册扩展。
+扩展放在 `$DSH_HOME/mobile-access/extensions/<id>/`：`host.mjs` 以可信本地代码运行在电脑端并注册 Action/Route，`mobile.js`/`mobile.css` 加载在手机端，整体热切换、失败自动回退上一版。手机无法写入这些文件。
 
-> ⚠️ `host.mjs` 拥有桌面用户的 Node.js 权限且不沙箱，请只安装和编辑自己信任的扩展。
+> `host.mjs` 拥有桌面用户的 Node.js 权限且不沙箱，请只安装和编辑自己信任的扩展。
 
 ## 工作原理
 
@@ -125,6 +117,7 @@ flowchart LR
 完整说明见 [SECURITY.md](SECURITY.md)。
 
 ## 兼容性
+
 
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |

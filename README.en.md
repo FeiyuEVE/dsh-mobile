@@ -69,16 +69,11 @@ A paired device is fully trusted and can operate the DSH on the computer. Use th
 
 The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
-## Customize from DeepSeek Harness
+## Extend and customize
 
-Default files:
+The mobile client can be extended on two layers.
 
-```text
-$DSH_HOME/mobile-access/mobile.css
-$DSH_HOME/mobile-access/mobile.js
-```
-
-Ask DeepSeek Harness to edit them, for example:
+**Interface and interactions**: edit `$DSH_HOME/mobile-access/mobile.css` and `mobile.js` directly from a DSH conversation; open pages refresh within a few seconds. For example:
 
 ```text
 Edit $DSH_HOME/mobile-access/mobile.css and mobile.js to turn the mobile
@@ -87,19 +82,15 @@ a session status panel, and a press-and-hold voice entry. Narrow screens only;
 do not modify the DSH source.
 ```
 
-Changes are applied to open Android and browser pages within a few seconds. `mobile.css`/`mobile.js` own the phone-side styling and interactions; browsers fall back to available Web APIs, while the Android app adds a narrow native bridge for file picking, camera capture, sharing, clipboard, and notifications.
-
-### Add computer-side capabilities
-
-When the phone needs a new computer capability — reading files, running commands, touching hardware — generate a starter extension:
+**Computer-side capabilities**: when the phone needs to read computer files, run commands, or access hardware, generate an extension:
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-tools --name "Media tools"
 ```
 
-Extensions live under `$DSH_HOME/mobile-access/extensions/<id>/`: `host.mjs` runs as trusted local Node.js code on the computer and registers actions/routes; `mobile.js`/`mobile.css` load on the phone. Each extension hot-swaps as one generation and falls back to the previous one on failure. The phone has no endpoint that writes extension files. A published DSH plugin can also call `ctx.mobileAccess.registerExtension(definition)`.
+Extensions live under `$DSH_HOME/mobile-access/extensions/<id>/`: `host.mjs` runs as trusted local Node.js code on the computer and registers actions/routes, while `mobile.js`/`mobile.css` load on the phone. Each extension hot-swaps as one generation and falls back to the previous one on failure. The phone has no endpoint that writes extension files.
 
-> ⚠️ `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
+> `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
 
 ## How it works
 
