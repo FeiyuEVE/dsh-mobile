@@ -18,7 +18,7 @@ class QrDecoderTest {
 
     @Test
     fun returnsNullForUnstructuredNoise() {
-        val noise = ByteArray(100 * 100) { 128 }
+        val noise = ByteArray(100 * 100) { 128.toByte() }
         assertNull(QrDecoder.decodeNv21(noise, 100, 100))
     }
 
@@ -31,7 +31,7 @@ class QrDecoderTest {
         val data = ByteArray(size * size)
         for (y in 0 until size) {
             for (x in 0 until size) {
-                data[y * size + x] = if (matrix.get(x, y)) 0 else 0xff.toByte()
+                data[y * size + x] = if (matrix.get(x, y)) 0.toByte() else 0xff.toByte()
             }
         }
         return data
