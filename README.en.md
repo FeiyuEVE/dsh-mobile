@@ -71,7 +71,11 @@ The Android app is a thin Kotlin WebView shell and contains no frontend copy; mo
 
 ## Extend and customize
 
-You don't need to touch any files: type `/mobile <what you want>` in a DSH conversation, and DSH makes the change — the phone client updates within a few seconds. No need to know paths or formats.
+Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone client's files for you; changes apply within a few seconds. For example:
+
+```text
+/mobile add a page to the phone client that lists the files in a chosen folder on the computer
+```
 
 Two layers are customizable, both under `$DSH_HOME/mobile-access/`:
 
