@@ -21,6 +21,9 @@ jobs:
   package:
     name: Plugin package
     needs: version
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,9 +31,12 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
+          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run verify
       - run: npm pack
+      - name: Publish npm alpha package
+        run: npm publish --provenance --access public --tag alpha
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-package
