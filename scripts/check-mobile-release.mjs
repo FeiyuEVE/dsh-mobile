@@ -80,7 +80,7 @@ async function checkBrandAndStoreIcon() {
 }
 
 async function checkAndroid() {
-  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder] = await Promise.all([
+  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder, nativeBridge] = await Promise.all([
     read('apps/mobile/android/app/build.gradle.kts', 'utf8'),
     read('apps/mobile/android/app/src/main/AndroidManifest.xml', 'utf8'),
     read('apps/mobile/android/app/src/main/res/xml/network_security_config.xml', 'utf8'),
@@ -92,6 +92,7 @@ async function checkAndroid() {
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/SecureWebViewClient.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/ScanActivity.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/QrDecoder.kt', 'utf8'),
+    read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/NativeBridge.kt', 'utf8'),
   ])
   const packageVersion = asString(JSON.parse(packageManifest).version, 'package.version')
   const compileSdk = singleMatch(gradle, /^\s*compileSdk\s*=\s*(\d+)\s*$/gm, 'Android compileSdk')
@@ -134,6 +135,9 @@ async function checkAndroid() {
   }
   if (!qrDecoder.includes('MultiFormatReader') || !scanActivity.includes('QrDecoder.decodeNv21')) {
     fail('Android QR pairing must keep ZXing decoding wired to the scanner')
+  }
+  for (const marker of ['addJavascriptInterface', '@JavascriptInterface', 'MAX_MESSAGE_BYTES', 'MAX_PENDING', 'files.pick', 'camera.capture']) {
+    if (!nativeBridge.includes(marker)) fail(`Android native bridge is missing ${marker}`)
   }
   if (!webViewClient.includes('error.primaryError == SslError.SSL_UNTRUSTED')
     || !webViewClient.includes('PinnedTls.acceptsWebViewLeaf')

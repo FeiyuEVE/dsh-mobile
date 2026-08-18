@@ -24,6 +24,8 @@ The maintainer will acknowledge a complete report within seven days. Publication
 - Do not expose the gateway directly to the public Internet.
 - Treat every paired device as a fully trusted operator. Stock DSH methods reached through the authenticated loopback proxy may read configuration or run tools with the desktop user's authority.
 - Treat `mobile.js` as application code with the paired page's same-origin authority. Restrict write access to trusted host-side DSH sessions and review generated API calls or browser-permission use.
+- Treat every extension `host.mjs` as a local program with the desktop user's Node.js privileges. It is never sandboxed and is not editable through the mobile gateway; only place code there that you trust.
+- Extension Actions and Routes receive filtered request data, a device identifier, and an abort signal. They cannot set proxy security headers or access the gateway's cookies, device tokens, CSRF tokens, or internal request headers.
 
 ## Known alpha limitation
 

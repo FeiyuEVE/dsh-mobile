@@ -67,7 +67,7 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
     },
   } as WebServer)
   await context.plugin({ Config, inject, apply }, {
-    listenPort: 0,
+    listenPort: 38083,
     stateFile: join(directory, 'devices.json'),
     controlFile: join(directory, 'control.json'),
     customCssFile: join(directory, 'mobile.css'),

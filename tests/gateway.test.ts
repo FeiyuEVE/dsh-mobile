@@ -28,6 +28,8 @@ interface UpstreamObservation {
 }
 
 const cleanups: Array<() => Promise<void>> = []
+const TEST_GATEWAY_PORT = 38080
+const TEST_FAILED_START_PORT = 38081
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
@@ -236,7 +238,7 @@ async function gateway(
 ): Promise<MobileAccessGateway> {
   const resolved = parseGatewayConfig({
     listenHost: '127.0.0.1',
-    listenPort: 0,
+    listenPort: TEST_GATEWAY_PORT,
     upstreamOrigin: `http://127.0.0.1:${String(upstreamPort)}`,
     publicAuthorities: ['127.0.0.1'],
     allowedCidrs: ['127.0.0.0/8'],
@@ -818,7 +820,7 @@ describe('HTTP gateway', () => {
     const inner = await upstream()
     const resolved = parseGatewayConfig({
       listenHost: '127.0.0.1',
-      listenPort: 0,
+      listenPort: TEST_FAILED_START_PORT,
       upstreamOrigin: `http://127.0.0.1:${String(inner.port)}`,
       publicAuthorities: ['127.0.0.1'],
       allowedCidrs: ['127.0.0.0/8'],

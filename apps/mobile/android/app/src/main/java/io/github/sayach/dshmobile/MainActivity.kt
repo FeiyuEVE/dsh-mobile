@@ -63,6 +63,7 @@ class MainActivity : Activity() {
     private val credentialStore by lazy { DeviceCredentialStore(this) }
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private var webView: WebView? = null
+    private var nativeBridge: NativeBridge? = null
     private var gatewayOrigin: GatewayOrigin? = null
     private var setupBackAction: (() -> Unit)? = null
     private var uploadCallback: ValueCallback<Array<Uri>>? = null
@@ -106,6 +107,7 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (nativeBridge?.onActivityResult(requestCode, resultCode, data) == true) return
         when (requestCode) {
             FILE_CHOOSER_REQUEST -> finishFileSelection(resultCode, data)
             DOWNLOAD_DESTINATION_REQUEST -> finishDownloadSelection(resultCode, data)
@@ -722,6 +724,7 @@ class MainActivity : Activity() {
                 if (webView === browser && gatewayOrigin == origin) {
                     retryUrl = origin.serialized
                     CookieManager.getInstance().flush()
+                    nativeBridge?.injectPage()
                 }
             },
         )
@@ -741,6 +744,8 @@ class MainActivity : Activity() {
                 request.deny()
             }
         }
+        nativeBridge?.dispose()
+        nativeBridge = NativeBridge(this, browser, origin.serialized).also { it.install() }
         browser.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             requestDownload(origin, caCertificate, url, userAgent, contentDisposition, mimeType)
         }
@@ -976,6 +981,8 @@ class MainActivity : Activity() {
     }
 
     private fun destroyWebView() {
+        nativeBridge?.dispose()
+        nativeBridge = null
         webView?.apply {
             stopLoading()
             webChromeClient = null

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile",
-  "version": "0.1.0-alpha.31",
+  "version": "0.1.0-alpha.32",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全局域网访问插件，支持 Android App 和手机浏览器。",
   "type": "module",
@@ -56,7 +56,7 @@
     "check:version": "node ./scripts/check-release-version.mjs",
     "clean": "node ./scripts/clean.mjs",
     "lint": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --pool=threads --maxWorkers=1",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run check:version && npm run build",
@@ -121,5 +121,10 @@
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
-  }
+  },
+  "directories": {
+    "lib": "lib",
+    "test": "tests"
+  },
+  "author": ""
 }

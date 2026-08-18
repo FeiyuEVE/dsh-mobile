@@ -12,6 +12,8 @@ import {
   type MobileAccessRuntime,
 } from './control.js'
 import { MobileAccessGateway } from './gateway.js'
+import { createMobileAccessService, type MobileAccessService } from './extensions.js'
+import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
   HttpError,
   LOCAL_ADMIN_PREFIX,
@@ -106,19 +108,50 @@ async function loadSetup(config: PluginConfig): Promise<LoadedSetup> {
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   assertSupportedDshVersion(installedDshVersion())
   const loaded = await loadSetup(config)
+  const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
+  const unregisterBuiltin = mobileAccess.registerExtension({
+    schemaVersion: 1,
+    id: 'computer-images',
+    name: 'Computer images',
+    version: '1.0.0',
+    description: 'Authenticated computer-side image browser',
+    routes: [
+      {
+        method: 'GET', path: 'list',
+        async handle(request) {
+          return { status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(await listComputerImages(request.query.get('path'))) }
+        },
+      },
+      {
+        method: 'GET', path: 'image',
+        async handle(request) {
+          const image = await readComputerImage(request.query.get('path'))
+          return { status: 200, contentType: image.contentType, headers: { 'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(image.name)}` }, body: image.body }
+        },
+      },
+    ],
+  })
   let gateway: MobileAccessGateway | undefined
   const startGateway = async (candidateConfig: PluginConfig): Promise<MobileAccessRuntime> => {
     const resolved = parseGatewayConfig(candidateConfig)
+    await mobileAccess.startLocal(resolved.extensionsDir, ctx)
     const candidate = new MobileAccessGateway(
       resolved,
       new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
+      mobileAccess,
     )
-    await candidate.start()
+    try {
+      await candidate.start()
+    } catch (error) {
+      await mobileAccess.stopLocal()
+      throw error
+    }
     gateway = candidate
     return {
       close: async () => {
         if (gateway === candidate) gateway = undefined
         await candidate.close()
+        await mobileAccess.stopLocal()
       },
     }
   }
@@ -158,6 +191,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           sendJson(response, 200, {
             running: controller.isRunning(),
             origin: gateway?.address().origin,
+            ...(gateway === undefined ? {} : { extensions: gateway.extensionStatus() }),
           }, false)
           return
         }
@@ -168,6 +202,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           sendJson(response, 200, {
             running: controller.isRunning(),
             origin: gateway?.address().origin,
+            ...(gateway === undefined ? {} : { extensions: gateway.extensionStatus() }),
           }, false)
           return
         }
@@ -188,11 +223,13 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       await controller.initialize()
     } catch (error) {
       unregister()
+      unregisterBuiltin()
       throw error
     }
     return async () => {
       unregister()
       await controller.close()
+      unregisterBuiltin()
     }
   }, 'dsh-mobile: local control and authenticated LAN gateway')
 }

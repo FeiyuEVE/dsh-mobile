@@ -1,7 +1,8 @@
-import { createHash, randomUUID, X509Certificate } from 'node:crypto'
+import { createHash, X509Certificate } from 'node:crypto'
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram'
 import { readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
+import { extname } from 'node:path'
 import {
   createServer as createHttpServer,
   request as requestHttp,
@@ -46,9 +47,16 @@ import {
   setSecurityHeaders,
   WS_PATHS,
 } from './http-security.js'
-import { addressAllowed, type ParsedCidr, RequestTrustPolicy } from './network.js'
+import { addressAllowed, isLoopbackAddress, type ParsedCidr, RequestTrustPolicy } from './network.js'
 import type { DeviceStore } from './storage.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
+import {
+  EXTENSION_LIMITS,
+  MobileExtensionError,
+  type MobileAccessService,
+  type MobileRouteRequest,
+  type MobileRouteResponse,
+} from './extensions.js'
 
 type GatewayServer = HttpServer | HttpsServer
 
@@ -389,6 +397,7 @@ function requestCookies(request: IncomingMessage): ReadonlyMap<string, string> {
 function mapError(error: unknown): HttpError {
   if (error instanceof HttpError) return error
   if (error instanceof AccessError) return new HttpError(error.status, error.code)
+  if (error instanceof MobileExtensionError) return new HttpError(error.status, error.code)
   return new HttpError(500, 'internal_error')
 }
 
@@ -413,6 +422,70 @@ function discoveryBroadcastTargets(cidrs: readonly ParsedCidr[]): readonly strin
   return [...targets]
 }
 
+function extensionTarget(pathname: string):
+  | { readonly kind: 'manifest' }
+  | { readonly kind: 'script' | 'style' | 'asset'; readonly id: string; readonly path?: string }
+  | { readonly kind: 'action'; readonly id: string; readonly action: string }
+  | { readonly kind: 'route'; readonly id: string; readonly path: string }
+  | undefined {
+  const prefix = `${AUTH_PREFIX}/extensions`
+  if (pathname === prefix || pathname === `${prefix}/` || pathname === `${prefix}/manifest`) return { kind: 'manifest' }
+  if (!pathname.startsWith(`${prefix}/`)) return undefined
+  const parts = pathname.slice(prefix.length + 1).split('/')
+  const id = parts.shift()
+  if (id === undefined || !/^[a-z][a-z0-9-]{0,63}$/u.test(id)) return undefined
+  const leaf = parts.shift()
+  if (leaf === 'mobile.js' && parts.length === 0) return { kind: 'script', id }
+  if (leaf === 'mobile.css' && parts.length === 0) return { kind: 'style', id }
+  if (leaf === 'assets' && parts.length > 0) return { kind: 'asset', id, path: parts.join('/') }
+  if (leaf === 'actions' && parts.length === 1 && /^[a-z][a-z0-9-]{0,63}$/u.test(parts[0]!)) return { kind: 'action', id, action: parts[0]! }
+  if (leaf === 'routes') return { kind: 'route', id, path: `/${parts.join('/')}`.replace(/\/{2,}/gu, '/') }
+  return undefined
+}
+
+async function readBoundedBody(request: IncomingMessage, maximum: number): Promise<Buffer> {
+  const declared = request.headers['content-length']
+  if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > maximum)) {
+    throw new HttpError(413, 'payload_too_large')
+  }
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += buffer.length
+    if (total > maximum) throw new HttpError(413, 'payload_too_large')
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
+function extensionRequestHeaders(headers: IncomingHttpHeaders): Readonly<Record<string, string>> {
+  const allowed = new Set(['accept', 'content-type', 'content-length', 'content-range', 'range', 'if-none-match', 'if-modified-since'])
+  const output: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (!allowed.has(name) || typeof value !== 'string') continue
+    output[name] = value
+  }
+  return Object.freeze(output)
+}
+
+function extensionContentType(path: string): string {
+  const type = {
+    '.css': 'text/css; charset=utf-8',
+    '.csv': 'text/csv; charset=utf-8',
+    '.gif': 'image/gif',
+    '.html': 'text/html; charset=utf-8',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+  }[extname(path).toLowerCase()]
+  return type ?? 'application/octet-stream'
+}
+
 /** Authenticated TLS edge in front of the ordinary loopback-only DSH Web server. */
 export class MobileAccessGateway {
   readonly access: AccessController
@@ -434,7 +507,7 @@ export class MobileAccessGateway {
   private readonly removeSessionListener: () => void
   private readonly renewLimiter: BoundedRateLimiter
 
-  constructor(readonly config: ResolvedGatewayConfig, store: DeviceStore) {
+  constructor(readonly config: ResolvedGatewayConfig, store: DeviceStore, private readonly extensions?: MobileAccessService) {
     this.tlsEnabled = config.tls.mode === 'provided'
     this.access = new AccessController(store, {
       pairingTtlMs: config.pairingTtlMs,
@@ -539,7 +612,9 @@ export class MobileAccessGateway {
     await new Promise<void>((resolve, reject) => {
       const failed = (error: Error): void => { reject(error) }
       socket.once('error', failed)
-      socket.bind(port, '0.0.0.0', () => {
+      // The UDP socket is IPv4-only; only a literal IPv4 loopback address is bindable, never ::1.
+      const bindHost = isIP(this.config.listenHost) === 4 && isLoopbackAddress(this.config.listenHost) ? this.config.listenHost : '0.0.0.0'
+      socket.bind(port, bindHost, () => {
         socket.off('error', failed)
         socket.setBroadcast(true)
         resolve()
@@ -830,6 +905,7 @@ export class MobileAccessGateway {
     }
     const computerImages = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-images`
     const computerImage = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-image`
+    const requestedExtension = extensionTarget(target.decodedPathname)
     const customAsset = request.method === 'GET'
       ? target.decodedPathname === `${AUTH_PREFIX}/custom.css`
         ? {
@@ -851,17 +927,19 @@ export class MobileAccessGateway {
               }
           : undefined
       : undefined
-    if (customAsset === undefined && !computerImages && !computerImage
+    if (customAsset === undefined && !computerImages && !computerImage && extensionTarget(target.decodedPathname) === undefined
       && (target.decodedPathname === AUTH_PREFIX || target.decodedPathname.startsWith(`${AUTH_PREFIX}/`))) {
       throw new HttpError(404, 'not_found')
     }
 
-    if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST') {
+    if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST'
+      && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
     }
     if (request.method === 'POST'
       && target.decodedPathname !== '/api'
-      && !target.decodedPathname.startsWith('/api/')) {
+      && !target.decodedPathname.startsWith('/api/')
+      && requestedExtension?.kind !== 'action' && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
     }
     let authorization: SessionAuthorization
@@ -886,6 +964,11 @@ export class MobileAccessGateway {
         return
       }
       throw error
+    }
+    const extension = requestedExtension
+    if (extension !== undefined) {
+      await this.handleExtensionRequest(extension, target, request, response, authorization)
+      return
     }
     if (customAsset !== undefined) {
       let body: Buffer
@@ -946,6 +1029,115 @@ export class MobileAccessGateway {
     }
     if (stockFrontend && target.decodedPathname === '/') request.url = '/'
     await this.proxyHttp(request, response, authorization)
+  }
+
+  private async handleExtensionRequest(
+    targetInfo: NonNullable<ReturnType<typeof extensionTarget>>,
+    target: ReturnType<typeof parseRequestTarget>,
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): Promise<void> {
+    const extensions = this.extensions
+    if (extensions === undefined) throw new HttpError(404, 'not_found')
+    if (request.method !== 'GET' && request.method !== 'HEAD') this.requireCsrf(request, authorization)
+    if (targetInfo.kind === 'manifest') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
+      const body = Buffer.from(JSON.stringify({ protocol: 1, extensions: extensions.manifest() }))
+      // The ETag must cover extension content, not just the manifest body, so
+      // editing mobile.js/css alone invalidates the client's cached manifest.
+      const etag = createHash('sha256').update(body).update(extensions.contentDigest()).digest('hex')
+      if (headerValue(request.headers, 'if-none-match') === etag) {
+        setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+      }
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.byteLength, ETag: etag })
+      if (request.method === 'HEAD') response.end(); else response.end(body)
+      return
+    }
+    if (targetInfo.kind === 'script' || targetInfo.kind === 'style' || targetInfo.kind === 'asset') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
+      const file = targetInfo.kind === 'script'
+        ? await extensions.readClientFile(targetInfo.id, 'script')
+        : targetInfo.kind === 'style'
+          ? await extensions.readClientFile(targetInfo.id, 'style')
+          : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '')
+      if (headerValue(request.headers, 'if-none-match') === file.digest) {
+        setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+      }
+      const contentType = targetInfo.kind === 'script'
+        ? 'text/javascript; charset=utf-8'
+        : targetInfo.kind === 'style' ? 'text/css; charset=utf-8' : extensionContentType(targetInfo.path ?? '')
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': file.body.byteLength, ETag: file.digest })
+      if (request.method === 'HEAD') response.end(); else response.end(file.body)
+      return
+    }
+    if (targetInfo.kind === 'action') {
+      if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
+      const body = await readJsonObject(request, 1024 * 1024)
+      const operation = this.allocateRequest(authorization, response, {})
+      const abort = new AbortController()
+      response.once('close', () => { abort.abort() })
+      const generationSignal = extensions.signal(targetInfo.id)
+      const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
+      generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
+      try {
+        const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId })
+        let serialized: Buffer
+        try { serialized = Buffer.from(JSON.stringify(result)) } catch { throw new MobileExtensionError('extension_failed', 'extension action failed', 500) }
+        if (serialized.byteLength > 4 * 1024 * 1024) throw new MobileExtensionError('extension_result_too_large', 'extension result is too large', 500)
+        sendJson(response, 200, result, this.tlsEnabled)
+      } finally {
+        generationSignal?.removeEventListener('abort', onGenerationAbort)
+        abort.abort(); operation.release()
+      }
+      return
+    }
+    if (targetInfo.kind === 'route') {
+      const method = request.method ?? 'GET'
+      if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new HttpError(405, 'method_not_allowed')
+      const body = method === 'GET' || method === 'HEAD' ? Buffer.alloc(0) : await readBoundedBody(request, this.config.maxBodyBytes)
+      const operation = this.allocateRequest(authorization, response, {})
+      const abort = new AbortController()
+      response.once('close', () => { abort.abort() })
+      const generationSignal = extensions.signal(targetInfo.id)
+      const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
+      generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
+      try {
+        const parsed = new URL(target.raw, this.address().origin)
+        const routeRequest: MobileRouteRequest = {
+          method, pathname: targetInfo.path, query: parsed.searchParams,
+          headers: extensionRequestHeaders(request.headers), body, signal: abort.signal, deviceId: authorization.deviceId,
+        }
+        const result = await extensions.route(targetInfo.id, method, targetInfo.path, routeRequest)
+        await this.sendExtensionResponse(response, result, request.method === 'HEAD')
+      } finally {
+        generationSignal?.removeEventListener('abort', onGenerationAbort)
+        abort.abort(); operation.release()
+      }
+    }
+  }
+
+  private async sendExtensionResponse(response: ServerResponse, result: MobileRouteResponse, head: boolean): Promise<void> {
+    const contentType = result.contentType ?? 'application/octet-stream'
+    if (!/^[\w!#$&+.^-]+\/[\w!#$&+.^-]+(?:;[\s\S]*)?$/u.test(contentType)) throw new MobileExtensionError('invalid_route_response', 'extension returned an invalid content type', 500)
+    const safeHeaders: Record<string, string> = {}
+    for (const [name, value] of Object.entries(result.headers ?? {})) {
+      if (!/^(?:content-disposition|cache-control|etag)$/iu.test(name) || /[\r\n]/u.test(value)) continue
+      safeHeaders[name] = value
+    }
+    setSecurityHeaders(response, this.tlsEnabled)
+    if (typeof result.body === 'string' || result.body instanceof Uint8Array) {
+      const body = typeof result.body === 'string' ? Buffer.from(result.body) : Buffer.from(result.body)
+      if (body.byteLength > 4 * 1024 * 1024) throw new MobileExtensionError('extension_result_too_large', 'extension response is too large', 500)
+      response.writeHead(result.status ?? 200, { ...safeHeaders, 'Content-Type': contentType, 'Content-Length': body.byteLength })
+      if (head) response.end(); else response.end(body)
+      return
+    }
+    response.writeHead(result.status ?? 200, { ...safeHeaders, 'Content-Type': contentType })
+    if (head) { result.body.destroy(); response.end(); return }
+    await pipeline(result.body, new ByteLimitTransform(4 * 1024 * 1024), response)
   }
 
   private async proxyMobileIndex(
@@ -1362,5 +1554,10 @@ export class MobileAccessGateway {
   /** Safe metadata helper for direct loopback integrations. */
   devices(): readonly DeviceSummary[] {
     return this.access.listDevices()
+  }
+
+  /** Status shown by the loopback mobile-access control card. */
+  extensionStatus(): { readonly loaded: number; readonly failed: number } {
+    return this.extensions?.status() ?? { loaded: 0, failed: 0 }
   }
 }

@@ -41,6 +41,14 @@ DeepSeek Harness 是这个轻量、社区维护的 Android WebView 薄壳的显�
 
 网络安全配置不信任用户安装的 CA。插件会为所选网卡的当前地址签发新的 SAN，App 则在加密设备凭据中保存稳定 CA 固定。
 
+## 移动扩展桥
+
+认证后的页面可以通过 `dshMobile` 扩展调用 Android Bridge。Bridge 只注入到已配对的 HTTPS Origin 和顶层 WebView，不暴露 Cookie、设备令牌、配对密钥、CA 私钥或任意 Android API。
+
+可用能力包括 `files.pick`、`camera.capture`、`share`、`clipboard.read`、`clipboard.write`、`notification.show`。文件和拍照结果会转换为页面里的浏览器 `File`。文件选择、拍照等交互同一时间只允许一个；取消、旋转、WebView 销毁或 60 秒超时都会结束对应请求。手机浏览器使用对应 Web API，不支持时返回 `unsupported`。
+
+电脑端扩展是另一层：`host.mjs` 作为 DSH 主机上的可信 Node.js 代码运行，`mobile.js` 通过限定到自身扩展的 Action 和 Route 调用它。App Bridge 不能编辑或上传扩展源文件。
+
 ## 构建
 
 需要 Android Studio 或 Android SDK 36、JDK 17 和 Gradle 8.11.1。

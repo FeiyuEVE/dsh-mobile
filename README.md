@@ -106,7 +106,33 @@ $DSH_HOME/mobile-access/mobile.js
 会话状态面板和长按语音入口。只影响窄屏，不修改 DSH 源码。
 ```
 
-保存后，已打开的 App 和浏览器通常会在几秒内应用变化。自定义不限于配色：`mobile.js` 可以添加导航、快捷操作、状态面板、相机、语音、扫码，以及调用同源 DSH API 的完整交互。
+保存后，已打开的 App 和浏览器通常会在几秒内应用变化。`mobile.css` 和 `mobile.js` 负责手机页面的样式、交互和已有 API 编排；它们不能单独创建电脑文件、运行命令或访问电脑硬件。浏览器按 Web API 能力降级，Android App 通过受限的原生 Bridge 提供文件选择、拍照、分享、剪贴板、通知和语音等能力。
+
+### 扩展电脑端能力
+
+需要手机调用新的电脑能力时，在 `$DSH_HOME/mobile-access/extensions/<id>/` 创建扩展：
+
+```text
+extension.json   # 元数据
+host.mjs         # 电脑端 Node.js 代码（可信本地代码）
+mobile.js        # 手机端脚本，可选
+mobile.css       # 手机端样式，可选
+assets/          # 静态资源，可选
+```
+
+可用命令生成模板：
+
+```powershell
+dsh plugin --profile web exec dsh-mobile extension create media-tools --name "媒体工具"
+```
+
+`host.mjs` 可以注册经过 Schema 校验的 Action、普通 HTTP/流式/SSE Route 和清理 Effect；`mobile.js` 通过 `api.host.invoke()` 或 `api.host.fetch()` 调用它们。扩展文件只能在电脑端由用户或 DSH 修改，手机没有写入这些文件的接口。Mobile Access 关闭、设备撤销、扩展刷新或网关关闭时，扩展请求会被中止。
+
+发布型 DSH 插件也可以在 Cordis effect 中调用 `ctx.mobileAccess.registerExtension(definition)`，与本地目录扩展共用认证、路由和客户端 SDK，不需要修改 DSH 核心。
+
+每个扩展的 `id` 必须唯一，Host、脚本和 CSS 会作为同一版本热切换；新版本加载失败时保留上一版本。空的 `extensions/` 目录不产生副作用。配对设备拥有所有已注册扩展的权限，因此只应安装和编辑自己信任的 `host.mjs`。
+
+普通 DSH 社区插件仍按标准 `dsh.client` 和 Slot 贡献加载：对话节点、工具卡、设置区、侧栏项、Header Action、Composer Dock 和 Overlay 会随同一会话同步。只有依赖鼠标悬停、固定桌面宽度、系统文件选择器或私有 DOM 的插件需要额外移动适配。
 
 ## 工作原理
 
@@ -117,7 +143,7 @@ flowchart LR
   DSH -->|"同一工作区、会话和事件流"| Phone
 ```
 
-插件包含两部分：Host face 提供发现、配对、HTTPS 和回环代理；Client face 替换移动端的布局入口，并复用原生功能插件。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载完全通过插件机制完成。
+插件包含三层：Host face 提供发现、配对、HTTPS、回环代理和扩展注册表；Client face 提供独立的移动根布局、多扩展 SDK 和热更新；Android App 提供精确 Origin 限定的原生 Bridge。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载完全通过插件机制完成。
 
 ## 安全
 
@@ -132,7 +158,7 @@ flowchart LR
 
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |
-| `0.1.0-alpha.31` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7` |
+| `0.1.0-alpha.32` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7` |
 
 插件会在启动时检查 DSH Host 版本和移动布局所需的前端依赖；遇到未经验证的版本会直接给出错误，不会带着不兼容页面继续启动。CI 也会持续检查 DSH 主分支的布局插槽和移动端语义标记。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 

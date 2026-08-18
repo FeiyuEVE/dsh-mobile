@@ -77,6 +77,8 @@ export interface ResolvedGatewayConfig {
   readonly authorities: readonly AuthoritySpec[]
   readonly allowedCidrs: readonly ParsedCidr[]
   readonly stateFile: string
+  /** Local extension root adjacent to the mobile-access state file. */
+  readonly extensionsDir: string
   readonly customCssFile: string
   readonly customScriptFile: string
   readonly mobileLayoutFile: string
@@ -277,6 +279,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     authorities: Object.freeze(authorities),
     allowedCidrs: Object.freeze(allowedCidrs),
     stateFile: absoluteFile(value.stateFile, 'stateFile'),
+    extensionsDir: join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'extensions'),
     customCssFile: value.customCssFile === undefined
       ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.css')
       : absoluteFile(value.customCssFile, 'customCssFile'),

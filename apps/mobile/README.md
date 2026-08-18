@@ -20,6 +20,14 @@ Discovery listens to DNS-SD/mDNS and periodic UDP announcements at the same time
 
 The CA is not discovery data. After selection and key entry, Android retrieves it from the chosen origin without sending credentials, checks that its SHA-256 fingerprint matches the key and installation identifier, and stores it with the encrypted device credential. Native requests use an app-private trust store. WebView accepts only an otherwise-untrusted leaf signed by that pinned CA for the exact origin and validity period; every other TLS error is cancelled. No system CA installation is required.
 
+## Mobile extension bridge
+
+The authenticated page can call the Android bridge through `dshMobile` extensions. The bridge is injected only into the paired HTTPS origin and only for the top-level WebView frame. It does not expose cookies, device tokens, pairing keys, CA private keys, or arbitrary Android APIs.
+
+Available actions are `files.pick`, `camera.capture`, `share`, `clipboard.read`, `clipboard.write`, and `notification.show`. File and camera results are returned to the page as browser `File` objects. Only one interactive Android result (file picker or camera) runs at a time; cancellation, rotation, WebView destruction, and a 60-second timeout reject the pending request. Browsers use the corresponding Web APIs and return `unsupported` when a capability is unavailable.
+
+Computer-side extensions are separate: their `host.mjs` runs as trusted local Node.js code on the DSH host, while `mobile.js` calls its scoped actions and routes. The app bridge cannot edit or upload extension source files.
+
 ## Why use the app
 
 - No browser address or tab bars.

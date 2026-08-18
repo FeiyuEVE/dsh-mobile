@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Bounded Android DNS-SD listener for metadata-only DSH Mobile advertisements. */
 internal object NsdDiscovery {
-    fun scan(context: Context, timeoutMs: Long): List<DiscoveredHarness> {
+    fun scan(context: Context, timeoutMs: Long, canceled: java.util.concurrent.atomic.AtomicBoolean? = null): List<DiscoveredHarness> {
         val app = context.applicationContext
         val manager = app.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return emptyList()
         val wifi = app.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -60,7 +60,10 @@ internal object NsdDiscovery {
         return try {
             manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
             started.await(1, TimeUnit.SECONDS)
-            Thread.sleep(timeoutMs)
+            val end = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < end && canceled?.get() != true) {
+                Thread.sleep(200)
+            }
             found.values.toList()
         } catch (_: Exception) {
             found.values.toList()

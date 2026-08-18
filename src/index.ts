@@ -32,6 +32,27 @@ export type {
 } from './control.js'
 export { MobileAccessGateway, rewriteMobileIndex } from './gateway.js'
 export {
+  EXTENSION_LIMITS,
+  MobileAccessService,
+  MobileExtensionError,
+  assertExtensionId,
+  createMobileAccessService,
+  parseExtensionManifest,
+} from './extensions.js'
+export type {
+  LocalExtensionManifest,
+  MobileAccessService as MobileAccessRegistry,
+  MobileActionContext,
+  MobileExtensionClientEntry,
+  MobileExtensionDefinition,
+  MobileExtensionManifest,
+  MobileExtensionStatus,
+  MobileHostAction,
+  MobileHostRoute,
+  MobileRouteRequest,
+  MobileRouteResponse,
+} from './extensions.js'
+export {
   AUTH_PREFIX,
   CSRF_COOKIE,
   CSRF_HEADER,

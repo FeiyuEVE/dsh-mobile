@@ -101,7 +101,33 @@ a session status panel, and a press-and-hold voice entry. Narrow screens only;
 do not modify the DSH source.
 ```
 
-Changes are applied to open Android and browser pages within a few seconds. Customization is not limited to colors: `mobile.js` can add navigation, shortcuts, dashboards, camera, voice, scanning, and complete interactions with same-origin DeepSeek Harness APIs.
+Changes are applied to open Android and browser pages within a few seconds. `mobile.css` and `mobile.js` own the phone UI, interactions, and orchestration of existing APIs; they cannot create computer files, run commands, or access computer hardware by themselves. Browsers fall back to available Web APIs, while the Android app exposes a narrow native bridge for file picking, camera capture, sharing, clipboard, notifications, and speech.
+
+### Add computer-side capabilities
+
+For a new capability on the computer, create an extension under `$DSH_HOME/mobile-access/extensions/<id>/`:
+
+```text
+extension.json   # metadata
+host.mjs         # trusted local Node.js code
+mobile.js        # optional phone-side script
+mobile.css       # optional phone-side styles
+assets/          # optional static files
+```
+
+Generate a complete starter extension with:
+
+```powershell
+dsh plugin --profile web exec dsh-mobile extension create media-tools --name "Media tools"
+```
+
+`host.mjs` can register schema-validated actions, ordinary HTTP/streaming/SSE routes, and teardown effects; `mobile.js` calls them through `api.host.invoke()` or `api.host.fetch()`. Extension source files can be changed only on the computer by the user or DSH; the phone has no endpoint that writes them. Closing Mobile Access, revoking a device, refreshing an extension, or stopping the gateway aborts its active requests.
+
+A published DSH plugin can also call `ctx.mobileAccess.registerExtension(definition)` from a Cordis effect. It shares the same authentication, routes, and client SDK as local directory extensions without modifying DSH core.
+
+Extension IDs are unique. Host code, scripts, and CSS switch as one generation; if a new generation fails, the previous one remains active. An empty `extensions/` directory is inert. Paired devices have every registered extension permission, so install and edit only trusted `host.mjs` code.
+
+Normal DSH community plugins continue to load through standard `dsh.client` and Slot contributions: conversation nodes, tool cards, settings sections, sidebar items, header actions, composer docks, and overlays remain available in the same session. Plugins that depend on hover, fixed desktop widths, system file pickers, or private DOM selectors need additional mobile adaptation.
 
 ## How it works
 
@@ -111,7 +137,7 @@ flowchart LR
   Gateway -->|"loopback proxy"| DSH["Stock DSH Web and Host"]
 ```
 
-The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face replaces only the phone layout entry while reusing native feature plugins. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
+The three layers are: the Host face for discovery, pairing, HTTPS, loopback proxying, and extension registration; the Client face for the dedicated mobile root, multi-extension SDK, and hot updates; and the Android app for an exact-origin native bridge. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
 
 ## Security
 
@@ -125,7 +151,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0-alpha.31` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
+| `0.1.0-alpha.32` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 

@@ -33,7 +33,7 @@ internal object LanDiscovery {
             discoveryExecutor.invokeAll(
                 listOf(
                     Callable { udpDiscovery(port, subnets, canceled) },
-                    Callable { NsdDiscovery.scan(context, PASSIVE_TIMEOUT_MS) },
+                    Callable { NsdDiscovery.scan(context, PASSIVE_TIMEOUT_MS, canceled) },
                 ),
                 PASSIVE_TIMEOUT_MS + 1_000,
                 TimeUnit.MILLISECONDS,
