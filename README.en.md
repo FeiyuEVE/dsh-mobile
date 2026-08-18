@@ -19,15 +19,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
-DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified.
+DSH Mobile is a DeepSeek Harness plugin that turns your phone into a second screen for the DSH on your computer: the Android app or a mobile browser connects over a protected LAN, keeping sessions, tools, messages, and live state in sync. No DeepSeek Harness source changes and no public-Internet tunneling.
 
-## What it does
-
-- Continue DSH work from a phone: sessions, tools, settings, and live state stay in sync.
-- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open phone pages usually refresh within a few seconds — customize your mobile client by talking to DSH, not by writing code.
-- A dedicated touch layout: session drawer, tool details, settings, and composer are reorganized for touch.
-- Auto-discovery on the LAN; Wi-Fi, hotspot, or IP changes normally recover without re-pairing.
-- Pair by scanning a QR code, pasting a pairing link, or entering a key — no 43-character key to type.
+What makes it different is that you can **customize the phone UI by talking to DSH**: ask in a conversation, and the open phone page refreshes within a few seconds — no coding required.
 
 ## Quick start
 
@@ -48,17 +42,23 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
-`setup` automatically selects and remembers the current LAN. Wi-Fi, hotspot, and IP changes normally recover automatically; use `--address 192.168.x.x` only when automatic selection fails.
-
-After starting DSH, open **Mobile Access** in the lower-left sidebar, enable it, then:
+After starting DSH, open **Mobile Access** in the lower-left sidebar, then:
 
 1. Select **Create and copy key** or **Copy pairing link**; the panel shows a pairing QR code.
 2. In the Android app, tap **Scan QR code** and point the camera at the screen — or tap **Scan**, select the computer, and paste the key or pairing link.
 3. Pairing establishes persistent device trust; later launches do not ask again.
 
-A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
+`setup` automatically selects and remembers the current LAN; Wi-Fi, hotspot, and IP changes normally recover without re-pairing. Use `--address 192.168.x.x` only when automatic selection fails. Settings, certificates, devices, and customization files live under `$DSH_HOME/mobile-access/`.
 
-The plugin does not modify the DeepSeek Harness source. Settings, certificates, devices, and customization files live under `$DSH_HOME/mobile-access/`.
+## What it does
+
+- **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
+- **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
+- **A dedicated touch layout**: session drawer, tool details, settings, and composer reorganized for phones.
+- **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
+- **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
+
+A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
 
 ## App or mobile browser
 
@@ -66,20 +66,6 @@ The plugin does not modify the DeepSeek Harness source. Settings, certificates, 
 | --- | --- | --- |
 | Android app | Everyday use | Auto-discovery; private certificate pinning inside the app, no manual browser trust step |
 | Mobile browser | Temporary or cross-platform | Open the HTTPS origin shown by Mobile Access; trust the certificate manually on first visit |
-
-Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It publishes only the device name, address, port, protocol version, and stable `instanceId` — never keys or device tokens. IP changes do not require another pairing.
-
-For a browser's first connection, open pairing on the computer, then select **Copy pairing link** and open that link on the phone — the pairing code is prefilled. Alternatively, visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
-
-## Mobile UI
-
-Phones use a dedicated layout shell that no longer depends on the desktop three-column DOM, while native components keep a small touch-adaptation layer:
-
-- A workspace-and-session drawer opens from the top-left.
-- Conversations, traces, tool details, and Session logs keep their full capabilities.
-- Settings use top-level tabs and a single column.
-- The composer keeps command, permission, model, context, image, and send controls.
-- **Add Workspace** browses computer folders inside the phone page instead of opening a system picker on the computer.
 
 The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
@@ -101,33 +87,19 @@ a session status panel, and a press-and-hold voice entry. Narrow screens only;
 do not modify the DSH source.
 ```
 
-Changes are applied to open Android and browser pages within a few seconds. `mobile.css` and `mobile.js` own the phone UI, interactions, and orchestration of existing APIs; they cannot create computer files, run commands, or access computer hardware by themselves. Browsers fall back to available Web APIs, while the Android app exposes a narrow native bridge for file picking, camera capture, sharing, clipboard, notifications, and speech.
+Changes are applied to open Android and browser pages within a few seconds. `mobile.css`/`mobile.js` own the phone-side styling and interactions; browsers fall back to available Web APIs, while the Android app adds a narrow native bridge for file picking, camera capture, sharing, clipboard, and notifications.
 
 ### Add computer-side capabilities
 
-For a new capability on the computer, create an extension under `$DSH_HOME/mobile-access/extensions/<id>/`:
-
-```text
-extension.json   # metadata
-host.mjs         # trusted local Node.js code
-mobile.js        # optional phone-side script
-mobile.css       # optional phone-side styles
-assets/          # optional static files
-```
-
-Generate a complete starter extension with:
+When the phone needs a new computer capability — reading files, running commands, touching hardware — generate a starter extension:
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-tools --name "Media tools"
 ```
 
-`host.mjs` can register schema-validated actions, ordinary HTTP/streaming/SSE routes, and teardown effects; `mobile.js` calls them through `api.host.invoke()` or `api.host.fetch()`. Extension source files can be changed only on the computer by the user or DSH; the phone has no endpoint that writes them. Closing Mobile Access, revoking a device, refreshing an extension, or stopping the gateway aborts its active requests.
+Extensions live under `$DSH_HOME/mobile-access/extensions/<id>/`: `host.mjs` runs as trusted local Node.js code on the computer and registers actions/routes; `mobile.js`/`mobile.css` load on the phone. Each extension hot-swaps as one generation and falls back to the previous one on failure. The phone has no endpoint that writes extension files. A published DSH plugin can also call `ctx.mobileAccess.registerExtension(definition)`.
 
-A published DSH plugin can also call `ctx.mobileAccess.registerExtension(definition)` from a Cordis effect. It shares the same authentication, routes, and client SDK as local directory extensions without modifying DSH core.
-
-Extension IDs are unique. Host code, scripts, and CSS switch as one generation; if a new generation fails, the previous one remains active. An empty `extensions/` directory is inert. Paired devices have every registered extension permission, so install and edit only trusted `host.mjs` code.
-
-Normal DSH community plugins continue to load through standard `dsh.client` and Slot contributions: conversation nodes, tool cards, settings sections, sidebar items, header actions, composer docks, and overlays remain available in the same session. Plugins that depend on hover, fixed desktop widths, system file pickers, or private DOM selectors need additional mobile adaptation.
+> ⚠️ `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
 
 ## How it works
 
@@ -137,7 +109,7 @@ flowchart LR
   Gateway -->|"loopback proxy"| DSH["Stock DSH Web and Host"]
 ```
 
-The three layers are: the Host face for discovery, pairing, HTTPS, loopback proxying, and extension registration; the Client face for the dedicated mobile root, multi-extension SDK, and hot updates; and the Android app for an exact-origin native bridge. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
+Three layers: the Host face for discovery, pairing, HTTPS, loopback proxying, and extension registration; the Client face for the dedicated mobile layout and extension SDK; and the Android app for a narrow native bridge. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
 
 ## Security
 
@@ -153,7 +125,7 @@ See [SECURITY.md](SECURITY.md).
 | --- | --- |
 | `0.1.0-alpha.32` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
 
-At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
+At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 
 ## Uninstall
 

@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
-  <a href="#app-与手机浏览器">App 与浏览器</a> ·
+  <a href="#能做什么">能做什么</a> ·
   <a href="#在-dsh-对话中自定义">自定义</a> ·
   <a href="README.en.md">English</a>
 </p>
@@ -24,15 +24,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
-DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DeepSeek Harness 源码。
+DSH Mobile 是一个 DeepSeek Harness 插件，让手机成为电脑 DSH 的第二块屏幕：Android App 或手机浏览器通过受保护的局域网安全连接，会话、工具、消息、运行状态实时同步。不修改 DSH 源码，也不需要公网穿透。
 
-## 能做什么
-
-- 在手机上继续电脑端的 DSH 工作：会话、工具、设置和运行状态实时同步。
-- 在 DSH 对话中直接修改手机端布局、交互和功能，打开的手机页面通常会在几秒内刷新——用对话定制自己的移动端。
-- 专属移动布局：会话抽屉、工具详情、设置和输入栏都按触屏重新组织。
-- 自动发现局域网内的 DSH；切换 Wi-Fi、热点或 IP 后通常自动恢复，无需重新配对。
-- 扫码、配对链接或密钥均可配对。
+最特别的，是它让**用对话定制移动端**成为现实：在 DSH 对话里提出修改，打开的手机页面几秒内就会刷新——把 DeepSeek Harness 的对话能力，用在自己的手机界面上。
 
 ## 快速开始
 
@@ -53,41 +47,32 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
-`setup` 会自动选择并记住当前局域网。切换 Wi-Fi、热点或 IP 后通常会自动恢复；仅在自动选择失败时使用 `--address 192.168.x.x`。
-
-启动后，在 DeepSeek Harness 左下角打开“移动访问”并确认已开启，然后：
+启动后，在 DeepSeek Harness 左下角打开“移动访问”，然后：
 
 1. 点击“生成并复制密钥”或“复制配对链接”，面板会显示配对二维码。
-2. Android App 点击“扫码配对”，把手机对准电脑屏幕上的二维码即可完成配对；也可以点击“扫描”选择电脑后粘贴密钥或配对链接。
+2. Android App 点击“扫码配对”，把手机对准电脑屏幕上的二维码即可；也可以点击“扫描”选择电脑后粘贴密钥或配对链接。
 3. 配对完成后会建立持久设备信任，以后打开 App 无需重复输入。
+
+`setup` 会自动选择并记住当前局域网，切换 Wi-Fi、热点或 IP 后通常自动恢复；仅在自动选择失败时使用 `--address 192.168.x.x`。设置、证书、设备和自定义文件保存在 `$DSH_HOME/mobile-access/`。
+
+## 能做什么
+
+- **在手机上继续电脑端的工作**：同一份会话、工作区、消息和工具，实时同步。
+- **用对话定制手机端**：直接在 DSH 对话里改手机页面的布局、交互和功能，几秒内刷新。
+- **专属触屏布局**：会话抽屉、工具详情、设置和输入栏都按手机重新组织。
+- **自动发现、无需重新配对**：切换 Wi-Fi、热点或 IP 后通常自动恢复。
+- **三种配对方式任选**：扫码、配对链接、密钥。
 
 配对设备被视为完全信任，可以操作电脑上的 DSH；建议只在可信的家庭、办公局域网或可信 VPN 中使用。
 
-插件不会修改 DeepSeek Harness 源码。设置、证书、设备和自定义文件保存在 `$DSH_HOME/mobile-access/`。
-
 ## App 与手机浏览器
-
 
 | 方式        | 适合场景         | 说明                                                                    |
 | ------------- | ------------------ | ------------------------------------------------------------------------- |
 | Android App | 日常使用         | 自动发现；App 内保存私有证书信任，无需在浏览器手动信任证书              |
 | 手机浏览器  | 临时或跨平台访问 | 打开“移动访问”卡片显示的 HTTPS 地址；首次连接需在浏览器手动信任该证书 |
 
-Android 使用 mDNS/NSD、UDP 公告与主动查询、HTTPS 探测等方式发现 DeepSeek Harness。发现广播设备名、地址、端口、协议版本和稳定 `instanceId`，不会广播密钥或令牌。IP 变化后不需要重新配对。
-
-手机浏览器首次连接：在电脑端开启配对后，点击“复制配对链接”并把链接发到手机浏览器打开，配对码会自动填入；也可以打开 HTTPS 地址中的 `/mobile-access/pair`，手动输入密钥最后一段的 43 位配对码。配对完成后，浏览器会保存可撤销的设备凭据。
-
-## 移动端界面
-
-手机端使用独立的移动布局外壳，不再依赖桌面三栏 DOM；原生的对话、工具、设置等组件保留触屏适配：
-
-- 左上角打开工作区与会话抽屉。
-- 对话、轨迹、工具详情和 Session log 保持原有能力。
-- 设置页使用顶部分类和单列内容。
-- 输入栏保留命令、权限、模型、上下文、图片和发送控件。
-- “添加工作区”在手机上展示电脑目录，不会在电脑上弹系统选择器。
-
-Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏览器访问的也是同一页面。需要排查兼容性时，可在浏览器地址后追加 `?frontend=stock`，临时回到旧的桌面页面适配模式。
+Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏览器访问的是同一页面。需要排查兼容性时，可在浏览器地址后追加 `?frontend=stock`，临时回到旧的桌面页面适配模式。
 
 ## 在 DSH 对话中自定义
 
@@ -106,33 +91,19 @@ $DSH_HOME/mobile-access/mobile.js
 会话状态面板和长按语音入口。只影响窄屏，不修改 DSH 源码。
 ```
 
-保存后，已打开的 App 和浏览器通常会在几秒内应用变化。`mobile.css` 和 `mobile.js` 负责手机页面的样式、交互和已有 API 编排；它们不能单独创建电脑文件、运行命令或访问电脑硬件。浏览器按 Web API 能力降级，Android App 通过受限的原生 Bridge 提供文件选择、拍照、分享、剪贴板、通知和语音等能力。
+保存后，已打开的 App 和浏览器通常会在几秒内应用变化。`mobile.css`/`mobile.js` 负责手机端样式和交互；浏览器按 Web API 能力降级，Android App 额外提供文件选择、拍照、分享、剪贴板和通知等原生能力。
 
 ### 扩展电脑端能力
 
-需要手机调用新的电脑能力时，在 `$DSH_HOME/mobile-access/extensions/<id>/` 创建扩展：
-
-```text
-extension.json   # 元数据
-host.mjs         # 电脑端 Node.js 代码（可信本地代码）
-mobile.js        # 手机端脚本，可选
-mobile.css       # 手机端样式，可选
-assets/          # 静态资源，可选
-```
-
-可用命令生成模板：
+需要手机调用新的电脑能力（读文件、跑命令、访问硬件）时，用命令生成扩展模板：
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-tools --name "媒体工具"
 ```
 
-`host.mjs` 可以注册经过 Schema 校验的 Action、普通 HTTP/流式/SSE Route 和清理 Effect；`mobile.js` 通过 `api.host.invoke()` 或 `api.host.fetch()` 调用它们。扩展文件只能在电脑端由用户或 DSH 修改，手机没有写入这些文件的接口。Mobile Access 关闭、设备撤销、扩展刷新或网关关闭时，扩展请求会被中止。
+扩展放在 `$DSH_HOME/mobile-access/extensions/<id>/`：`host.mjs` 在电脑端以可信本地代码运行并注册 Action/Route，`mobile.js`/`mobile.css` 在手机端加载，同一扩展热切换、失败自动回退上一版。手机没有写入扩展文件的接口。发布型 DSH 插件也可调用 `ctx.mobileAccess.registerExtension(definition)` 注册扩展。
 
-发布型 DSH 插件也可以在 Cordis effect 中调用 `ctx.mobileAccess.registerExtension(definition)`，与本地目录扩展共用认证、路由和客户端 SDK，不需要修改 DSH 核心。
-
-每个扩展的 `id` 必须唯一，Host、脚本和 CSS 会作为同一版本热切换；新版本加载失败时保留上一版本。空的 `extensions/` 目录不产生副作用。配对设备拥有所有已注册扩展的权限，因此只应安装和编辑自己信任的 `host.mjs`。
-
-普通 DSH 社区插件仍按标准 `dsh.client` 和 Slot 贡献加载：对话节点、工具卡、设置区、侧栏项、Header Action、Composer Dock 和 Overlay 会随同一会话同步。只有依赖鼠标悬停、固定桌面宽度、系统文件选择器或私有 DOM 的插件需要额外移动适配。
+> ⚠️ `host.mjs` 拥有桌面用户的 Node.js 权限且不沙箱，请只安装和编辑自己信任的扩展。
 
 ## 工作原理
 
@@ -143,7 +114,7 @@ flowchart LR
   DSH -->|"同一工作区、会话和事件流"| Phone
 ```
 
-插件包含三层：Host face 提供发现、配对、HTTPS、回环代理和扩展注册表；Client face 提供独立的移动根布局、多扩展 SDK 和热更新；Android App 提供精确 Origin 限定的原生 Bridge。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载完全通过插件机制完成。
+插件包含三层：Host face 负责发现、配对、HTTPS、回环代理和扩展注册表；Client face 提供独立的移动布局与扩展 SDK；Android App 提供受限的原生 Bridge。DeepSeek Harness 的源码和 3080 桌面页面都不会被修改，安装和卸载完全通过插件机制完成。
 
 ## 安全
 
@@ -155,16 +126,13 @@ flowchart LR
 
 ## 兼容性
 
-
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |
 | `0.1.0-alpha.32` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7` |
 
-插件会在启动时检查 DSH Host 版本和移动布局所需的前端依赖；遇到未经验证的版本会直接给出错误，不会带着不兼容页面继续启动。CI 也会持续检查 DSH 主分支的布局插槽和移动端语义标记。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
+插件启动时会检查 DSH Host 版本和移动布局所需的前端依赖，遇到未经验证的版本会直接报错而不是带病启动；CI 也会持续跟踪 DSH 主分支的布局契约。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 
 ## 卸载
-
-保留设备和自定义数据：
 
 ```powershell
 dsh plugin --profile web remove dsh-mobile
