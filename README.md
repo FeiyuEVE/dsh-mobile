@@ -73,6 +73,12 @@ pnpm dsh --profile web
 /mobile 把手机端做成老式终端的样子，让消息像终端输出一样逐行滚动
 ```
 
+也可以让手机端调用电脑端的能力，比如实时读取电脑状态：
+
+```text
+/mobile 为手机端添加赛博朋克风格的电脑监控面板，实时显示电脑的 CPU、内存和磁盘占用
+```
+
 `/mobile` 把需求交给 DSH 对话中的 agent，由它直接修改本机 `$DSH_HOME/mobile-access/` 下的文件，保存后手机端自动生效。改动分两类：界面和交互在 `mobile.css`/`mobile.js`；需要电脑能力时用 `extensions/` 下的扩展，其 `host.mjs` 以本机用户权限在电脑上运行。不修改 DeepSeek Harness 源码。
 
 示例的实际效果：
@@ -80,6 +86,11 @@ pnpm dsh --profile web
 <p align="center">
   <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="30%" alt="/mobile 定制为老式终端界面">
   <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="30%" alt="/mobile 定制为老式终端界面">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-1.png" width="30%" alt="/mobile 定制为赛博朋克监控面板">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-2.png" width="30%" alt="/mobile 定制为赛博朋克监控面板">
 </p>
 
 ## App 与手机浏览器

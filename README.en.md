@@ -68,15 +68,26 @@ Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone cl
 /mobile turn the phone UI into an old CRT terminal, with messages scrolling like terminal output
 ```
 
+It can also drive computer capabilities the phone can use, like reading the machine's live state:
+
+```text
+/mobile give the phone a cyberpunk-style computer monitor panel that shows live CPU, memory, and disk usage
+```
+
 Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client applies them automatically. UI changes live in `mobile.css`/`mobile.js`. Computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
 > When using computer-side capabilities, use only content you trust.
 
-The example above, applied:
+The examples above, applied:
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
   <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-1.png" width="30%" alt="Mobile UI customized into a cyberpunk computer monitor">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-2.png" width="30%" alt="Mobile UI customized into a cyberpunk computer monitor">
 </p>
 
 ## App or mobile browser
