@@ -487,10 +487,10 @@ class MainActivity : Activity() {
             backgroundTintList = null
             background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
             setTextColor(getColor(R.color.app_foreground))
-            setOnClickListener {
-                scanCanceled.set(true)
-                cancelButton.isEnabled = false
-            }
+        }
+        cancelButton.setOnClickListener {
+            scanCanceled.set(true)
+            cancelButton.isEnabled = false
         }
         results.addView(cancelButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
