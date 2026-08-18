@@ -19,17 +19,15 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
-DSH Mobile adapts DeepSeek Harness for mobile interfaces and interactions with a dedicated layout that reuses its native conversation, Workspace, settings, and plugin components. An authenticated HTTPS LAN gateway keeps desktop, Android, and mobile browsers on the same Workspaces, sessions, messages, tools, settings, and event streams.
-
-It is a plugin that adapts DeepSeek Harness interfaces and interactions for mobile devices.
+DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified.
 
 ## What it does
 
-- Continue using DSH from a phone with the same sessions, Workspaces, messages, tools, and settings as the desktop.
-- Provide a dedicated touch layout for the sidebar, composer, tool details, settings, and Workspace picker.
-- Connect through Android or a mobile browser using one protected LAN gateway, with discovery and IP-change recovery.
-- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open pages refresh in about one second.
-- Go beyond styling: add shortcuts, status panels, voice, camera, scanning, or other same-origin web features.
+- Continue DSH work from a phone: sessions, tools, settings, and live state stay in sync.
+- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open phone pages refresh in about one second — customize your mobile client by talking to DSH, not by writing code.
+- A dedicated touch layout: session drawer, tool details, settings, and composer are reorganized for touch.
+- Auto-discovery on the LAN; Wi-Fi, hotspot, or IP changes normally recover without re-pairing.
+- Pair by scanning a QR code, pasting a pairing link, or entering a key — no 43-character key to type.
 
 ## Quick start
 
@@ -52,36 +50,55 @@ pnpm dsh --profile web
 
 `setup` automatically selects and remembers the current LAN. Wi-Fi, hotspot, and IP changes normally recover automatically; use `--address 192.168.x.x` only when automatic selection fails.
 
-Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, and select **Create and copy key** or **Copy pairing link** to show a pairing QR code. In the Android app, tap **Scan QR code** and point the camera at the screen, or tap **Scan**, select the computer, and paste the key or pairing link — no 43-character key to type. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
+After starting DSH, open **Mobile Access** in the lower-left sidebar, enable it, then:
 
-## Connection options
+1. Select **Create and copy key** or **Copy pairing link**; the panel shows a pairing QR code.
+2. In the Android app, tap **Scan QR code** and point the camera at the screen — or tap **Scan**, select the computer, and paste the key or pairing link.
+3. Pairing establishes persistent device trust; later launches do not ask again.
+
+A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
+
+The plugin does not modify the DeepSeek Harness source. Settings, certificates, devices, and customization files live under `$DSH_HOME/mobile-access/`.
+
+## App or mobile browser
 
 | Client | Best for | Notes |
 | --- | --- | --- |
-| Android app | Everyday use | Automatic discovery, no browser chrome, private certificate pinning |
-| Mobile browser | Temporary or cross-platform access | Open the HTTPS origin shown by Mobile Access |
+| Android app | Everyday use | Auto-discovery; private certificate pinning inside the app, no manual browser trust step |
+| Mobile browser | Temporary or cross-platform | Open the HTTPS origin shown by Mobile Access; trust the certificate manually on first visit |
 
-Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It publishes only the device name, address, port, protocol version, and stable `instanceId`. Keys and device tokens are never discoverable. IP changes do not require another Android pairing.
+Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It publishes only the device name, address, port, protocol version, and stable `instanceId` — never keys or device tokens. IP changes do not require another pairing.
 
-For a browser's first connection, open pairing on the computer, then select **Copy pairing link** and open that link on the phone browser — the pairing code is filled in automatically. Alternatively, visit `/mobile-access/pair` on the shown HTTPS origin and manually enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
+For a browser's first connection, open pairing on the computer, then select **Copy pairing link** and open that link on the phone — the pairing code is prefilled. Alternatively, visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
 
 ## Mobile UI
 
-Phones use a dedicated layout shell, so the main layout no longer depends on the desktop three-column DOM. Native feature components retain a small mobile adaptation layer. You can freely redesign the page structure and extend its interactions through **Customize from DeepSeek Harness**. By default, the session sidebar becomes a drawer, details open as an overlay, settings use a single-column layout, and the native composer is adapted for touch. Adding a Workspace browses computer folders inside the phone page. Images can come from the phone or the computer.
+Phones use a dedicated layout shell that no longer depends on the desktop three-column DOM, while native components keep a small touch-adaptation layer:
 
-The Android app is a thin Kotlin WebView shell and contains no frontend copy.
+- A workspace-and-session drawer opens from the top-left.
+- Conversations, traces, tool details, and Session logs keep their full capabilities.
+- Settings use top-level tabs and a single column.
+- The composer keeps command, permission, model, context, image, and send controls.
+- **Add Workspace** browses computer folders inside the phone page instead of opening a system picker on the computer.
 
-For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
+The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
 ## Customize from DeepSeek Harness
 
-Customization is intentionally open-ended: use your own ideas to arrange the mobile layout, interactions, and features instead of staying within the default style.
-
-Ask DeepSeek Harness to edit:
+Default files:
 
 ```text
 $DSH_HOME/mobile-access/mobile.css
 $DSH_HOME/mobile-access/mobile.js
+```
+
+Ask DeepSeek Harness to edit them, for example:
+
+```text
+Edit $DSH_HOME/mobile-access/mobile.css and mobile.js to turn the mobile
+client into a one-handed development console: add a bottom shortcut bar,
+a session status panel, and a press-and-hold voice entry. Narrow screens only;
+do not modify the DSH source.
 ```
 
 Changes are applied to open Android and browser pages in about one second. Customization is not limited to colors: `mobile.js` can add navigation, shortcuts, dashboards, camera, voice, scanning, and complete interactions with same-origin DeepSeek Harness APIs.
@@ -96,6 +113,14 @@ flowchart LR
 
 The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face replaces only the phone layout entry while reusing native feature plugins. Neither the DeepSeek Harness source nor its desktop page on port 3080 is modified.
 
+## Security
+
+- Use the plugin only on a trusted LAN or trusted VPN; never expose it to the public Internet.
+- A paired device is a fully trusted DeepSeek Harness operator and can run tools on the computer; revoke lost devices from the computer.
+- The LAN gateway listens only while Mobile Access is enabled; with it off, DSH keeps running normally on the computer.
+
+See [SECURITY.md](SECURITY.md).
+
 ## Compatibility
 
 | DSH Mobile | Verified DeepSeek Harness releases |
@@ -103,10 +128,6 @@ The Host face owns discovery, pairing, HTTPS, and the proxy. The Client face rep
 | `0.1.0-alpha.28` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
-
-## Security
-
-Use the plugin only on a trusted LAN or trusted VPN. Never expose it directly to the public Internet. A paired device is a fully trusted DeepSeek Harness operator. Revoke lost devices from the computer. See [SECURITY.md](SECURITY.md).
 
 ## Uninstall
 
