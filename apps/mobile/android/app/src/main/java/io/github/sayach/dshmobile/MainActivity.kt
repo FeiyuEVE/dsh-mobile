@@ -760,7 +760,10 @@ class MainActivity : Activity() {
             bar.alpha = if (toolbarHidden) 0f else 1f
             loading.translationY = bar.translationY
             loading.alpha = bar.alpha
-            WindowInsets.CONSUMED
+            // Pass the insets through instead of consuming them: the full-screen
+            // WebView computes env(safe-area-inset-top/bottom) from them, which
+            // keeps the page's own header clear of the status bar.
+            insets
         }
         root.requestApplyInsets()
 
