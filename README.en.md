@@ -19,9 +19,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
-DSH Mobile is a DeepSeek Harness plugin that turns your phone into a second screen for the DSH on your computer: the Android app or a mobile browser connects over a protected LAN, keeping sessions, tools, messages, and live state in sync. No DeepSeek Harness source changes and no public-Internet tunneling.
+DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified and no public-Internet tunneling is needed.
 
-What makes it different is that you can **customize the phone UI by talking to DSH**: ask in a conversation, and the open phone page refreshes within a few seconds — no coding required.
+It can also edit the phone page directly from a DeepSeek Harness conversation: change the mobile layout, interactions, or features, and open pages refresh within a few seconds.
 
 ## Quick start
 

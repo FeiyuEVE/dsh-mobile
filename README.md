@@ -24,9 +24,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
-DSH Mobile 是一个 DeepSeek Harness 插件，让手机成为电脑 DSH 的第二块屏幕：Android App 或手机浏览器通过受保护的局域网安全连接，会话、工具、消息、运行状态实时同步。不修改 DSH 源码，也不需要公网穿透。
+DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DSH 源码，也不需要公网穿透。
 
-最特别的，是它让**用对话定制移动端**成为现实：在 DSH 对话里提出修改，打开的手机页面几秒内就会刷新——把 DeepSeek Harness 的对话能力，用在自己的手机界面上。
+它也能直接在 DSH 对话中修改手机端页面：改布局、交互或功能，保存后几秒内刷新。
 
 ## 快速开始
 
