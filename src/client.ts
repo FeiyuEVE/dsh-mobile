@@ -59,7 +59,12 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const toggle = element('button', 'dsh-mobile-control__secondary'); toggle.type = 'button'
   const pair = element('button', 'dsh-mobile-control__primary'); pair.type = 'button'; pair.textContent = '生成并复制密钥'
   const linkPair = element('button', 'dsh-mobile-control__secondary'); linkPair.type = 'button'; linkPair.textContent = '复制配对链接'
-  header.append(title, close); actions.append(toggle, pair, linkPair); panel.append(header, access, qrBox, status, actions); root.append(panel); document.body.append(root)
+  const manageRow = element('div', 'dsh-mobile-control__manage-row')
+  const manageDevices = element('button', 'dsh-mobile-control__manage'); manageDevices.type = 'button'; manageDevices.textContent = '管理配对设备'
+  const resetAll = element('button', 'dsh-mobile-control__manage'); resetAll.type = 'button'; resetAll.textContent = '清除所有设备'
+  manageRow.append(manageDevices, resetAll)
+  const devicePanel = element('div', 'dsh-mobile-control__devices'); devicePanel.hidden = true
+  header.append(title, close); actions.append(toggle, pair, linkPair); panel.append(header, access, qrBox, status, actions, manageRow, devicePanel); root.append(panel); document.body.append(root)
   let running = false
   let origin = ''
   const setOpen = (open: boolean): void => {
@@ -75,9 +80,12 @@ function installControl(): { remove: () => void; toggle: () => void } {
     accessLink.title = origin
     status.classList.toggle('is-running', running)
     status.textContent = running ? '移动访问已开启。' : '已关闭。DSH 仍只在本机可用。'
+    if (!running) qrBox.hidden = true
     toggle.textContent = running ? '关闭移动访问' : '开启移动访问'
     pair.disabled = !running
     linkPair.disabled = !running
+    manageDevices.disabled = !running
+    resetAll.disabled = !running
   }
   const showQr = (svg: string): void => {
     qrBox.replaceChildren()
@@ -112,6 +120,43 @@ function installControl(): { remove: () => void; toggle: () => void } {
     })
   }
   toggle.addEventListener('click', () => { toggle.disabled = true; void requestJson('/api/mobile-access/control', { method: 'POST', body: JSON.stringify({ running: !running }) }).then(render, error => { status.textContent = String(error) }).finally(() => { toggle.disabled = false }) })
+  const formatTime = (ms: unknown): string => typeof ms === 'number' ? new Date(ms).toLocaleString() : ''
+  const renderDevices = (data: Record<string, unknown>): void => {
+    const devices = Array.isArray(data.devices) ? data.devices as Record<string, unknown>[] : []
+    devicePanel.replaceChildren()
+    if (devices.length === 0) {
+      const empty = element('p', 'dsh-mobile-control__device-empty'); empty.textContent = '暂无配对设备。'
+      devicePanel.append(empty)
+      return
+    }
+    for (const device of devices) {
+      const row = element('div', 'dsh-mobile-control__device')
+      const label = element('span', 'dsh-mobile-control__device-label')
+      label.textContent = typeof device.label === 'string' ? device.label : '设备'
+      const meta = element('span', 'dsh-mobile-control__device-meta'); meta.textContent = `到期 ${formatTime(device.expiresAt)}`
+      const revoke = element('button', 'dsh-mobile-control__device-revoke'); revoke.type = 'button'; revoke.textContent = '撤销'
+      const id = typeof device.id === 'string' ? device.id : ''
+      revoke.addEventListener('click', () => {
+        void requestJson('/api/mobile-access/devices/revoke', { method: 'POST', body: JSON.stringify({ deviceId: id }) })
+          .then(loadDevices, error => { status.textContent = String(error) })
+      })
+      row.append(label, meta, revoke)
+      devicePanel.append(row)
+    }
+  }
+  const loadDevices = (): void => {
+    void requestJson('/api/mobile-access/devices').then(renderDevices, error => { status.textContent = String(error) })
+  }
+  manageDevices.addEventListener('click', () => {
+    const show = devicePanel.hidden
+    devicePanel.hidden = !show
+    if (show) loadDevices()
+  })
+  resetAll.addEventListener('click', () => {
+    if (!window.confirm('确定要移除所有配对设备吗？此操作会立即终止已连接设备。')) return
+    void requestJson('/api/mobile-access/devices/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) })
+      .then(loadDevices, error => { status.textContent = String(error) })
+  })
   pair.addEventListener('click', () => { pair.disabled = true; openPairing('key') })
   linkPair.addEventListener('click', () => { linkPair.disabled = true; openPairing('link') })
   close.addEventListener('click', () => { setOpen(false) })
@@ -158,6 +203,7 @@ const CONTROL_STYLES = `
 .dsh-mobile-control__status{margin:0 0 14px;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#606873)}.dsh-mobile-control__status::before{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%;background:#98a1ad;content:""}.dsh-mobile-control__status.is-running::before{background:#16a36a}.dsh-mobile-control__status.is-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;word-break:break-all}
 .dsh-mobile-control__actions{display:flex;flex-wrap:nowrap;gap:6px}.dsh-mobile-control__actions button{flex:1 1 0;min-width:0;min-height:40px;padding:8px 4px;border-radius:10px;font:12px/1.2 system-ui;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsh-mobile-control__secondary{border:1px solid var(--dsw-alias-border-normal,#cfd5dd);background:transparent;color:inherit}.dsh-mobile-control__primary{border:1px solid #2563eb;background:#2563eb;color:#fff}.dsh-mobile-control__actions button:disabled{cursor:not-allowed;opacity:.45}
 .dsh-mobile-control__trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px;padding:6px 2px 6px 10px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#16181d);font:14px/22px system-ui;cursor:pointer}.dsh-mobile-control__trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.dsh-mobile-control__trigger.is-rail{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%}.dsh-mobile-control__trigger-icon{position:relative;box-sizing:border-box;flex:none;width:14px;height:19px;border:1.7px solid currentColor;border-radius:3px}.dsh-mobile-control__trigger-icon::after{position:absolute;right:4px;bottom:2px;width:4px;height:1.5px;border-radius:2px;background:currentColor;content:""}.dsh-mobile-control__trigger-label{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dsh-mobile-control__manage-row{display:flex;justify-content:space-between;gap:8px;margin-top:10px}.dsh-mobile-control__manage{flex:1 1 0;min-width:0;min-height:34px;padding:6px 8px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:transparent;color:inherit;font:12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__devices{margin-top:10px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:10px;padding:8px;max-height:220px;overflow-y:auto}.dsh-mobile-control__device-empty{color:var(--dsw-alias-label-secondary,#606873);font-size:12px;margin:0}.dsh-mobile-control__device{display:flex;align-items:center;gap:8px;padding:6px 2px}.dsh-mobile-control__device + .dsh-mobile-control__device{border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}.dsh-mobile-control__device-label{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.dsh-mobile-control__device-meta{flex:none;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;white-space:nowrap}.dsh-mobile-control__device-revoke{flex:none;min-height:28px;padding:4px 8px;border:1px solid #dc2626;border-radius:8px;background:transparent;color:#dc2626;font:12px/1.2 system-ui;cursor:pointer}
 `
 
 /** Mount the desktop control or mobile feature enhancements. */
