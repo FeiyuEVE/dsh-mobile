@@ -176,47 +176,21 @@ class MainActivity : Activity() {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scanQr = Button(this).apply {
-            setText(R.string.scan_action)
-            isAllCaps = false
-            textSize = 17f
-            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-            minHeight = dp(56)
-            backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_accent), 16)
-            setTextColor(getColor(R.color.app_on_accent))
-            setOnClickListener { openScanner() }
-        }
-        val scan = Button(this).apply {
-            setText(R.string.scan_lan)
-            isAllCaps = false
-            textSize = 17f
-            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-            minHeight = dp(56)
-            backgroundTintList = null
-            background = roundedRipple(getColor(R.color.app_accent), 16)
-            setTextColor(getColor(R.color.app_on_accent))
-            setOnClickListener { scanForHarnesses(status, this, results) }
-        }
+        val scanQr = primaryButton(R.string.scan_action, 56) { openScanner() }
+        val scan = primaryButton(R.string.scan_lan, 56) { scanForHarnesses(status, this, results) }
         val manual = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val manualField = EditText(this).apply {
-            hint = getString(R.string.gateway_hint)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            imeOptions = EditorInfo.IME_ACTION_GO
-            isSingleLine = true
-            minHeight = dp(52)
-            contentDescription = getString(R.string.gateway_label)
-        }
-        val manualConnect = Button(this).apply {
-            setText(R.string.connect)
-            isAllCaps = false
-            minHeight = dp(52)
-        }
+        val manualField = field(
+            R.string.gateway_hint,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+            EditorInfo.IME_ACTION_GO,
+            52,
+            R.string.gateway_label,
+        )
         val manualAction = { connectManual(manualField.text.toString(), status) }
-        manualConnect.setOnClickListener { manualAction() }
+        val manualConnect = secondaryButton(R.string.connect, 52) { manualAction() }
         manualField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) { manualAction(); true } else false
         }
@@ -243,7 +217,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(32), dp(32), dp(32), dp(32))
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundResource(R.drawable.setup_background)
         }
         content.addView(ProgressBar(this))
         content.addView(spacer(16))
@@ -273,13 +247,13 @@ class MainActivity : Activity() {
         card.addView(spacer(24))
         card.addView(textView(R.string.pairing_key_label, 14f, Typeface.BOLD))
         card.addView(spacer(8))
-        val pairing = EditText(this).apply {
-            hint = getString(R.string.pairing_key_hint)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            isSingleLine = true
-            minHeight = dp(56)
-            contentDescription = getString(R.string.pairing_key_label)
+        val pairing = field(
+            R.string.pairing_key_hint,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+            EditorInfo.IME_ACTION_DONE,
+            56,
+            R.string.pairing_key_label,
+        ).apply {
             if (prefilledInput.isNotEmpty()) setText(prefilledInput)
         }
         card.addView(pairing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -290,14 +264,7 @@ class MainActivity : Activity() {
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        val connect = Button(this).apply {
-            setText(R.string.connect)
-            isAllCaps = false
-            minHeight = dp(52)
-            backgroundTintList = ColorStateList.valueOf(getColor(R.color.app_accent))
-            setTextColor(getColor(R.color.app_on_accent))
-            setOnClickListener { connect(harness, pairing, status, this) }
-        }
+        val connect = primaryButton(R.string.connect, 52) { connect(harness, pairing, status, this) }
         pairing.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 connect(harness, pairing, status, connect)
@@ -310,12 +277,7 @@ class MainActivity : Activity() {
         card.addView(spacer(10))
         card.addView(status)
         card.addView(spacer(12))
-        card.addView(Button(this).apply {
-            setText(R.string.back_to_scan)
-            isAllCaps = false
-            minHeight = dp(48)
-            setOnClickListener { showSetup() }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(secondaryButton(R.string.back_to_scan, 48) { showSetup() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         if (autoConnect && prefilledInput.isNotEmpty()) connect(harness, pairing, status, connect)
     }
 
@@ -674,7 +636,7 @@ class MainActivity : Activity() {
             setBackgroundColor(getColor(R.color.app_surface))
             elevation = dp(2).toFloat()
         }
-        val title = textView(R.string.toolbar_title, 14f, Typeface.BOLD).apply {
+        val title = textView(R.string.toolbar_title, 16f, Typeface.BOLD).apply {
             gravity = Gravity.CENTER_VERTICAL
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -682,9 +644,9 @@ class MainActivity : Activity() {
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         val refresh = toolbarIconButton(R.drawable.ic_refresh, R.string.refresh)
         val more = toolbarIconButton(R.drawable.ic_more_vertical, R.string.more)
-        bar.addView(refresh, LinearLayout.LayoutParams(dp(30), dp(30)))
-        bar.addView(more, LinearLayout.LayoutParams(dp(30), dp(30)))
-        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+        bar.addView(refresh, LinearLayout.LayoutParams(dp(40), dp(40)))
+        bar.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)))
+        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
 
         val loading = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
@@ -1013,10 +975,54 @@ class MainActivity : Activity() {
         contentDescription = getString(labelResource)
         setColorFilter(getColor(R.color.app_foreground))
         scaleType = ImageView.ScaleType.CENTER
-        setPadding(dp(4), dp(4), dp(4), dp(4))
+        setPadding(dp(8), dp(8), dp(8), dp(8))
         val selectable = TypedValue()
         theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, selectable, true)
         setBackgroundResource(selectable.resourceId)
+    }
+
+    /** Primary action button: accent fill, consistent tap target. */
+    private fun primaryButton(textResource: Int, minHeightDp: Int, onClick: Button.() -> Unit): Button = Button(this).apply {
+        setText(textResource)
+        isAllCaps = false
+        textSize = 17f
+        setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+        minHeight = dp(minHeightDp)
+        backgroundTintList = null
+        background = roundedRipple(getColor(R.color.app_accent), 16)
+        setTextColor(getColor(R.color.app_on_accent))
+        setOnClickListener { onClick() }
+    }
+
+    /** Secondary action button: tinted fill, quieter than the primary one. */
+    private fun secondaryButton(textResource: Int, minHeightDp: Int, onClick: Button.() -> Unit): Button = Button(this).apply {
+        setText(textResource)
+        isAllCaps = false
+        textSize = 15f
+        minHeight = dp(minHeightDp)
+        setTextColor(getColor(R.color.app_foreground))
+        backgroundTintList = null
+        background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
+        setOnClickListener { onClick() }
+    }
+
+    /** Filled text field: tinted rounded background with comfortable padding. */
+    private fun field(
+        hintResource: Int,
+        inputType: Int,
+        imeOptions: Int,
+        minHeightDp: Int,
+        contentDescriptionResource: Int,
+    ): EditText = EditText(this).apply {
+        hint = getString(hintResource)
+        this.inputType = inputType
+        this.imeOptions = imeOptions
+        isSingleLine = true
+        minHeight = dp(minHeightDp)
+        textSize = 16f
+        setPadding(dp(16), 0, dp(16), 0)
+        background = roundedSurface(getColor(R.color.app_surface_tinted), 12)
+        this.contentDescription = getString(contentDescriptionResource)
     }
 
     private fun roundedSurface(color: Int, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
