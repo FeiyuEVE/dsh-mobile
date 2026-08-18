@@ -75,13 +75,13 @@ The mobile client can be extended on two layers.
 
 **Interface and interactions**: edit `$DSH_HOME/mobile-access/mobile.css` and `mobile.js` directly from a DSH conversation; open pages refresh within a few seconds. For example, turn the phone UI into an old CRT terminal, with messages scrolling like terminal output.
 
-**Computer-side capabilities**: when the phone needs files, programs, or hardware on the computer, generate an extension — for example, a remote control that lets the phone play music on the computer:
+**Computer-side capabilities**: when the phone needs files, programs, or hardware on the computer, an extension handles that layer — `host.mjs` runs on the computer while `mobile.js`/`mobile.css` load on the phone. Ask for this in a DSH conversation too ("give the phone a remote control that plays music on the computer"); to start manually, generate a template:
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-remote --name "Media remote"
 ```
 
-Extensions live under `$DSH_HOME/mobile-access/extensions/<id>/`: `host.mjs` runs as trusted local Node.js code on the computer and registers actions/routes, while `mobile.js`/`mobile.css` load on the phone. Each extension hot-swaps as one generation and falls back to the previous one on failure. The phone has no endpoint that writes extension files.
+Each extension hot-swaps as one generation and falls back to the previous one on failure; the phone cannot modify these files.
 
 > `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
 

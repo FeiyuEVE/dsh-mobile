@@ -81,13 +81,13 @@ Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏�
 
 **界面与交互**：编辑 `$DSH_HOME/mobile-access/mobile.css` 和 `mobile.js`，可以直接在 DSH 对话中提出修改，保存后几秒内刷新。比如把手机端做成老式终端的样子，让消息像终端输出一样逐行滚动。
 
-**电脑端能力**：当手机需要访问电脑上的文件、程序或硬件时，用命令生成扩展——比如做一个遥控器，让手机控制电脑播放音乐：
+**电脑端能力**：当手机需要访问电脑上的文件、程序或硬件时，由扩展负责——`host.mjs` 在电脑端运行，`mobile.js`/`mobile.css` 在手机端加载。这一层同样可以直接在 DSH 对话中提出，比如“给手机加一个遥控器，控制电脑播放音乐”；需要手动起步时，用命令生成模板：
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile extension create media-remote --name "媒体遥控"
 ```
 
-扩展的 `host.mjs` 运行在电脑端，可以读写文件、执行命令；`mobile.js`/`mobile.css` 加载到手机端。扩展整体热更新，失败自动回退上一版；手机端无法修改这些文件。
+扩展整体热更新，失败自动回退上一版；手机端无法修改这些文件。
 
 > `host.mjs` 拥有电脑用户的权限且不沙箱，请只安装和编辑自己信任的扩展。
 
