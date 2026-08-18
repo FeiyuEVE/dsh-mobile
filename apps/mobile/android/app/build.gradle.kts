@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.sayach.dshmobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.1.0-alpha.28"
+        versionCode = 29
+        versionName = "0.1.0-alpha.29"
 
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
