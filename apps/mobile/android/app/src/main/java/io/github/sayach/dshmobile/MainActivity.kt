@@ -335,12 +335,12 @@ class MainActivity : Activity() {
         return card
     }
 
-    /** Pre-connection artwork: fitted without stretching, under a translucent white scrim. */
+    /** Pre-connection artwork: covers the whole screen (edges may crop), under a translucent white scrim. */
     private fun addSetupArtwork(root: FrameLayout) {
         root.addView(
             ImageView(this).apply {
                 setImageResource(R.drawable.setup_background_image)
-                scaleType = ImageView.ScaleType.FIT_CENTER
+                scaleType = ImageView.ScaleType.CENTER_CROP
             },
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
