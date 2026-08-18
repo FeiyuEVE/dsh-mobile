@@ -26,7 +26,7 @@
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DeepSeek Harness 源码。
 
-它也能直接在 DeepSeek Harness 对话中修改手机端页面：改布局、交互或功能，保存后几秒内刷新。
+它还能在 DSH 对话里用 `/mobile <需求>` 定制手机端。
 
 ## 能做什么
 
@@ -73,7 +73,7 @@ pnpm dsh --profile web
 /mobile 把手机端做成老式终端的样子，让消息像终端输出一样逐行滚动
 ```
 
-`/mobile` 把需求交给 DSH，由 agent 直接修改本机 DSH 配置目录（`$DSH_HOME/mobile-access/`）下的文件，手机端持续检查并几秒内应用；界面相关是 `mobile.css`/`mobile.js`，需要电脑能力时则是 `extensions/` 下的扩展，其 `host.mjs` 以本机用户权限在电脑端运行。不修改 DeepSeek Harness 源码。
+`/mobile` 把需求交给 DSH 对话中的 agent，由它直接修改本机 `$DSH_HOME/mobile-access/` 下的文件，保存后手机端自动生效。改动分两类：界面和交互在 `mobile.css`/`mobile.js`；需要电脑能力时用 `extensions/` 下的扩展，其 `host.mjs` 以本机用户权限在电脑上运行。不修改 DeepSeek Harness 源码。
 
 ## App 与手机浏览器
 

@@ -21,7 +21,7 @@
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified and no public-Internet tunneling is needed.
 
-It can also edit the phone page directly from a DeepSeek Harness conversation: change the mobile layout, interactions, or features, and open pages refresh within a few seconds.
+It also lets you customize the phone from a DSH conversation: `/mobile <what you want>`.
 
 ## What it does
 
@@ -68,7 +68,7 @@ Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone cl
 /mobile turn the phone UI into an old CRT terminal, with messages scrolling like terminal output
 ```
 
-Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client polls those files and applies changes within a few seconds. UI changes live in `mobile.css`/`mobile.js`; computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
+Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client applies them automatically. UI changes live in `mobile.css`/`mobile.js`. Computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
 > When using computer-side capabilities, use only content you trust.
 
