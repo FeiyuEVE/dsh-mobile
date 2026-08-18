@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm/message'
 // Side-effect type import: activates dsh-commands' Context augmentation so
 // `ctx.commands` and its handler types resolve without a runtime dependency.
 import type {} from '@deepseek-ai/dsh-commands'
@@ -231,9 +231,17 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       handler: ({ agent, rawInput }) => {
         const task = rawInput.trim()
         if (task === '') return { kind: 'error', text: '请带上需求，例如：/mobile 把手机端改成深色主题' }
+        // A plugin-source message renders as a collapsed context-injection row
+        // (label "dsh-mobile", one-line notice summary) instead of a user bubble,
+        // while steering still wakes the agent with the full guide as input.
         agent.steer(createUserMessage({
           content: [{ type: 'text', text: `${MOBILE_CUSTOMIZATION_GUIDE}\n\n用户需求：${task}` }],
-          source: { kind: 'user' },
+          source: {
+            kind: 'plugin',
+            plugin: 'dsh-mobile',
+            form: 'notice',
+            summary: boundContextSummary(`/mobile ${task}`),
+          },
         }))
         return { kind: 'success', text: '已把需求交给 DSH 处理，改动会在手机端几秒内生效。' }
       },

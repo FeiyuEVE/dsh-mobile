@@ -118,9 +118,11 @@ describe('stock DSH lifecycle', () => {
       description: expect.any(String),
       input: { hint: expect.any(String) },
     })
-    const steered: string[] = []
+    const steered: { text: string; source: unknown }[] = []
     const agent = {
-      steer: (message: { content: readonly { readonly text?: string }[] }) => { steered.push(message.content[0]?.text ?? '') },
+      steer: (message: { content: readonly { readonly text?: string }[]; source: unknown }) => {
+        steered.push({ text: message.content[0]?.text ?? '', source: message.source })
+      },
       whenIdle: async (): Promise<void> => undefined,
     }
     const invoke = (rawInput: string) => mounted.command.handler({
@@ -135,7 +137,16 @@ describe('stock DSH lifecycle', () => {
     const result = invoke(' 把手机端改成深色主题')
     expect(result).toMatchObject({ kind: 'success' })
     expect(steered.length).toBe(1)
-    expect(steered[0]).toContain('mobile-access')
-    expect(steered[0]).toContain('把手机端改成深色主题')
+    const [steeredMessage] = steered
+    expect(steeredMessage).toBeDefined()
+    expect(steeredMessage!.text).toContain('mobile-access')
+    expect(steeredMessage!.text).toContain('把手机端改成深色主题')
+    // The guide rides as a plugin-source context injection, not a user bubble.
+    expect(steeredMessage!.source).toMatchObject({
+      kind: 'plugin',
+      plugin: 'dsh-mobile',
+      form: 'notice',
+      summary: '/mobile 把手机端改成深色主题',
+    })
   })
 })
