@@ -134,6 +134,14 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] [class*="_feedback"] { flex:1 1 100% !important; min-width:0 !important; order:9 !important; }
   [data-dsh-mobile-center] [class*="_composerSeat"] > [class*="_frame"] { padding-left:12px !important; padding-right:12px !important; }
   [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_actionRow"] { flex-wrap:wrap !important; row-gap:8px !important; }
+  /* Same rules keyed off the question card's own data attribute, so they hold
+     even if the composerSeat class changes. */
+  [data-dsh-mobile-center] [data-question-key] [class*="_footer"] { flex-wrap:wrap !important; align-content:flex-start !important; row-gap:8px !important; }
+  [data-dsh-mobile-center] [data-question-key] [class*="_footer"] [class*="_pager"] { flex:0 0 auto !important; order:1 !important; }
+  [data-dsh-mobile-center] [data-question-key] [class*="_footer"] [class*="_footerActions"],
+  [data-dsh-mobile-center] [data-question-key] [class*="_footer"] [class*="_actions"] { flex:0 0 auto !important; order:2 !important; margin-left:auto !important; }
+  [data-dsh-mobile-center] [data-question-key] [class*="_footer"] [class*="_feedback"] { flex:1 1 100% !important; min-width:0 !important; order:9 !important; }
+  [data-dsh-mobile-center] [data-question-key] > [class*="_frame"] { padding-left:12px !important; padding-right:12px !important; }
 }
 @keyframes dsh-mobile-fade-in { from { opacity:0; } }
 @keyframes dsh-mobile-panel-in { from { opacity:.72; transform:translateY(6px); } }
