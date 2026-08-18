@@ -1,6 +1,6 @@
-import { createHash, X509Certificate } from 'node:crypto'
+import { createHash, randomUUID, X509Certificate } from 'node:crypto'
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import {
   createServer as createHttpServer,
@@ -889,20 +889,35 @@ export class MobileAccessGateway {
     }
     if (customAsset !== undefined) {
       let body: Buffer
+      let mtime: Date | undefined
       try {
         body = await readFile(customAsset.file)
+        try {
+          const fileStat = await stat(customAsset.file)
+          mtime = fileStat.mtime
+        } catch { /* keep undefined */ }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         if (customAsset.fallback === undefined) throw new HttpError(503, 'mobile_frontend_unavailable')
         body = Buffer.from(customAsset.fallback)
       }
       if (body.byteLength > 256 * 1024) throw new HttpError(413, 'payload_too_large')
+      const etag = createHash('sha256').update(body).digest('hex')
+      const ifNoneMatch = headerValue(request.headers, 'if-none-match')
+      if (ifNoneMatch !== undefined && ifNoneMatch === etag) {
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(304)
+        response.end()
+        return
+      }
       setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(200, {
+      const responseHeaders: Record<string, string | number> = {
         'Content-Type': customAsset.contentType,
         'Content-Length': body.byteLength,
-        'Cache-Control': 'no-store',
-      })
+        'ETag': etag,
+      }
+      if (mtime !== undefined) responseHeaders['Last-Modified'] = mtime.toUTCString()
+      response.writeHead(200, responseHeaders)
       response.end(body)
       return
     }
@@ -925,7 +940,7 @@ export class MobileAccessGateway {
     }
     const stockFrontend = new URL(target.raw, this.address().origin).searchParams.get('frontend') === 'stock'
     const acceptsHtml = request.headers.accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false
-    if (request.method === 'GET' && target.decodedPathname === '/' && acceptsHtml && !stockFrontend) {
+    if (request.method === 'GET' && acceptsHtml && !stockFrontend) {
       await this.proxyMobileIndex(request, response, authorization)
       return
     }

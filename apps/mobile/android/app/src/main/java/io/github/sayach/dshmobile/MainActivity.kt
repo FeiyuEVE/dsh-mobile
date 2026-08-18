@@ -46,6 +46,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
 /** Native Android shell for one authenticated DSH HTTPS origin. */
@@ -462,6 +463,8 @@ class MainActivity : Activity() {
         }
     }
 
+    private var scanCanceled = AtomicBoolean(false)
+
     private fun scanForHarnesses(status: TextView, button: Button, results: LinearLayout) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
             && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
@@ -470,15 +473,37 @@ class MainActivity : Activity() {
             return
         }
         button.isEnabled = false
+        scanCanceled.set(false)
         results.removeAllViews()
         status.setTextColor(getColor(R.color.app_secondary))
         status.setText(R.string.scanning_lan)
         status.visibility = View.VISIBLE
+
+        val cancelButton = Button(this).apply {
+            setText(R.string.cancel)
+            isAllCaps = false
+            textSize = 15f
+            minHeight = dp(48)
+            backgroundTintList = null
+            background = roundedRipple(getColor(R.color.app_surface_tinted), 12)
+            setTextColor(getColor(R.color.app_foreground))
+            setOnClickListener {
+                scanCanceled.set(true)
+                cancelButton.isEnabled = false
+            }
+        }
+        results.addView(cancelButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
         ioExecutor.execute {
-            val found = runCatching { LanDiscovery.scan(this) }.getOrDefault(emptyList())
+            val found = runCatching { LanDiscovery.scan(this, canceled = scanCanceled) }.getOrDefault(emptyList())
             runOnUiThread {
                 button.isEnabled = true
-                if (found.isEmpty()) {
+                cancelButton.isEnabled = true
+                cancelButton.visibility = View.GONE
+                if (scanCanceled.get()) {
+                    status.setTextColor(getColor(R.color.app_secondary))
+                    status.setText(R.string.scan_prompt)
+                } else if (found.isEmpty()) {
                     status.setTextColor(getColor(R.color.app_error))
                     status.setText(R.string.no_harness_found)
                 } else {

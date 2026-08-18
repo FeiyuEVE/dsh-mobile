@@ -375,7 +375,15 @@ describe('HTTP gateway', () => {
     const first = await request(instance.address().port, '/mobile-access/custom.css', { headers })
     expect(first.status).toBe(200)
     expect(first.headers['cache-control']).toBe('no-store')
+    expect(first.headers.etag).toMatch(/^[a-f0-9]{64}$/u)
+    expect(first.headers['last-modified']).toBeDefined()
     expect(first.body).toContain('--preview: first')
+
+    const cached = await request(instance.address().port, '/mobile-access/custom.css', {
+      headers: { ...headers, 'if-none-match': String(first.headers.etag) },
+    })
+    expect(cached.status).toBe(304)
+    expect(cached.body).toBe('')
 
     const script = await request(instance.address().port, '/mobile-access/custom.js', { headers })
     expect(script.status).toBe(200)
@@ -410,6 +418,10 @@ describe('HTTP gateway', () => {
     expect(mobile.body).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
     expect(mobile.body).toContain('/mobile-access/mobile-layout.js')
     expect(mobile.body).toContain('/plugins/feature.js')
+
+    const deepLink = await request(instance.address().port, '/sessions/example', { headers })
+    expect(deepLink.status).toBe(200)
+    expect(deepLink.body).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
 
     const stock = await request(instance.address().port, '/?frontend=stock', { headers })
     expect(stock.status).toBe(200)

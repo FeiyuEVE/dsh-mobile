@@ -24,7 +24,7 @@ DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Androi
 ## What it does
 
 - Continue DSH work from a phone: sessions, tools, settings, and live state stay in sync.
-- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open phone pages refresh in about one second — customize your mobile client by talking to DSH, not by writing code.
+- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open phone pages usually refresh within a few seconds — customize your mobile client by talking to DSH, not by writing code.
 - A dedicated touch layout: session drawer, tool details, settings, and composer are reorganized for touch.
 - Auto-discovery on the LAN; Wi-Fi, hotspot, or IP changes normally recover without re-pairing.
 - Pair by scanning a QR code, pasting a pairing link, or entering a key — no 43-character key to type.
@@ -101,7 +101,7 @@ a session status panel, and a press-and-hold voice entry. Narrow screens only;
 do not modify the DSH source.
 ```
 
-Changes are applied to open Android and browser pages in about one second. Customization is not limited to colors: `mobile.js` can add navigation, shortcuts, dashboards, camera, voice, scanning, and complete interactions with same-origin DeepSeek Harness APIs.
+Changes are applied to open Android and browser pages within a few seconds. Customization is not limited to colors: `mobile.js` can add navigation, shortcuts, dashboards, camera, voice, scanning, and complete interactions with same-origin DeepSeek Harness APIs.
 
 ## How it works
 
@@ -125,7 +125,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0-alpha.29` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
+| `0.1.0-alpha.30` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout. An unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout slots and mobile semantic markers. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 

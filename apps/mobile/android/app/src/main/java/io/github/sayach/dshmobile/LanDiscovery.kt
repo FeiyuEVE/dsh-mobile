@@ -13,6 +13,7 @@ import java.util.Collections
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class DiscoveredHarness(
     val deviceName: String,
@@ -24,13 +25,14 @@ private data class LocalSubnet(val first: Int, val second: Int, val third: Int, 
 
 /** Concurrent passive NSD/UDP discovery with active UDP and HTTPS compatibility fallbacks. */
 internal object LanDiscovery {
-    fun scan(context: Context, port: Int = 3443): List<DiscoveredHarness> {
+    fun scan(context: Context, port: Int = 3443, canceled: AtomicBoolean? = null): List<DiscoveredHarness> {
+        if (canceled?.get() == true) return emptyList()
         val subnets = localSubnets()
         val discoveryExecutor = Executors.newFixedThreadPool(2)
         val discovered = try {
             discoveryExecutor.invokeAll(
                 listOf(
-                    Callable { udpDiscovery(port, subnets) },
+                    Callable { udpDiscovery(port, subnets, canceled) },
                     Callable { NsdDiscovery.scan(context, PASSIVE_TIMEOUT_MS) },
                 ),
                 PASSIVE_TIMEOUT_MS + 1_000,
@@ -48,7 +50,10 @@ internal object LanDiscovery {
         return try {
             val tasks = subnets.flatMap { subnet ->
                 (1..254).filter { it !in subnet.ownHosts }.map { host ->
-                    Callable { probe("${subnet.first}.${subnet.second}.${subnet.third}.$host", port) }
+                    Callable {
+                        if (canceled?.get() == true) null
+                        else probe("${subnet.first}.${subnet.second}.${subnet.third}.$host", port)
+                    }
                 }
             }
             mergeByInstance(probeExecutor.invokeAll(tasks, 12, TimeUnit.SECONDS).mapNotNull { future ->
@@ -65,7 +70,7 @@ internal object LanDiscovery {
             entries
         }.values.toList()
 
-    private fun udpDiscovery(port: Int, subnets: List<LocalSubnet>): List<DiscoveredHarness> {
+    private fun udpDiscovery(port: Int, subnets: List<LocalSubnet>, canceled: AtomicBoolean? = null): List<DiscoveredHarness> {
         val targets = buildSet {
             add("255.255.255.255")
             add("192.168.43.255")
@@ -85,7 +90,7 @@ internal object LanDiscovery {
                 }
                 val deadline = System.currentTimeMillis() + PASSIVE_TIMEOUT_MS
                 val found = mutableListOf<DiscoveredHarness>()
-                while (System.currentTimeMillis() < deadline) {
+                while (System.currentTimeMillis() < deadline && canceled?.get() != true) {
                     socket.soTimeout = (deadline - System.currentTimeMillis()).coerceIn(1, 400).toInt()
                     val buffer = ByteArray(1_024)
                     val packet = DatagramPacket(buffer, buffer.size)

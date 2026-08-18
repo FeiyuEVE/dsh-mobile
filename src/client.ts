@@ -183,15 +183,51 @@ function mobileRequest(path: string, init: RequestInit = {}): Promise<Response> 
 
 function installCustomAssets(): () => void {
   const style = element('style'); style.dataset.plugin = 'dsh-mobile-custom'; document.head.append(style)
-  let cssLoading = false
-  const refreshCss = async (): Promise<void> => { if (cssLoading || document.visibilityState === 'hidden') return; cssLoading = true; try { const response = await fetch('/mobile-access/custom.css', { cache: 'no-store', credentials: 'same-origin' }); if (response.ok) { const css = await response.text(); if (style.textContent !== css) style.textContent = css } } finally { cssLoading = false } }
-  let activeRoot: HTMLElement | undefined; let disposeActive: (() => void) | undefined; let source = ''; let pending: MobileExtensionMount | undefined
+  let cssLoading = false; let cssEtag = ''; let cssModified = ''
+  const refreshCss = async (): Promise<void> => {
+    if (cssLoading || document.visibilityState === 'hidden') return; cssLoading = true
+    try {
+      const headers: Record<string, string> = {}
+      if (cssEtag !== '') headers['if-none-match'] = cssEtag
+      if (cssModified !== '') headers['if-modified-since'] = cssModified
+      const response = await fetch('/mobile-access/custom.css', { credentials: 'same-origin', headers })
+      if (response.status === 304) return
+      if (response.ok) {
+        const css = await response.text()
+        if (style.textContent !== css) style.textContent = css
+        cssEtag = response.headers.get('etag') ?? ''
+        cssModified = response.headers.get('last-modified') ?? ''
+      }
+    } finally { cssLoading = false }
+  }
+  let activeRoot: HTMLElement | undefined; let disposeActive: (() => void) | undefined; let source = ''; let jsEtag = ''; let jsModified = ''; let pending: MobileExtensionMount | undefined
   const previous = window.dshMobile
   window.dshMobile = Object.freeze({ register: (mount: MobileExtensionMount) => { pending = mount } })
   const registeredMount = (): MobileExtensionMount | undefined => pending
-  const refreshJs = async (): Promise<void> => { try { const response = await fetch('/mobile-access/custom.js', { cache: 'no-store', credentials: 'same-origin' }); if (!response.ok) return; const next = await response.text(); if (next === source) return; source = next; pending = undefined; const script = element('script'); script.textContent = `${next}\n//# sourceURL=dsh-mobile-custom.js`; document.head.append(script); script.remove(); const mount = registeredMount(); if (mount === undefined) return; const nextRoot = element('div'); nextRoot.dataset.dshMobileExtension = 'true'; document.body.append(nextRoot); const nextDispose = mount({ document, request: mobileRequest, root: nextRoot, window }); disposeActive?.(); activeRoot?.remove(); activeRoot = nextRoot; disposeActive = typeof nextDispose === 'function' ? nextDispose : undefined } catch { /* Preserve the last good customization during reconnects. */ } }
+  const refreshJs = async (): Promise<void> => {
+    try {
+      const headers: Record<string, string> = {}
+      if (jsEtag !== '') headers['if-none-match'] = jsEtag
+      if (jsModified !== '') headers['if-modified-since'] = jsModified
+      const response = await fetch('/mobile-access/custom.js', { credentials: 'same-origin', headers })
+      if (response.status === 304) return
+      if (!response.ok) return
+      jsEtag = response.headers.get('etag') ?? ''
+      jsModified = response.headers.get('last-modified') ?? ''
+      const next = await response.text()
+      if (next === source) return; source = next
+      pending = undefined
+      const script = element('script'); script.textContent = `${next}\n//# sourceURL=dsh-mobile-custom.js`
+      document.head.append(script); script.remove()
+      const mount = registeredMount()
+      if (mount === undefined) return
+      const nextRoot = element('div'); nextRoot.dataset.dshMobileExtension = 'true'; document.body.append(nextRoot)
+      const nextDispose = mount({ document, request: mobileRequest, root: nextRoot, window })
+      disposeActive?.(); activeRoot?.remove(); activeRoot = nextRoot; disposeActive = typeof nextDispose === 'function' ? nextDispose : undefined
+    } catch { /* Preserve the last good customization during reconnects. */ }
+  }
   void refreshCss(); void refreshJs()
-  const timer = window.setInterval(() => { void refreshCss(); void refreshJs() }, 1_000)
+  const timer = window.setInterval(() => { void refreshCss(); void refreshJs() }, 3_000)
   return () => { clearInterval(timer); disposeActive?.(); activeRoot?.remove(); style.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
 }
 
