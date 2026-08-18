@@ -168,7 +168,7 @@ class MainActivity : Activity() {
         val discovery = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedSurface(getColor(R.color.app_surface), 20).apply {
+            background = roundedSurface(getColor(R.color.app_surface_translucent), 20).apply {
                 setStroke(dp(1), getColor(R.color.app_border))
             }
         }
@@ -194,7 +194,9 @@ class MainActivity : Activity() {
             R.string.gateway_label,
         )
         val manualAction = { connectManual(manualField.text.toString(), status) }
-        val manualConnect = secondaryButton(R.string.connect, 52) { manualAction() }
+        val manualConnect = secondaryButton(R.string.connect, 52) { manualAction() }.apply {
+            setPadding(dp(12), 0, dp(12), 0)
+        }
         manualField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) { manualAction(); true } else false
         }
@@ -217,19 +219,23 @@ class MainActivity : Activity() {
         showingSetup = false
         setupBackAction = null
         destroyWebView()
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(getColor(R.color.app_background))
+        }
+        addSetupArtwork(root)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(32), dp(32), dp(32), dp(32))
-            setBackgroundResource(R.drawable.setup_background)
         }
         content.addView(ProgressBar(this))
         content.addView(spacer(16))
         content.addView(textView(R.string.restoring_trust, 16f, Typeface.NORMAL, R.color.app_secondary).apply {
             gravity = Gravity.CENTER
         })
-        setContentView(content)
-        applySafeAreaInsets(content)
+        root.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentView(root)
+        applySafeAreaInsets(root)
     }
 
     private fun showPairing(harness: DiscoveredHarness, prefilledInput: String = "", autoConnect: Boolean = false) {
@@ -286,11 +292,10 @@ class MainActivity : Activity() {
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
-        // Pre-connection screens show the setup artwork behind a translucent
-        // white overlay so the dark text on the cards stays readable.
         val root = FrameLayout(this).apply {
-            setBackgroundResource(R.drawable.setup_background)
+            setBackgroundColor(getColor(R.color.app_background))
         }
+        addSetupArtwork(root)
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
@@ -328,6 +333,21 @@ class MainActivity : Activity() {
         setContentView(root)
         applySafeAreaInsets(root)
         return card
+    }
+
+    /** Pre-connection artwork: fitted without stretching, under a translucent white scrim. */
+    private fun addSetupArtwork(root: FrameLayout) {
+        root.addView(
+            ImageView(this).apply {
+                setImageResource(R.drawable.setup_background_image)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            },
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
+        root.addView(
+            View(this).apply { setBackgroundColor(0x99FFFFFF.toInt()) },
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
     }
 
     /** Reconnect to a manually entered origin, falling back to pairing when unknown. */
