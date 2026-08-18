@@ -71,17 +71,12 @@ The Android app is a thin Kotlin WebView shell and contains no frontend copy; mo
 
 ## Extend and customize
 
-The mobile client can be extended on two layers.
+You don't need to touch any files: type `/mobile <what you want>` in a DSH conversation, and DSH makes the change — the phone client updates within a few seconds. No need to know paths or formats.
 
-**Interface and interactions**: edit `$DSH_HOME/mobile-access/mobile.css` and `mobile.js` directly from a DSH conversation; open pages refresh within a few seconds. For example, turn the phone UI into an old CRT terminal, with messages scrolling like terminal output.
+Two layers are customizable, both under `$DSH_HOME/mobile-access/`:
 
-**Computer-side capabilities**: when the phone needs files, programs, or hardware on the computer, an extension handles that layer — `host.mjs` runs on the computer while `mobile.js`/`mobile.css` load on the phone. Ask for this in a DSH conversation too ("give the phone a remote control that plays music on the computer"); to start manually, generate a template:
-
-```powershell
-dsh plugin --profile web exec dsh-mobile extension create media-remote --name "Media remote"
-```
-
-Each extension hot-swaps as one generation and falls back to the previous one on failure; the phone cannot modify these files.
+- **Interface and interactions**: `mobile.css` and `mobile.js`.
+- **Computer-side capabilities**: extensions under `extensions/`; `host.mjs` runs on the computer, letting the phone reach computer files, programs, or hardware. The phone cannot modify these files.
 
 > `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
 

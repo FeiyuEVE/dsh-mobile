@@ -1,10 +1,15 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
+// Side-effect type import: activates dsh-commands' Context augmentation so
+// `ctx.commands` and its handler types resolve without a runtime dependency.
+import type {} from '@deepseek-ai/dsh-commands'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { parseControlFile, parseGatewayConfig, type PluginConfig } from './config.js'
 import { assertSupportedDshVersion } from './compatibility.js'
+import { MOBILE_CUSTOMIZATION_GUIDE } from './mobile-guide.js'
 import {
   FollowingMobileAccessRuntime,
   JsonMobileAccessControlStore,
@@ -34,8 +39,8 @@ import {
 /** Stable Cordis plugin name. */
 export const name = 'dsh-mobile'
 
-/** The stock WebServer is the only DSH Host service this plugin requires. */
-export const inject = ['webServer']
+/** The stock WebServer serves the control card; commands exposes /mobile to the DSH agent. */
+export const inject = ['webServer', 'commands']
 
 function installedDshVersion(): unknown {
   const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
@@ -219,17 +224,33 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
 
   await ctx.effect(async () => {
     const unregister = ctx.webServer.register(adminRoute)
+    const disposeMobileCommand = ctx.commands.register({
+      name: 'mobile',
+      description: '按需求修改 DSH Mobile 的手机端界面或添加电脑端能力',
+      input: { hint: '<要做什么>' },
+      handler: ({ agent, rawInput }) => {
+        const task = rawInput.trim()
+        if (task === '') return { kind: 'error', text: '请带上需求，例如：/mobile 把手机端改成深色主题' }
+        agent.steer(createUserMessage({
+          content: [{ type: 'text', text: `${MOBILE_CUSTOMIZATION_GUIDE}\n\n用户需求：${task}` }],
+          source: { kind: 'user' },
+        }))
+        return { kind: 'success', text: '已把需求交给 DSH 处理，改动会在手机端几秒内生效。' }
+      },
+    })
     try {
       await controller.initialize()
     } catch (error) {
       unregister()
+      disposeMobileCommand()
       unregisterBuiltin()
       throw error
     }
     return async () => {
       unregister()
+      disposeMobileCommand()
       await controller.close()
       unregisterBuiltin()
     }
-  }, 'dsh-mobile: local control and authenticated LAN gateway')
+  }, 'dsh-mobile: local control, authenticated LAN gateway, and /mobile command')
 }

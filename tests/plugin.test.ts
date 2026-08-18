@@ -1,5 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
+import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { createServer, request as requestHttp } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
@@ -54,10 +55,11 @@ async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, bod
   }
 }
 
-async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute }> {
+async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute; command: CommandDefinition }> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
   temporaryDirectories.push(directory)
   let route: WebRoute | undefined
+  let command: CommandDefinition | undefined
   const context = new Context()
   contexts.push(context)
   context.provide('webServer', {
@@ -66,6 +68,12 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
       return () => { if (route === candidate) route = undefined }
     },
   } as WebServer)
+  context.provide('commands', {
+    register(definition: CommandDefinition) {
+      command = definition
+      return () => { if (command === definition) command = undefined }
+    },
+  } as never)
   await context.plugin({ Config, inject, apply }, {
     listenPort: 38083,
     stateFile: join(directory, 'devices.json'),
@@ -76,12 +84,13 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
     tls: { mode: 'disabled' },
   })
   if (route === undefined) throw new Error('plugin did not register its control route')
-  return { context, route }
+  if (command === undefined) throw new Error('plugin did not register its /mobile command')
+  return { context, route, command }
 }
 
 describe('stock DSH lifecycle', () => {
-  it('requires only the stock WebServer service', () => {
-    expect(inject).toEqual(['webServer'])
+  it('requires the WebServer and commands services', () => {
+    expect(inject).toEqual(['webServer', 'commands'])
   })
 
   it('keeps a loopback control route available while the LAN listener is stopped', async () => {
@@ -100,5 +109,33 @@ describe('stock DSH lifecycle', () => {
     const stopped = await invoke(mounted.route, 'POST', '/api/mobile-access/control', JSON.stringify({ running: false }))
     expect(stopped.status).toBe(200)
     expect(JSON.parse(stopped.body)).toEqual({ running: false })
+  })
+
+  it('registers a /mobile command that steers the agent with the customization guide', async () => {
+    const mounted = await mount()
+    expect(mounted.command).toMatchObject({
+      name: 'mobile',
+      description: expect.any(String),
+      input: { hint: expect.any(String) },
+    })
+    const steered: string[] = []
+    const agent = {
+      steer: (message: { content: readonly { readonly text?: string }[] }) => { steered.push(message.content[0]?.text ?? '') },
+      whenIdle: async (): Promise<void> => undefined,
+    }
+    const invoke = (rawInput: string) => mounted.command.handler({
+      agent,
+      commandId: 'id' as never,
+      signal: new AbortController().signal,
+      rawInput,
+    } as never)
+    const empty = invoke('  ')
+    expect(empty).toMatchObject({ kind: 'error' })
+    expect(steered).toEqual([])
+    const result = invoke(' 把手机端改成深色主题')
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(steered.length).toBe(1)
+    expect(steered[0]).toContain('mobile-access')
+    expect(steered[0]).toContain('把手机端改成深色主题')
   })
 })
