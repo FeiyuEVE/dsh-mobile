@@ -125,6 +125,17 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-shell [data-context-fields]>*{min-width:0}
 .dshm-shell [class*="_body"]{max-width:100%;overflow-wrap:anywhere}
 @media(max-width:420px){.dshm-shell [data-context-fields]>*{display:grid;grid-template-columns:1fr!important;gap:4px}.dshm-shell [class*="_ioSection"]{grid-template-columns:1fr!important}}
+@media(max-width:720px){
+  /* Question/approval takeover cards: let the footer wrap so the action
+     buttons are never clipped by the card's overflow:hidden. */
+  .dshm-shell [class*="_composerSeat"] [class*="_footer"]{flex-wrap:wrap!important;align-content:flex-start!important;row-gap:8px!important}
+  .dshm-shell [class*="_composerSeat"] [class*="_footer"] [class*="_pager"]{flex:0 0 auto!important;order:1!important}
+  .dshm-shell [class*="_composerSeat"] [class*="_footer"] [class*="_footerActions"],
+  .dshm-shell [class*="_composerSeat"] [class*="_footer"] [class*="_actions"]{flex:0 0 auto!important;order:2!important;margin-left:auto!important}
+  .dshm-shell [class*="_composerSeat"] [class*="_footer"] [class*="_feedback"]{flex:1 1 100%!important;min-width:0!important;order:9!important}
+  .dshm-shell [class*="_composerSeat"]>[class*="_frame"]{padding-left:12px!important;padding-right:12px!important}
+  .dshm-shell [class*="_composerSeat"] [class*="_actionRow"]{flex-wrap:wrap!important;row-gap:8px!important}
+}
 @media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*{transition:none!important}}
 `
 

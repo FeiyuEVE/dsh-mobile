@@ -125,6 +125,15 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [class*="_card"]:has(textarea) button[aria-label^="选择模型"] [class*="_triggerLabel"] { max-width:clamp(120px,36vw,210px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
+  /* Question/approval takeover cards: wrap the footer so action buttons are
+     not clipped by the card's overflow:hidden on narrow screens. */
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] { flex-wrap:wrap !important; align-content:flex-start !important; row-gap:8px !important; }
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] [class*="_pager"] { flex:0 0 auto !important; order:1 !important; }
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] [class*="_footerActions"],
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] [class*="_actions"] { flex:0 0 auto !important; order:2 !important; margin-left:auto !important; }
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_footer"] [class*="_feedback"] { flex:1 1 100% !important; min-width:0 !important; order:9 !important; }
+  [data-dsh-mobile-center] [class*="_composerSeat"] > [class*="_frame"] { padding-left:12px !important; padding-right:12px !important; }
+  [data-dsh-mobile-center] [class*="_composerSeat"] [class*="_actionRow"] { flex-wrap:wrap !important; row-gap:8px !important; }
 }
 @keyframes dsh-mobile-fade-in { from { opacity:0; } }
 @keyframes dsh-mobile-panel-in { from { opacity:.72; transform:translateY(6px); } }
