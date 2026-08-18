@@ -21,6 +21,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
@@ -73,6 +74,9 @@ class MainActivity : Activity() {
     private var pendingScan: (() -> Unit)? = null
     private var showingSetup = false
     private var restoringTrustedSession = false
+    // The floating toolbar starts hidden so the page's own header stays clear;
+    // scrolling back up brings it in, scrolling down slides it away.
+    private var toolbarHidden = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -625,8 +629,10 @@ class MainActivity : Activity() {
         gatewayOrigin = origin
         preferences.edit().putString(PREFERENCE_ORIGIN, origin.serialized).apply()
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // The toolbar floats above a full-screen WebView so the page can use the
+        // whole screen while it scrolls; the mobile layout owns its safe-area
+        // insets itself (viewport-fit=cover + env(safe-area-inset-top)).
+        val root = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.app_background))
         }
         val bar = LinearLayout(this).apply {
@@ -646,14 +652,12 @@ class MainActivity : Activity() {
         val more = toolbarIconButton(R.drawable.ic_more_vertical, R.string.more)
         bar.addView(refresh, LinearLayout.LayoutParams(dp(40), dp(40)))
         bar.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)))
-        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
 
         val loading = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             visibility = View.GONE
             progressTintList = ColorStateList.valueOf(getColor(R.color.app_accent))
         }
-        root.addView(loading, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
 
         val browser = WebView(this)
         webView = browser
@@ -710,12 +714,35 @@ class MainActivity : Activity() {
         }
         nativeBridge?.dispose()
         nativeBridge = NativeBridge(this, browser, origin.serialized).also { it.install() }
+        nativeBridge?.onScrollDirection = { direction -> animateToolbar(direction, bar, loading) }
         browser.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             requestDownload(origin, caCertificate, url, userAgent, contentDisposition, mimeType)
         }
-        root.addView(browser, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(browser, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.TOP))
+        root.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP))
         setContentView(root)
-        applySafeAreaInsets(root)
+
+        // Keep the toolbar clear of the status bar; the loading bar sits below it.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val top = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                insets.getInsets(WindowInsets.Type.statusBars()).top
+            } else {
+                @Suppress("DEPRECATION")
+                insets.systemWindowInsetTop
+            }
+            bar.setPadding(dp(16), top, dp(4), 0)
+            bar.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48) + top, Gravity.TOP)
+            loading.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP).apply {
+                topMargin = dp(48) + top
+            }
+            bar.translationY = if (toolbarHidden) -(dp(48) + top).toFloat() else 0f
+            bar.alpha = if (toolbarHidden) 0f else 1f
+            loading.translationY = bar.translationY
+            loading.alpha = bar.alpha
+            WindowInsets.CONSUMED
+        }
+        root.requestApplyInsets()
 
         refresh.setOnClickListener { browser.reload() }
 
@@ -751,6 +778,18 @@ class MainActivity : Activity() {
             ?: origin.serialized
         retryUrl = initialUrl
         browser.loadUrl(initialUrl)
+    }
+
+    /** Slide the floating toolbar out of view while the page scrolls down. */
+    private fun animateToolbar(direction: String, bar: View, loading: View) {
+        val hide = direction == "down"
+        if (hide == toolbarHidden) return
+        toolbarHidden = hide
+        val offset = bar.height.toFloat()
+        if (offset <= 0f) return
+        val duration = 180L
+        bar.animate().translationY(if (hide) -offset else 0f).alpha(if (hide) 0f else 1f).setDuration(duration).start()
+        loading.animate().translationY(if (hide) -offset else 0f).alpha(if (hide) 0f else 1f).setDuration(duration).start()
     }
 
     private fun showFileChooser(

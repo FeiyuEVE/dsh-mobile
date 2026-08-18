@@ -38,6 +38,9 @@ class NativeBridge(
     private var activityRequestId: String? = null
     private var installed = false
 
+    /** Directional page-scroll observer set by the shell; reports "up" or "down". */
+    var onScrollDirection: ((direction: String) -> Unit)? = null
+
     /** Inject the Java object and install the page-side Promise adapter. */
     @SuppressLint("AddJavascriptInterface")
     fun install(): Boolean {
@@ -142,6 +145,14 @@ class NativeBridge(
         return """["files.pick","camera.capture","share","clipboard.read","clipboard.write","notification.show"]"""
     }
 
+    /** Scroll direction reported by the injected page adapter, on the UI thread. */
+    @JavascriptInterface
+    fun onPageScroll(direction: String) {
+        if (!installed || webView.url?.startsWith(origin) != true) return
+        if (direction != "up" && direction != "down") return
+        activity.runOnUiThread { onScrollDirection?.invoke(direction) }
+    }
+
     private fun startPending(requestId: String, action: String, launch: () -> Unit): String {
         if (activityRequestId != null) return errorJson("busy", "another native interaction is active", requestId)
         activityRequestId = requestId
@@ -231,6 +242,25 @@ class NativeBridge(
               if (raw) handleReply(raw);
             })
           };
+
+          // Throttled directional scroll feed so the shell can hide its toolbar.
+          // capture:true also observes scrolling inside nested containers; when the
+          // page scrolls an internal box instead of the window, the delta stays
+          // ~0 and the callback simply does not fire (toolbar stays put).
+          let lastScrollY = Math.max(0, (document.scrollingElement || document.documentElement).scrollTop || 0);
+          let lastScrollAt = 0;
+          const onPageScroll = () => {
+            const now = Date.now();
+            if (now - lastScrollAt < 120) return;
+            lastScrollAt = now;
+            const scroller = document.scrollingElement || document.documentElement;
+            const y = Math.max(0, scroller.scrollTop || 0);
+            const delta = y - lastScrollY;
+            lastScrollY = y;
+            if (delta > 4) { try { bridge.onPageScroll('down'); } catch (_) {} }
+            else if (delta < -4) { try { bridge.onPageScroll('up'); } catch (_) {} }
+          };
+          document.addEventListener('scroll', onPageScroll, { passive: true, capture: true });
         })();
     """.trimIndent()
         .replace("$JS_OBJECT_NAME", JS_OBJECT_NAME)
