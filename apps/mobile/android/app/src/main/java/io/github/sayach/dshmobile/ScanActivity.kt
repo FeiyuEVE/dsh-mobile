@@ -105,7 +105,7 @@ class ScanActivity : Activity(), SurfaceHolder.Callback {
                 Gravity.TOP or Gravity.START,
             ).apply {
                 topMargin = (24 * density).toInt()
-                startMargin = (16 * density).toInt()
+                marginStart = (16 * density).toInt()
             },
         )
         return root

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile",
-  "version": "0.1.0-alpha.26",
+  "version": "0.1.0-alpha.27",
   "private": false,
   "description": "DeepSeek Harness 移动端适配与安全局域网访问插件，支持 Android App 和手机浏览器。",
   "type": "module",
