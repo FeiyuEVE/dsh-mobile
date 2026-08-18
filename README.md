@@ -26,6 +26,8 @@
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DeepSeek Harness 源码。
 
+移动访问使用独立的 HTTPS 与证书固定，只有配对过的设备能通过校验接入。
+
 它还能在 DSH 对话里用 `/mobile <需求>` 定制手机端。
 
 ## 能做什么

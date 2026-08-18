@@ -21,6 +21,8 @@
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified and no public-Internet tunneling is needed.
 
+Mobile access runs on its own HTTPS origin with pinned certificates; only paired devices pass validation.
+
 It also lets you customize the phone from a DSH conversation: `/mobile <what you want>`.
 
 ## What it does
