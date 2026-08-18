@@ -94,7 +94,7 @@ class NativeBridge(
     @JavascriptInterface
     fun invoke(raw: String): String {
         if (!installed) return errorJson("unavailable", "bridge is unavailable", "")
-        if (!webView.url?.startsWith(origin) == true) return errorJson("bad_origin", "bridge call outside its origin", "")
+        if (webView.url?.startsWith(origin) != true) return errorJson("bad_origin", "bridge call outside its origin", "")
         val parsed = try { JSONObject(raw) } catch (_: Exception) { return errorJson("bad_message", "message is invalid", "") }
         if (parsed.optInt("version", 0) != 1) return errorJson("bad_message", "unsupported version", "")
         val requestId = parsed.optString("requestId", "")
