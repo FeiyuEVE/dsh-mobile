@@ -320,8 +320,10 @@ class MainActivity : Activity() {
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
+        // Pre-connection screens show the setup artwork behind a translucent
+        // white overlay so the dark text on the cards stays readable.
         val root = FrameLayout(this).apply {
-            setBackgroundColor(getColor(R.color.app_background))
+            setBackgroundResource(R.drawable.setup_background)
         }
         val scroll = ScrollView(this).apply {
             isFillViewport = true
