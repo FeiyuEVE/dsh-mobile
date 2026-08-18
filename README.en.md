@@ -15,7 +15,7 @@
 
 <p align="center"><a href="README.md">简体中文</a></p>
 
-> Alpha software. Android is the only native app. This is a community plugin, not an official DeepSeek product.
+> Alpha software. Android is the only supported native app; the iOS client remains an unpublished local experiment and is not built or released. This is a community plugin, not an official DeepSeek product.
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
@@ -52,7 +52,7 @@ pnpm dsh --profile web
 
 `setup` automatically selects and remembers the current LAN. Wi-Fi, hotspot, and IP changes normally recover automatically; use `--address 192.168.x.x` only when automatic selection fails.
 
-Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, and select **Create and copy key**. In the Android app, tap **Scan**, select the computer, and enter the key. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
+Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, and select **Create and copy key** or **Copy pairing link** to show a pairing QR code. In the Android app, tap **Scan QR code** and point the camera at the screen, or tap **Scan**, select the computer, and paste the key or pairing link — no 43-character key to type. The paired device remains trusted until it is revoked, expires, or its app data is cleared.
 
 ## Connection options
 
@@ -63,7 +63,7 @@ Open **Mobile Access** in the lower-left DeepSeek Harness sidebar, enable it, an
 
 Discovery uses mDNS/NSD, UDP announcements and queries, plus HTTPS probing. It publishes only the device name, address, port, protocol version, and stable `instanceId`. Keys and device tokens are never discoverable. IP changes do not require another Android pairing.
 
-For a browser's first connection, open pairing on the computer, generate a key, then visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
+For a browser's first connection, open pairing on the computer, then select **Copy pairing link** and open that link on the phone browser — the pairing code is filled in automatically. Alternatively, visit `/mobile-access/pair` on the shown HTTPS origin and manually enter the 43-character pairing code after the key's final dot. The browser stores a revocable device credential after pairing.
 
 ## Mobile UI
 

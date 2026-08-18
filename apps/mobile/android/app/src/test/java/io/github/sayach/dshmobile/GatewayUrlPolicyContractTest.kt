@@ -3,6 +3,7 @@ package io.github.sayach.dshmobile
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Runs the language-neutral origin-policy vectors against the Android implementation. */
@@ -63,5 +64,23 @@ class GatewayUrlPolicyContractTest {
                 GatewayUrlPolicy.isAllowedDownload(origin!!, case.getString("candidate")),
             )
         }
+    }
+
+    @Test
+    fun pairingTokenExtractsOnlyTheOneTimeLinkToken() {
+        val token = "A".repeat(43)
+        assertEquals(token, GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair#token=$token"))
+
+        // A bare pairing key is not a link.
+        assertNull(GatewayUrlPolicy.pairingToken("dsh1.${"a".repeat(64)}.${"B".repeat(43)}"))
+
+        // The fixed pairing page without a fragment carries no token.
+        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair"))
+
+        // Wrong token length is rejected.
+        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair#token=${"C".repeat(42)}"))
+
+        // Any path other than the fixed pairing page is rejected.
+        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/other#token=${"D".repeat(43)}"))
     }
 }

@@ -438,11 +438,12 @@ describe('HTTP gateway', () => {
       body: '{}',
     })
     expect(opened.status).toBe(201)
-    const pairing = JSON.parse(opened.body) as { token: string; appKey: string; pairUrl: string }
+    const pairing = JSON.parse(opened.body) as { token: string; appKey: string; pairUrl: string; qrSvg?: string }
     expect(pairing.token).toMatch(/^[\w-]{43}$/)
     expect(pairing.appKey).toBe(`dsh1.${instance.config.instanceId}.${pairing.token}`)
     expect(pairing.pairUrl).toContain(`#token=${pairing.token}`)
     expect(pairing.pairUrl).not.toContain(`?token=${pairing.token}`)
+    expect(pairing.qrSvg).toContain('<svg')
 
     const paired = await request(instance.address().port, '/mobile-access/auth/pair', {
       method: 'POST',

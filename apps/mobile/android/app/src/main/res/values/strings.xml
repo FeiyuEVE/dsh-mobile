@@ -25,12 +25,17 @@
         <item quantity="other">%d DSH installations found. Select one to pair.</item>
     </plurals>
     <string name="pairing_key_label">Pairing key</string>
-    <string name="pairing_key_hint">43-character key from DSH</string>
-    <string name="invalid_pairing_key">Enter the complete pairing key shown by DSH.</string>
+    <string name="pairing_key_hint">Paste the pairing key or pairing link from DSH</string>
+    <string name="invalid_pairing_key">Enter a valid pairing key or the DSH pairing link.</string>
     <string name="pairing_in_progress">Pairing this phone…</string>
     <string name="pairing_failed">Pairing failed. Create a new key on the computer and try again.</string>
     <string name="pairing_tls_failed">The selected DSH identity could not be verified. Check the network and pairing key.</string>
     <string name="connect">Connect</string>
+    <string name="scan_action">Scan QR code</string>
+    <string name="scan_hint">Point the camera at the QR code on the computer screen.</string>
+    <string name="camera_unavailable">Camera unavailable</string>
+    <string name="scan_camera_denied">Camera permission is required for QR pairing.</string>
+    <string name="scan_result_invalid">No pairing QR code was recognized.</string>
     <string name="invalid_gateway">Enter a valid HTTPS origin or DSH one-time pairing URL.</string>
     <string name="toolbar_title">DeepSeek Harness</string>
     <string name="share">Share</string>

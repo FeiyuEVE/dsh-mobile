@@ -18,6 +18,7 @@ import { Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import Bonjour from 'bonjour-service'
+import * as QRCode from 'qrcode'
 import {
   AccessController,
   AccessError,
@@ -1261,10 +1262,19 @@ export class MobileAccessGateway {
             const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
             if (body.ttlMs !== undefined && typeof body.ttlMs !== 'number') throw new HttpError(400, 'bad_request')
             const opened = await this.access.openPairing(body.ttlMs as number | undefined)
+            const pairUrl = `${this.address().origin}/mobile-access/pair#token=${opened.token}`
+            // The QR code is an enhancement; a failed render must not waste an opened window.
+            let qrSvg = ''
+            try {
+              qrSvg = await QRCode.toString(pairUrl, { type: 'svg', margin: 1 })
+            } catch {
+              // keep qrSvg empty
+            }
             sendJson(response, 201, {
               ...opened,
               appKey: `dsh1.${this.config.instanceId}.${opened.token}`,
-              pairUrl: `${this.address().origin}/mobile-access/pair#token=${opened.token}`,
+              pairUrl,
+              qrSvg,
             }, false)
             return
           }

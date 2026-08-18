@@ -4,19 +4,19 @@
 
 DeepSeek Harness is the display name of this lightweight, community-maintained Android WebView shell. It does not bundle a second DSH frontend. The app and mobile browsers load the same authenticated HTTPS origin, so both receive the same DSH features plus live-editable `mobile.css` presentation and `mobile.js` functionality.
 
-Android is the only supported native target. iOS is outside the build, release, and support scope.
+Android is the only supported native target. The iOS client remains an unpublished local experiment and is outside the build, release, and support scope.
 
 ## Use the app
 
 1. Complete the plugin quick start and run `dsh-mobile setup`.
 2. Install the Android APK from GitHub Releases.
-3. Select **Create and copy key** in **Mobile Access** in desktop DSH.
-4. Open the app, select **Scan**, select the discovered DSH, paste the one-time key, and connect.
+3. Select **Create and copy key** or **Copy pairing link** in **Mobile Access** in desktop DSH; the panel shows a pairing QR code.
+4. Open the app, tap **Scan QR code**, and point the camera at the screen to pair — or tap **Scan**, select the discovered DSH, and paste the key or pairing link, which the app resolves into origin and token.
 5. Connect. Certificate trust stays private to the app; Android settings are not changed.
 
 After the first pairing, the app encrypts a revocable, long-lived device token with Android Keystore. Every later launch uses it to renew a short Web session before opening DSH, so the pairing key is not requested again unless the device is revoked, the trust expires, or app data is cleared. If the computer receives another LAN address, the app scans the default port, matches the stable DSH installation identifier, and updates the saved origin automatically. Discovery never exposes the device token or Session credentials.
 
-Discovery listens to DNS-SD/mDNS and periodic UDP announcements at the same time, sends an active UDP query on port `3443`, and retains bounded HTTPS scans of visible private Wi-Fi and phone-hotspot `/24` networks as a compatibility fallback. Every discovery path carries metadata only and results are merged by stable installation identifier, so a changed address updates the existing device. The first screen shows only Scan and a result list; select one DSH before entering its key. For a browser's first connection, visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the generated key's final dot.
+Discovery listens to DNS-SD/mDNS and periodic UDP announcements at the same time, sends an active UDP query on port `3443`, and retains bounded HTTPS scans of visible private Wi-Fi and phone-hotspot `/24` networks as a compatibility fallback. Every discovery path carries metadata only and results are merged by stable installation identifier, so a changed address updates the existing device. The first screen offers **Scan QR code** (point the camera at the screen to pair without a key), Scan, a result list, and a manual address field (enter `https://IP:port` to connect when discovery fails, e.g. across subnets, on a non-default port, or behind a firewall); select one DSH before entering its key. For a browser's first connection, open the **Copy pairing link** link on the phone (the pairing code is prefilled), or visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the generated key's final dot.
 
 The CA is not discovery data. After selection and key entry, Android retrieves it from the chosen origin without sending credentials, checks that its SHA-256 fingerprint matches the key and installation identifier, and stores it with the encrypted device credential. Native requests use an app-private trust store. WebView accepts only an otherwise-untrusted leaf signed by that pinned CA for the exact origin and validity period; every other TLS error is cancelled. No system CA installation is required.
 
@@ -37,7 +37,7 @@ A mobile browser is always a first-class alternative; the app is optional.
 | TLS | The pairing-key CA is stored privately. Only `SSL_UNTRUSTED` for its valid, exact-host leaf is accepted; every other TLS error is cancelled. |
 | Origin | Only scheme, normalized host, and port persist. Ordinary paths, queries, and fragments do not. |
 | Navigation | Same-origin main frames stay inside; user-initiated external HTTPS links open in the system browser. |
-| Permissions | File input uses the system document picker; broad storage permissions are not requested. |
+| Permissions | File input uses the system document picker; the camera is requested only when the user taps **Scan QR code**, to read the pairing QR. |
 | Downloads | Foreground GET from the exact origin only; authentication control paths are never downloads. |
 | Data | The device token is encrypted by Android Keystore; Web storage stays in the app sandbox; Clear Site Data removes the credential, origin, cookies, cache, and Web storage. |
 | Backup | App backup is disabled; TLS private keys and signing keys must remain outside the repository. |

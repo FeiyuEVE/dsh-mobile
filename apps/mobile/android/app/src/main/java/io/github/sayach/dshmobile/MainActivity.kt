@@ -108,6 +108,7 @@ class MainActivity : Activity() {
         when (requestCode) {
             FILE_CHOOSER_REQUEST -> finishFileSelection(resultCode, data)
             DOWNLOAD_DESTINATION_REQUEST -> finishDownloadSelection(resultCode, data)
+            SCAN_QR_REQUEST -> finishScanResult(resultCode, data)
         }
     }
 
@@ -172,6 +173,17 @@ class MainActivity : Activity() {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scanQr = Button(this).apply {
+            setText(R.string.scan_action)
+            isAllCaps = false
+            textSize = 17f
+            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+            minHeight = dp(56)
+            backgroundTintList = null
+            background = roundedRipple(getColor(R.color.app_accent), 16)
+            setTextColor(getColor(R.color.app_on_accent))
+            setOnClickListener { openScanner() }
+        }
         val scan = Button(this).apply {
             setText(R.string.scan_lan)
             isAllCaps = false
@@ -183,9 +195,38 @@ class MainActivity : Activity() {
             setTextColor(getColor(R.color.app_on_accent))
             setOnClickListener { scanForHarnesses(status, this, results) }
         }
+        val manual = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val manualField = EditText(this).apply {
+            hint = getString(R.string.gateway_hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            isSingleLine = true
+            minHeight = dp(52)
+            contentDescription = getString(R.string.gateway_label)
+        }
+        val manualConnect = Button(this).apply {
+            setText(R.string.connect)
+            isAllCaps = false
+            minHeight = dp(52)
+        }
+        val manualAction = { connectManual(manualField.text.toString(), status) }
+        manualConnect.setOnClickListener { manualAction() }
+        manualField.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO) { manualAction(); true } else false
+        }
+        manual.addView(manualField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        manual.addView(spacer(8))
+        manual.addView(manualConnect, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        discovery.addView(scanQr, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        discovery.addView(spacer(10))
         discovery.addView(scan, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         discovery.addView(spacer(18))
         discovery.addView(status)
+        discovery.addView(spacer(12))
+        discovery.addView(manual)
         discovery.addView(spacer(12))
         discovery.addView(results, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(discovery, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -210,7 +251,7 @@ class MainActivity : Activity() {
         applySafeAreaInsets(content)
     }
 
-    private fun showPairing(harness: DiscoveredHarness) {
+    private fun showPairing(harness: DiscoveredHarness, prefilledInput: String = "", autoConnect: Boolean = false) {
         showingSetup = true
         setupBackAction = ::showSetup
         val card = createSetupCard()
@@ -236,6 +277,7 @@ class MainActivity : Activity() {
             isSingleLine = true
             minHeight = dp(56)
             contentDescription = getString(R.string.pairing_key_label)
+            if (prefilledInput.isNotEmpty()) setText(prefilledInput)
         }
         card.addView(pairing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         card.addView(spacer(20))
@@ -271,7 +313,7 @@ class MainActivity : Activity() {
             minHeight = dp(48)
             setOnClickListener { showSetup() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        pairing.requestFocus()
+        if (autoConnect && prefilledInput.isNotEmpty()) connect(harness, pairing, status, connect)
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
@@ -317,23 +359,71 @@ class MainActivity : Activity() {
         return card
     }
 
+    /** Reconnect to a manually entered origin, falling back to pairing when unknown. */
+    private fun connectManual(raw: String, status: TextView) {
+        val origin = parseManualOrigin(raw)
+        if (origin == null) {
+            status.setTextColor(getColor(R.color.app_error))
+            status.setText(R.string.invalid_gateway)
+            status.visibility = View.VISIBLE
+            return
+        }
+        val credential = credentialStore.load()
+        if (credential != null) {
+            showRestoringTrust()
+            restoreTrustedDevice(origin, credential) { showPairing(manualHarness(origin)) }
+        } else {
+            showPairing(manualHarness(origin))
+        }
+    }
+
+    private fun parseManualOrigin(raw: String): GatewayOrigin? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return null
+        GatewayOrigin.parse(trimmed)?.let { return it }
+        if (!trimmed.startsWith("https://", ignoreCase = true)) {
+            return GatewayOrigin.parse("https://$trimmed")
+        }
+        return null
+    }
+
+    /** A pairing screen target whose instance id is unknown until a key or CA is provided. */
+    private fun manualHarness(origin: GatewayOrigin): DiscoveredHarness =
+        DiscoveredHarness(deviceName = "DeepSeek Harness", origin = origin, instanceId = "")
+
     private fun connect(harness: DiscoveredHarness, pairing: EditText, status: TextView, button: Button) {
-        val key = PairingKey.parse(pairing.text.toString().trim())
-        if (key == null || key.instanceId != harness.instanceId) {
+        val input = pairing.text.toString().trim()
+        val key = PairingKey.parse(input)
+        val connection = if (key == null) GatewayConnection.parse(input) else null
+        val linkToken = connection?.let { GatewayUrlPolicy.pairingToken(input) }
+        if (key == null && linkToken == null) {
             status.setText(R.string.invalid_pairing_key)
             status.visibility = View.VISIBLE
             pairing.requestFocus()
             return
         }
+        // A key is bound to the discovered instance; a pairing link carries its own origin.
+        if (key != null && harness.instanceId.isNotEmpty() && key.instanceId != harness.instanceId) {
+            status.setText(R.string.invalid_pairing_key)
+            status.visibility = View.VISIBLE
+            pairing.requestFocus()
+            return
+        }
+        val origin = if (key != null) harness.origin else connection?.origin ?: harness.origin
         button.isEnabled = false
         status.setTextColor(getColor(R.color.app_secondary))
         status.setText(R.string.pairing_in_progress)
         status.visibility = View.VISIBLE
         ioExecutor.execute {
-            val certificate = runCatching { NativeAuthClient.fetchPairingCa(harness.origin) }
-                .getOrNull()
-                ?.let { PairingTrust.validateCertificate(it, key.instanceId) }
-            if (certificate == null) {
+            val rawCa = runCatching { NativeAuthClient.fetchPairingCa(origin) }.getOrNull()
+            // Key flow binds the CA to the key's instance id; link flow trusts the CA
+            // by its own fingerprint, which the gateway anchors to the same instance id.
+            val pairing: Pair<ByteArray, String>? = if (key != null) {
+                rawCa?.let { ca -> PairingTrust.validateCertificate(ca, key.instanceId)?.let { it to key.instanceId } }
+            } else {
+                rawCa?.let { PairingTrust.trustByOwnFingerprint(it) }
+            }
+            if (pairing == null) {
                 runOnUiThread {
                     status.setTextColor(getColor(R.color.app_error))
                     status.setText(R.string.pairing_tls_failed)
@@ -341,17 +431,27 @@ class MainActivity : Activity() {
                 }
                 return@execute
             }
-            runCatching { NativeAuthClient.pair(harness.origin, key.token, certificate) }
+            val (certificate, expectedInstanceId) = pairing
+            val token = key?.token ?: linkToken
+            if (token == null) {
+                runOnUiThread {
+                    status.setTextColor(getColor(R.color.app_error))
+                    status.setText(R.string.pairing_failed)
+                    button.isEnabled = true
+                }
+                return@execute
+            }
+            runCatching { NativeAuthClient.pair(origin, token, certificate) }
                 .onSuccess { session -> runOnUiThread {
-                    val token = session.deviceToken
+                    val deviceToken = session.deviceToken
                     val expiresAt = session.deviceExpiresAt
-                    if (token == null || expiresAt == null || session.instanceId != harness.instanceId) {
+                    if (deviceToken == null || expiresAt == null || session.instanceId != expectedInstanceId) {
                         status.setTextColor(getColor(R.color.app_error))
                         status.setText(R.string.pairing_failed)
                         button.isEnabled = true
                     } else {
-                        credentialStore.save(DeviceCredential(session.instanceId, token, expiresAt, certificate))
-                        installNativeSession(harness.origin, session) { showBrowser(harness.origin, certificate) }
+                        credentialStore.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
+                        installNativeSession(origin, session) { showBrowser(origin, certificate) }
                     }
                 } }
                 .onFailure { runOnUiThread {
@@ -420,10 +520,47 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != NEARBY_WIFI_REQUEST) return
-        val retry = pendingScan
-        pendingScan = null
-        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) retry?.invoke()
+        when (requestCode) {
+            NEARBY_WIFI_REQUEST -> {
+                val retry = pendingScan
+                pendingScan = null
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) retry?.invoke()
+            }
+            SCAN_CAMERA_REQUEST -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startScanActivity()
+                else toast(R.string.scan_camera_denied)
+            }
+            else -> Unit
+        }
+    }
+
+    /** Open the QR scanner, requesting the CAMERA permission once when needed. */
+    private fun openScanner() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), SCAN_CAMERA_REQUEST)
+            return
+        }
+        startScanActivity()
+    }
+
+    private fun startScanActivity() {
+        startActivityForResult(Intent(this, ScanActivity::class.java), SCAN_QR_REQUEST)
+    }
+
+    private fun finishScanResult(resultCode: Int, data: Intent?) {
+        if (resultCode != RESULT_OK) return
+        val text = data?.getStringExtra(ScanActivity.EXTRA_QR_RESULT)?.trim().orEmpty()
+        if (text.isEmpty()) return
+        // A pairing link carries its own origin, so it can skip LAN discovery entirely.
+        if (GatewayUrlPolicy.pairingToken(text) != null) {
+            val origin = GatewayConnection.parse(text)?.origin
+            if (origin != null) {
+                showPairing(manualHarness(origin), prefilledInput = text, autoConnect = true)
+                return
+            }
+        }
+        toast(R.string.scan_result_invalid)
     }
 
     private fun installNativeSession(origin: GatewayOrigin, session: NativeSession, complete: () -> Unit) {
@@ -901,7 +1038,9 @@ class MainActivity : Activity() {
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val FILE_CHOOSER_REQUEST = 4101
         const val DOWNLOAD_DESTINATION_REQUEST = 4102
+        const val SCAN_CAMERA_REQUEST = 4103
         const val NEARBY_WIFI_REQUEST = 4104
+        const val SCAN_QR_REQUEST = 4106
         const val MENU_EDIT_CONNECTION = 1
         const val MENU_CLEAR_DATA = 2
         const val MENU_SHARE = 3

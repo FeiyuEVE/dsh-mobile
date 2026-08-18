@@ -53,11 +53,13 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const accessLabel = element('span', 'dsh-mobile-control__access-label'); accessLabel.textContent = '浏览器访问'
   const accessLink = element('a', 'dsh-mobile-control__access-link'); accessLink.target = '_blank'; accessLink.rel = 'noreferrer'
   access.append(accessLabel, accessLink)
+  const qrBox = element('div', 'dsh-mobile-control__qr'); qrBox.hidden = true
   const status = element('p', 'dsh-mobile-control__status'); status.textContent = '正在读取状态…'
   const actions = element('div', 'dsh-mobile-control__actions')
   const toggle = element('button', 'dsh-mobile-control__secondary'); toggle.type = 'button'
   const pair = element('button', 'dsh-mobile-control__primary'); pair.type = 'button'; pair.textContent = '生成并复制密钥'
-  header.append(title, close); actions.append(toggle, pair); panel.append(header, access, status, actions); root.append(panel); document.body.append(root)
+  const linkPair = element('button', 'dsh-mobile-control__secondary'); linkPair.type = 'button'; linkPair.textContent = '复制配对链接'
+  header.append(title, close); actions.append(toggle, pair, linkPair); panel.append(header, access, qrBox, status, actions); root.append(panel); document.body.append(root)
   let running = false
   let origin = ''
   const setOpen = (open: boolean): void => {
@@ -73,20 +75,44 @@ function installControl(): { remove: () => void; toggle: () => void } {
     accessLink.title = origin
     status.classList.toggle('is-running', running)
     status.textContent = running ? '移动访问已开启。' : '已关闭。DSH 仍只在本机可用。'
-    toggle.textContent = running ? '关闭移动访问' : '开启移动访问'; pair.disabled = !running
+    toggle.textContent = running ? '关闭移动访问' : '开启移动访问'
+    pair.disabled = !running
+    linkPair.disabled = !running
   }
-  toggle.addEventListener('click', () => { toggle.disabled = true; void requestJson('/api/mobile-access/control', { method: 'POST', body: JSON.stringify({ running: !running }) }).then(render, error => { status.textContent = String(error) }).finally(() => { toggle.disabled = false }) })
-  pair.addEventListener('click', () => { pair.disabled = true; void requestJson('/api/mobile-access/pairing/open', { method: 'POST', body: '{}' }).then(async data => {
-    const key = typeof data.appKey === 'string' ? data.appKey : ''
-    if (key === '') { status.textContent = '无法生成配对密钥。'; return }
-    try {
-      await navigator.clipboard.writeText(key)
-      status.textContent = '配对密钥已复制，请粘贴到 Android App。'
-    } catch {
-      status.textContent = `请复制配对密钥：${key}`
-      status.classList.add('is-key')
-    }
-  }, error => { status.textContent = String(error) }).finally(() => { pair.disabled = !running }) })
+  const showQr = (svg: string): void => {
+    qrBox.replaceChildren()
+    if (svg === '') { qrBox.hidden = true; return }
+    const image = element('img')
+    image.alt = '配对二维码'
+    image.width = 176
+    image.height = 176
+    image.src = `data:image/svg+xml;base64,${btoa(svg)}`
+    qrBox.hidden = false
+    qrBox.append(image)
+  }
+  const openPairing = (target: 'key' | 'link'): void => {
+    void requestJson('/api/mobile-access/pairing/open', { method: 'POST', body: '{}' }).then(async data => {
+      const value = target === 'key'
+        ? (typeof data.appKey === 'string' ? data.appKey : '')
+        : (typeof data.pairUrl === 'string' ? data.pairUrl : '')
+      showQr(typeof data.qrSvg === 'string' ? data.qrSvg : '')
+      if (value === '') { status.textContent = '无法生成配对密钥。'; return }
+      try {
+        await navigator.clipboard.writeText(value)
+        status.textContent = target === 'key'
+          ? '配对密钥已复制，请粘贴到 Android App。'
+          : '配对链接已复制，发给手机后 App 粘贴或浏览器打开即可配对。'
+      } catch {
+        status.textContent = `请复制${target === 'key' ? '配对密钥' : '配对链接'}：${value}`
+        status.classList.add('is-key')
+      }
+    }, error => { status.textContent = String(error) }).finally(() => {
+      pair.disabled = !running
+      linkPair.disabled = !running
+    })
+  }
+  pair.addEventListener('click', () => { pair.disabled = true; openPairing('key') })
+  linkPair.addEventListener('click', () => { linkPair.disabled = true; openPairing('link') })
   close.addEventListener('click', () => { setOpen(false) })
   const dismiss = (event: PointerEvent): void => {
     if (panel.hidden || !(event.target instanceof Node)) return
@@ -127,7 +153,7 @@ const CONTROL_STYLES = `
 .dsh-mobile-control{position:fixed;z-index:1000;left:16px;bottom:64px;font:14px/1.45 system-ui;color:var(--dsw-alias-label-primary,#16181d)}
 .dsh-mobile-control__panel{box-sizing:border-box;width:min(328px,calc(100vw - 32px));padding:16px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:18px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 18px 50px rgb(15 23 42 / 18%)}
 .dsh-mobile-control__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.dsh-mobile-control__panel h2{margin:0;font-size:17px;line-height:24px}.dsh-mobile-control__close{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;font-size:24px;line-height:1;cursor:pointer}.dsh-mobile-control__close:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
-.dsh-mobile-control__access{display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 12px}.dsh-mobile-control__access[hidden]{display:none}.dsh-mobile-control__access-label{flex:none;color:var(--dsw-alias-label-secondary,#606873);white-space:nowrap}.dsh-mobile-control__access-label::after{content:"："}.dsh-mobile-control__access-link{min-width:0;overflow:hidden;color:#2563eb;text-decoration:none;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__access-link:hover{text-decoration:underline}
+.dsh-mobile-control__access{display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 12px}.dsh-mobile-control__access[hidden]{display:none}.dsh-mobile-control__access-label{flex:none;color:var(--dsw-alias-label-secondary,#606873);white-space:nowrap}.dsh-mobile-control__access-label::after{content:"："}.dsh-mobile-control__access-link{min-width:0;overflow:hidden;color:#2563eb;text-decoration:none;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__access-link:hover{text-decoration:underline}.dsh-mobile-control__qr{display:flex;justify-content:center;margin:0 0 12px}.dsh-mobile-control__qr[hidden]{display:none}.dsh-mobile-control__qr img{border-radius:12px;background:#fff;padding:8px}
 .dsh-mobile-control__status{margin:0 0 14px;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#606873)}.dsh-mobile-control__status::before{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%;background:#98a1ad;content:""}.dsh-mobile-control__status.is-running::before{background:#16a36a}.dsh-mobile-control__status.is-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;word-break:break-all}
 .dsh-mobile-control__actions{display:flex;flex-wrap:wrap;gap:8px}.dsh-mobile-control__actions button{min-height:40px;padding:8px 12px;border-radius:11px;font:inherit;cursor:pointer}.dsh-mobile-control__secondary{border:1px solid var(--dsw-alias-border-normal,#cfd5dd);background:transparent;color:inherit}.dsh-mobile-control__primary{border:1px solid #2563eb;background:#2563eb;color:#fff}.dsh-mobile-control__actions button:disabled{cursor:not-allowed;opacity:.45}
 .dsh-mobile-control__trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px;padding:6px 2px 6px 10px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#16181d);font:14px/22px system-ui;cursor:pointer}.dsh-mobile-control__trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.dsh-mobile-control__trigger.is-rail{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%}.dsh-mobile-control__trigger-icon{position:relative;box-sizing:border-box;flex:none;width:14px;height:19px;border:1.7px solid currentColor;border-radius:3px}.dsh-mobile-control__trigger-icon::after{position:absolute;right:4px;bottom:2px;width:4px;height:1.5px;border-radius:2px;background:currentColor;content:""}.dsh-mobile-control__trigger-label{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}

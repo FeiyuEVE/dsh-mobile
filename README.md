@@ -20,7 +20,7 @@
   <a href="README.en.md">English</a>
 </p>
 
-> Alpha 版本，当前原生 App 仅支持 Android。本项目为 DeepSeek Harness 社区插件。
+> Alpha 版本，当前原生 App 仅支持 Android；iOS 客户端仍为未发布的本地开发实验，不进入构建与 Release。本项目为 DeepSeek Harness 社区插件。
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
@@ -58,8 +58,8 @@ pnpm dsh --profile web
 启动后：
 
 1. 在 DeepSeek Harness 左下角打开“移动访问”，确认功能已开启。
-2. 点击“生成并复制密钥”。
-3. Android App 点击“扫描”，选择电脑并输入密钥。
+2. 点击“生成并复制密钥”或“复制配对链接”，面板会显示配对二维码。
+3. Android App 点击“扫码配对”，把手机对准电脑屏幕上的二维码即可完成配对；也可以点击“扫描”选择电脑后粘贴密钥或配对链接，无需手输 43 位密钥。
 4. 配对完成后会建立持久设备信任，以后打开 App 无需重复输入。
 
 插件不会修改 DeepSeek Harness 源码。设置、证书、设备和自定义文件保存在 `$DSH_HOME/mobile-access/`。
@@ -76,7 +76,7 @@ Android 同时使用 mDNS/NSD、UDP 公告、主动 UDP 查询和 HTTPS 探测�
 
 App 配对后保存可撤销的设备凭据和私有证书信任；Wi-Fi、热点或 DHCP 导致 IP 变化时不需要重新配对。手机浏览器不能使用 App 的私有信任，因此需要浏览器本身信任该 HTTPS 证书。
 
-新浏览器首次访问时，在电脑端开启配对并生成密钥，然后打开 HTTPS 地址中的 `/mobile-access/pair`，输入密钥最后一个点号后的 43 位配对码。配对完成后，浏览器会保存可撤销的设备凭据。
+新浏览器首次访问时，在电脑端开启配对，然后点击“复制配对链接”并把链接发到手机浏览器打开，配对码会自动填入；也可以打开 HTTPS 地址中的 `/mobile-access/pair`，手动输入密钥最后一段的 43 位配对码。配对完成后，浏览器会保存可撤销的设备凭据。
 
 ## 移动端界面
 
