@@ -36,7 +36,14 @@ jobs:
       - run: npm run verify
       - run: npm pack
       - name: Publish npm alpha package
-        run: npm publish --provenance --access public --tag alpha
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm publish --access public --tag alpha
+          else
+            npm publish --provenance --access public --tag alpha
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-package
