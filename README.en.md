@@ -77,9 +77,9 @@ Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone cl
 /mobile turn the phone UI into an old CRT terminal, with messages scrolling like terminal output
 ```
 
-Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). All changes live in the local DSH configuration directory; DeepSeek Harness source is not modified.
+Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client polls those files and applies changes within a few seconds. UI changes live in `mobile.css`/`mobile.js`; computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
-> When using computer-side capabilities, `host.mjs` runs with the local user's privileges — use only content you trust.
+> When using computer-side capabilities, use only content you trust.
 
 ## How it works
 
