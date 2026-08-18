@@ -23,6 +23,16 @@ DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Androi
 
 It can also edit the phone page directly from a DeepSeek Harness conversation: change the mobile layout, interactions, or features, and open pages refresh within a few seconds.
 
+## What it does
+
+- **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
+- **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
+- **A dedicated touch layout**: session drawer, tool details, settings, and composer reorganized for phones.
+- **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
+- **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
+
+A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
+
 ## Quick start
 
 With an installed `dsh` command:
@@ -50,25 +60,6 @@ After starting DSH, open **Mobile Access** in the lower-left sidebar, then:
 
 `setup` automatically selects and remembers the current LAN; Wi-Fi, hotspot, and IP changes normally recover without re-pairing. Use `--address 192.168.x.x` only when automatic selection fails. Settings, certificates, devices, and customization files live under `$DSH_HOME/mobile-access/`.
 
-## What it does
-
-- **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
-- **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
-- **A dedicated touch layout**: session drawer, tool details, settings, and composer reorganized for phones.
-- **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
-- **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
-
-A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
-
-## App or mobile browser
-
-| Client | Best for | Notes |
-| --- | --- | --- |
-| Android app | Everyday use | Auto-discovery; private certificate pinning inside the app, no manual browser trust step |
-| Mobile browser | Temporary or cross-platform | Open the HTTPS origin shown by Mobile Access; trust the certificate manually on first visit |
-
-The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
-
 ## Extend and customize
 
 Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone client's files for you; changes apply within a few seconds. For example:
@@ -80,6 +71,15 @@ Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone cl
 Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client polls those files and applies changes within a few seconds. UI changes live in `mobile.css`/`mobile.js`; computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
 > When using computer-side capabilities, use only content you trust.
+
+## App or mobile browser
+
+| Client | Best for | Notes |
+| --- | --- | --- |
+| Android app | Everyday use | Auto-discovery; private certificate pinning inside the app, no manual browser trust step |
+| Mobile browser | Temporary or cross-platform | Open the HTTPS origin shown by Mobile Access; trust the certificate manually on first visit |
+
+The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
 ## How it works
 
