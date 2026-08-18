@@ -24,7 +24,7 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
-DSH Mobile 提供专属移动端布局入口，并直接组合 DeepSeek Harness 原生的对话、工作区、设置和插件组件。它通过受保护的局域网 HTTPS 网关，让 Android App 或手机浏览器访问电脑端同一份工作区、会话、消息和运行状态。
+DSH Mobile 为 DeepSeek Harness 提供移动端界面适配与交互优化，采用专属移动端布局，并复用原生的对话、工作区、设置和插件组件。它通过受保护的局域网 HTTPS 网关，让 Android App 或手机浏览器访问电脑端同一份工作区、会话、消息和运行状态。
 
 ## 能做什么
 
@@ -72,7 +72,7 @@ pnpm dsh --profile web
 | Android App | 日常使用         | 自动发现、无浏览器栏、App 内私有证书固定 |
 | 手机浏览器  | 临时或跨平台访问 | 打开“移动访问”卡片显示的 HTTPS 地址    |
 
-Android 同时使用 mDNS/NSD、UDP 公告、主动 UDP 查询和 HTTPS 探测发现 DeepSeek Harness。发现只广播设备名、地址、端口、协议版本和稳定 `instanceId`，不会广播密钥或令牌。
+Android 同时使用 mDNS/NSD、UDP 公告、主动 UDP 查询和 HTTPS 探测发现 DeepSeek Harness。发现广播设备名、地址、端口、协议版本和稳定 `instanceId`，不会广播密钥或令牌。
 
 App 配对后保存可撤销的设备凭据和私有证书信任；Wi-Fi、热点或 DHCP 导致 IP 变化时不需要重新配对。手机浏览器不能使用 App 的私有信任，因此需要浏览器本身信任该 HTTPS 证书。
 

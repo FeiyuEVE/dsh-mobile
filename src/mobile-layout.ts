@@ -103,10 +103,11 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-shell{position:relative;display:grid;width:100%;height:100dvh;min-width:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff)}
 .dshm-main{grid-area:1/1;min-width:0;min-height:0;overflow:hidden}
 .dshm-main>*,.dshm-main>*>*{min-width:0}
-.dshm-drawer{position:fixed;z-index:70;inset:0 auto 0 0;box-sizing:border-box;width:56px;max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#f8fafc);box-shadow:none;transition:width 190ms cubic-bezier(.22,1,.36,1)}
+.dshm-drawer{position:fixed;z-index:70;inset:0 auto 0 0;box-sizing:border-box;width:56px;max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#f8fafc);box-shadow:none;will-change:width;transition:width 240ms cubic-bezier(.22,1,.36,1),box-shadow 240ms ease}
 .dshm-drawer[data-open=true]{width:min(88vw,340px);box-shadow:18px 0 46px rgb(15 23 42 / 18%)}
 .dshm-drawer[data-open=false]{pointer-events:auto;visibility:visible}
-.dshm-drawer>*{width:100%!important;height:100%!important}
+.dshm-drawer>*{width:100%!important;height:100%!important;transform:translateX(-6px);opacity:.94;transition:transform 220ms cubic-bezier(.22,1,.36,1),opacity 160ms ease-out}
+.dshm-drawer[data-open=true]>*{transform:translateX(0);opacity:1}
 .dshm-drawer[data-open=false]>*{width:56px!important}
 .dshm-details{position:fixed;z-index:80;inset:0 0 0 auto;box-sizing:border-box;width:min(94vw,460px);max-width:100%;padding-top:env(safe-area-inset-top);overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:-18px 0 46px rgb(15 23 42 / 18%);transform:translateX(104%);transition:transform 190ms cubic-bezier(.22,1,.36,1)}
 .dshm-details[data-open=true]{transform:translateX(0)}
@@ -124,7 +125,7 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .dshm-shell [data-context-fields]>*{min-width:0}
 .dshm-shell [class*="_body"]{max-width:100%;overflow-wrap:anywhere}
 @media(max-width:420px){.dshm-shell [data-context-fields]>*{display:grid;grid-template-columns:1fr!important;gap:4px}.dshm-shell [class*="_ioSection"]{grid-template-columns:1fr!important}}
-@media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim{transition:none!important}}
+@media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*{transition:none!important}}
 `
 
 function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
@@ -145,15 +146,46 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       const target = event.target
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.blur()
     }
+    const suppressBranchAutofocus = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element)) return
+      const branch = event.target.closest('button[aria-label*="分支"],button[aria-label*="Branch"],button[aria-label*="branch"]')
+      if (branch === null || branch.hasAttribute('disabled') || branch.getAttribute('aria-disabled') === 'true') return
+      suppressKeyboardUntil.current = performance.now() + 700
+      window.setTimeout(() => {
+        const active = document.activeElement
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+      }, 0)
+    }
+    const suppressCommandAutofocus = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element)) return
+      const commandButton = event.target.closest('button[aria-haspopup="listbox"]')
+      if (commandButton === null) return
+      // The native composer deliberately restores textarea focus on mousedown;
+      // mobile command menus should open without summoning the soft keyboard.
+      suppressKeyboardUntil.current = performance.now() + 700
+      event.preventDefault()
+      event.stopPropagation()
+      window.setTimeout(() => {
+        const active = document.activeElement
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+      }, 0)
+    }
     document.addEventListener('focusin', suppressAutofocus, true)
-    return () => { document.removeEventListener('focusin', suppressAutofocus, true) }
+    document.addEventListener('click', suppressBranchAutofocus, true)
+    document.addEventListener('mousedown', suppressCommandAutofocus, true)
+    return () => {
+      document.removeEventListener('focusin', suppressAutofocus, true)
+      document.removeEventListener('click', suppressBranchAutofocus, true)
+      document.removeEventListener('mousedown', suppressCommandAutofocus, true)
+    }
   }, [])
 
   const closeDrawerAfterSessionAction = (event: { readonly target: EventTarget | null }): void => {
     if (!(event.target instanceof Element)) return
     const row = event.target.closest<HTMLElement>('[role="treeitem"][aria-selected]')
     const action = event.target.closest('button,[role="button"]')
-    const startsSession = action?.matches('button[class*="_newSession"],button[class*="_brand"]') ?? false
+    const startsSession = action?.matches('button[class*="_newSession"],button[class*="_brand"]')
+      || /新建会话|新会话|new session|new conversation/i.test(action?.getAttribute('aria-label') ?? '')
     if (row === null && !startsSession) return
     if (row !== null && action !== null && action !== row) return
     suppressKeyboardUntil.current = performance.now() + 500

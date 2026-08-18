@@ -19,7 +19,9 @@
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
-DSH Mobile provides a dedicated phone layout that composes the native DeepSeek Harness conversation, Workspace, settings, and plugin components. An authenticated HTTPS LAN gateway keeps desktop, Android, and mobile browsers on the same Workspaces, sessions, messages, tools, settings, and event streams.
+DSH Mobile adapts DeepSeek Harness for mobile interfaces and interactions with a dedicated layout that reuses its native conversation, Workspace, settings, and plugin components. An authenticated HTTPS LAN gateway keeps desktop, Android, and mobile browsers on the same Workspaces, sessions, messages, tools, settings, and event streams.
+
+It is a plugin that adapts DeepSeek Harness interfaces and interactions for mobile devices.
 
 ## What it does
 
