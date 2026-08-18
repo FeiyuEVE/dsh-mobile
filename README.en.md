@@ -77,12 +77,9 @@ Type `/mobile <what you want>` in a DSH conversation, and DSH edits the phone cl
 /mobile turn the phone UI into an old CRT terminal, with messages scrolling like terminal output
 ```
 
-Two layers are customizable, both under `$DSH_HOME/mobile-access/`:
+Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). All changes live in the local DSH configuration directory; DeepSeek Harness source is not modified.
 
-- **Interface and interactions**: `mobile.css` and `mobile.js`.
-- **Computer-side capabilities**: extensions under `extensions/`; `host.mjs` runs on the computer, letting the phone reach computer files, programs, or hardware. The phone cannot modify these files.
-
-> `host.mjs` has the desktop user's Node.js privileges and is not sandboxed — install and edit only extensions you trust.
+> When using computer-side capabilities, `host.mjs` runs with the local user's privileges — use only content you trust.
 
 ## How it works
 
