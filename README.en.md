@@ -75,8 +75,8 @@ Two kinds of changes are supported: the phone UI itself (theme, layout, buttons)
 The example above, applied:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="24%" alt="Mobile UI customized into an old CRT terminal">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="24%" alt="Mobile UI customized into an old CRT terminal">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
 </p>
 
 ## App or mobile browser
