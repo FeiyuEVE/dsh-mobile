@@ -20,7 +20,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-frame] { grid-template-columns:0 minmax(0,1fr) 0 !important; width:100% !important; height:100dvh !important; overflow:hidden !important; }
   [data-dsh-mobile-center] { grid-column:2 !important; width:100vw !important; min-width:0 !important; }
   [data-dsh-mobile-center] > * { min-width:0 !important; }
-  [data-dsh-mobile-header] { box-sizing:border-box !important; width:calc(100% - 16px) !important; margin:0 8px !important; min-width:0; padding-top:4px !important; padding-right:8px !important; padding-left:42px !important; }
+  [data-dsh-mobile-header] { box-sizing:border-box !important; width:calc(100% - 16px) !important; margin:0 8px !important; min-width:0; padding-top:max(4px,env(safe-area-inset-top)) !important; padding-right:8px !important; padding-left:42px !important; }
   [data-dsh-mobile-header] [class*="_titleRow"] { box-sizing:border-box !important; display:flex !important; align-items:center !important; min-width:0; min-height:32px !important; height:32px !important; gap:6px !important; padding:0 6px !important; }
   [data-dsh-mobile-header] [class*="_titleCluster"] { min-width:0; }
   [data-dsh-mobile-header] [class*="_crumbs"] { min-width:0; overflow:hidden; }
