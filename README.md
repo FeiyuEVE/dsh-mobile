@@ -82,9 +82,8 @@ Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏�
 **界面与交互**：编辑 `$DSH_HOME/mobile-access/mobile.css` 和 `mobile.js`，可以直接在 DSH 对话中提出修改，保存后几秒内刷新。例如：
 
 ```text
-请编辑 $DSH_HOME/mobile-access/mobile.css 和 mobile.js，
-把移动端改成适合单手操作的开发控制台：增加底部快捷指令、
-会话状态面板和长按语音入口。只影响窄屏，不修改 DSH 源码。
+把手机端改成暖色主题（背景米色、按钮橙色），
+并在每条消息下加一个“复制”按钮。只影响窄屏，不修改 DSH 源码。
 ```
 
 **电脑端能力**：当手机需要读电脑文件、跑命令或访问硬件时，用命令生成扩展：

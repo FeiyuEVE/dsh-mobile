@@ -76,9 +76,8 @@ The mobile client can be extended on two layers.
 **Interface and interactions**: edit `$DSH_HOME/mobile-access/mobile.css` and `mobile.js` directly from a DSH conversation; open pages refresh within a few seconds. For example:
 
 ```text
-Edit $DSH_HOME/mobile-access/mobile.css and mobile.js to turn the mobile
-client into a one-handed development console: add a bottom shortcut bar,
-a session status panel, and a press-and-hold voice entry. Narrow screens only;
+Turn the mobile theme warm (cream background, orange buttons) and add
+a Copy button under every message. Narrow screens only;
 do not modify the DSH source.
 ```
 
