@@ -81,13 +81,10 @@ Two kinds of changes are supported: the phone UI itself (theme, layout, buttons)
 The examples above, applied:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="30%" alt="Mobile UI customized into an old CRT terminal">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-1.png" width="30%" alt="Mobile UI customized into a cyberpunk computer monitor">
-  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-2.png" width="30%" alt="Mobile UI customized into a cyberpunk computer monitor">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-2.png" width="15%" alt="Mobile UI customized into an old CRT terminal">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/crt-terminal-1.png" width="15%" alt="Mobile UI customized into an old CRT terminal">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-2.png" width="15%" style="margin-left:18px" alt="Mobile UI customized into a cyberpunk computer monitor">
+  <img src="https://raw.githubusercontent.com/saya-ch/dsh-mobile/main/assets/screenshots/cyberpunk-monitor-1.png" width="15%" alt="Mobile UI customized into a cyberpunk computer monitor">
 </p>
 
 ## App or mobile browser
