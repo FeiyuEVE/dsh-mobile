@@ -80,7 +80,7 @@ Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏�
 在 DSH 对话里输入 `/mobile <需求>`，DSH 会直接修改手机端的文件，几秒内生效。例如：
 
 ```text
-/mobile 给手机端加一个查看电脑上某个文件夹文件列表的页面
+/mobile 把手机端做成老式终端的样子，让消息像终端输出一样逐行滚动
 ```
 
 手机端有两层可定制（都在 `$DSH_HOME/mobile-access/` 下）：
