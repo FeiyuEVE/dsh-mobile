@@ -21,6 +21,14 @@
 
 DSH Mobile provides a dedicated phone layout that composes the native DeepSeek Harness conversation, Workspace, settings, and plugin components. An authenticated HTTPS LAN gateway keeps desktop, Android, and mobile browsers on the same Workspaces, sessions, messages, tools, settings, and event streams.
 
+## What it does
+
+- Continue using DSH from a phone with the same sessions, Workspaces, messages, tools, and settings as the desktop.
+- Provide a dedicated touch layout for the sidebar, composer, tool details, settings, and Workspace picker.
+- Connect through Android or a mobile browser using one protected LAN gateway, with discovery and IP-change recovery.
+- Edit the mobile layout, interactions, and features directly through a DeepSeek Harness conversation; open pages refresh in about one second.
+- Go beyond styling: add shortcuts, status panels, voice, camera, scanning, or other same-origin web features.
+
 ## Quick start
 
 With an installed `dsh` command:
