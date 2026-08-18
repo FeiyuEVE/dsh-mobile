@@ -10,7 +10,7 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar] { --dsw-alias-interactive-bg-hover:transparent !important; }')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar] [role="treeitem"]:is(:hover,:active,:focus,[aria-selected="true"])')
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_sessionRow"][class*="_selected"],')
-    expect(NATIVE_MOBILE_STYLES).toContain('padding-top:4px !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('padding-top:max(4px,env(safe-area-inset-top)) !important')
     expect(NATIVE_MOBILE_STYLES).toContain('box-sizing:border-box !important; width:50px !important; height:52px !important; padding:4px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle] > svg[class*="_railFish"] { transform:translateY(-4px) !important; }')
     expect(NATIVE_MOBILE_STYLES).toContain('min-height:32px !important; height:32px !important')
