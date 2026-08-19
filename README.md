@@ -59,6 +59,14 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
+也可以通过插件市场安装（可选）：
+
+```powershell
+dsh plugin --profile web add dshmarket
+```
+
+重启 DSH 后，在 **设置 → 插件市场** 里搜索 dsh-mobile，一键安装即可。
+
 启动后，在 DeepSeek Harness 左下角打开“移动访问”，然后：
 
 1. 点击“生成并复制密钥”或“复制配对链接”，面板会显示配对二维码。

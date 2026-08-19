@@ -54,6 +54,14 @@ pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
 
+Or via the plugin market (optional):
+
+```powershell
+dsh plugin --profile web add dshmarket
+```
+
+Restart DSH, then search for **dsh-mobile** under **Settings → Plugin Market** and install it with one click.
+
 After starting DSH, open **Mobile Access** in the lower-left sidebar, then:
 
 1. Select **Create and copy key** or **Copy pairing link**; the panel shows a pairing QR code.
