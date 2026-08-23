@@ -16,13 +16,11 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> The native app currently supports Android only; the iOS client remains a local experiment and is not included in builds or releases. This is a DeepSeek Harness community plugin.
+> Platform and version: DSH Mobile 0.1.4 is a DeepSeek Harness community plugin for the DeepSeek Harness 0.1.1 series (verified with 0.1.1-rc.2). The native app currently supports Android only; the iOS client is not released.
 >
-> Current release: DSH Mobile 0.1.4 supports DeepSeek Harness 0.1.1 and continues to refine mobile interaction and layout.
->
-> The Android app uses a stable release signing key starting with 0.1.4. Users upgrading from 0.1.3 or earlier must uninstall the old app, install the new build, and pair once more; later releases can be installed in place. The plugin can be upgraded independently, and older app builds can continue connecting to the 0.1.4 plugin.
+> Upgrade notice: the Android app uses a stable release signing key starting with 0.1.4. Users upgrading from 0.1.3 or earlier must uninstall the old app, install the new build, and pair once more; later releases can be installed in place. The plugin can be upgraded independently, and older app builds can continue connecting to the 0.1.4 plugin.
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.1.4/dsh-mobile-android-v0.1.4.apk"><strong>Download Android app 0.1.4</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.1.4">Release notes and checksums</a></p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN and keep using the same sessions, Workspaces, messages, and tools. It is a mobile entry point only; the DeepSeek Harness source is not modified and no public-Internet tunneling is needed.
 
@@ -96,7 +94,7 @@ It can also drive computer capabilities the phone can use, like reading the mach
 
 Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client applies them automatically. UI changes live in `mobile.css`/`mobile.js`. Computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
-> When using computer-side capabilities, use only content you trust.
+> `host.mjs` has the same privileges as a local program. Create and run only computer-side extensions that you understand and trust.
 
 The examples above, applied:
 
@@ -138,7 +136,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0–0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
+| `0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 

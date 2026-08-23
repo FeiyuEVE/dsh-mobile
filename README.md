@@ -22,13 +22,11 @@
   <a href="README.en.md">English</a>
 </p>
 
-> 当前原生 App 仅支持 Android；iOS 客户端尚处于本地实验阶段，暂不纳入构建与发布。本项目是 DeepSeek Harness 社区插件。
+> 平台与版本：DSH Mobile 0.1.4 是 DeepSeek Harness 社区插件，适配 DeepSeek Harness 0.1.1 系列（已验证 0.1.1-rc.2）。当前原生 App 仅支持 Android，iOS 客户端暂不发布。
 >
-> 当前版本：DSH Mobile 0.1.4，适配 DeepSeek Harness 0.1.1，并持续优化移动端交互与布局体验。
->
-> Android App 自 0.1.4 起使用稳定发布签名。已安装 0.1.3 或更早版本的用户需要卸载旧 App、安装新版并重新配对一次；此后版本可直接覆盖升级。插件可独立更新，旧版 App 仍可继续连接 0.1.4 插件。
+> 升级提示：Android App 自 0.1.4 起使用稳定发布签名。已安装 0.1.3 或更早版本的用户需要卸载旧 App、安装新版并重新配对一次；此后版本可直接覆盖升级。插件可独立更新，旧版 App 仍可继续连接 0.1.4 插件。
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.1.4/dsh-mobile-android-v0.1.4.apk"><strong>下载 Android App 0.1.4</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.1.4">版本说明与校验文件</a></p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 在受保护的局域网内连接电脑，继续使用同一份会话、工作区、消息和工具。它只作为移动入口接入，不修改 DeepSeek Harness 源码。
 
@@ -102,6 +100,8 @@ dsh plugin --profile web add dshmarket
 
 `/mobile` 把需求交给 DSH 对话中的 agent，由它直接修改本机 `$DSH_HOME/mobile-access/` 下的文件，保存后手机端自动生效。改动分两类：界面和交互在 `mobile.css`/`mobile.js`；需要电脑能力时用 `extensions/` 下的扩展，其 `host.mjs` 以本机用户权限在电脑上运行。不修改 DeepSeek Harness 源码。
 
+> `host.mjs` 与本机程序拥有相同权限；仅创建和运行你理解并信任的电脑端扩展。
+
 示例的实际效果：
 
 <p align="center">
@@ -145,7 +145,7 @@ flowchart LR
 
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |
-| `0.1.0–0.1.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
+| `0.1.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 
 插件启动时会检查 DSH Host 版本和移动布局所需的前端依赖，遇到未经验证的版本会直接报错而不是带病启动；CI 也会持续跟踪 DSH 主分支的布局契约。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 
