@@ -16,7 +16,9 @@
 
 <p align="center"><a href="README.md">简体中文</a></p>
 
-> Alpha software. Android is the only supported native app; the iOS client remains an unpublished local experiment and is not built or released. This is a community plugin, not an official DeepSeek product.
+> The native app currently supports Android only; the iOS client remains a local experiment and is not included in builds or releases. This is a DeepSeek Harness community plugin.
+>
+> This release fixes intermittent mobile composer misalignment and wrapping on some screen sizes.
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 

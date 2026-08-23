@@ -1,22 +1,33 @@
 pluginManagement {
     repositories {
-        // Aliyun mirrors first so builds work where dl.google.com is unreachable.
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
-        maven("https://maven.aliyun.com/repository/central")
-        google()
-        mavenCentral()
-        gradlePluginPortal()
+        if ("true".equals(System.getenv("CI"), ignoreCase = true)) {
+            google()
+            mavenCentral()
+            gradlePluginPortal()
+        } else {
+            // Prefer mainland mirrors for local builds where official repositories may be unreachable.
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/gradle-plugin")
+            maven("https://maven.aliyun.com/repository/central")
+            google()
+            mavenCentral()
+            gradlePluginPortal()
+        }
     }
 }
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
-        google()
-        mavenCentral()
+        if ("true".equals(System.getenv("CI"), ignoreCase = true)) {
+            google()
+            mavenCentral()
+        } else {
+            maven("https://maven.aliyun.com/repository/google")
+            maven("https://maven.aliyun.com/repository/central")
+            google()
+            mavenCentral()
+        }
     }
 }
 

@@ -21,7 +21,9 @@
   <a href="README.en.md">English</a>
 </p>
 
-> Alpha 版本，当前原生 App 仅支持 Android；iOS 客户端仍为未发布的本地开发实验，不进入构建与 Release。本项目为 DeepSeek Harness 社区插件。
+> 当前原生 App 仅支持 Android；iOS 客户端尚处于本地实验阶段，暂不纳入构建与发布。本项目是 DeepSeek Harness 社区插件。
+>
+> 本次更新：修复移动端输入框在部分屏幕尺寸下偶发错位和换行的问题。
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
