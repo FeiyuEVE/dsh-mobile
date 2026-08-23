@@ -117,12 +117,15 @@ export const NATIVE_MOBILE_STYLES = `
   .dsh-mobile-branch-toast { position:fixed; z-index:300; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
   .dsh-mobile-branch-toast[data-visible="true"] { opacity:1; transform:translate(-50%,0); }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_row"] { display:flex !important; align-items:center !important; gap:4px !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_tools"] { flex:0 0 auto !important; width:auto !important; min-width:0 !important; gap:6px !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_trailing"] { flex:1 1 auto !important; min-width:0 !important; gap:6px !important; margin-left:auto !important; justify-content:flex-end !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) [class*="_trailing"] [class*="_root"]:has(button[aria-label^="选择模型"]) { flex:0 1 auto !important; width:auto !important; max-width:min(55vw,220px) !important; min-width:0 !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) button[aria-label^="选择模型"] { width:auto !important; max-width:100% !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
-  [data-dsh-mobile-center] [class*="_card"]:has(textarea) button[aria-label^="选择模型"] [class*="_triggerLabel"] { max-width:clamp(120px,36vw,210px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* The desktop composer intentionally wraps whole toolbar groups. On a phone,
+     dynamic model and status labels made that row alternate between one and
+     two lines. Keep two stable columns and let only the model label shrink. */
+  [data-dsh-mobile-composer-row] { display:grid !important; grid-template-columns:max-content minmax(0,1fr) !important; align-items:center !important; gap:4px 8px !important; }
+  [data-dsh-mobile-composer-tools] { display:flex !important; flex-wrap:nowrap !important; width:max-content !important; min-width:0 !important; max-width:max-content !important; gap:6px !important; }
+  [data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important; min-width:0 !important; max-width:100% !important; gap:6px !important; margin-left:0 !important; justify-content:flex-end !important; }
+  [data-dsh-mobile-composer-model] { flex:1 1 0 !important; width:auto !important; min-width:0 !important; max-width:none !important; }
+  [data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
+  [data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
 }
@@ -271,6 +274,24 @@ export function installNativeMobileSurface(): () => void {
         wrapper.dataset.dshMobileTableScroll = 'true'
         table.before(wrapper)
         wrapper.append(table)
+      }
+      const composerCard = center.querySelector<HTMLElement>('[data-composer-card]')
+      const composerRow = composerCard?.querySelector<HTMLElement>(':scope > [data-input-scroll]')?.nextElementSibling
+      if (composerRow instanceof HTMLElement) {
+        composerRow.dataset.dshMobileComposerRow = 'true'
+        const groups = Array.from(composerRow.children).filter((child): child is HTMLElement => child instanceof HTMLElement)
+        const composerTools = groups[0]
+        const composerTrailing = groups.at(-1)
+        if (composerTools !== undefined) composerTools.dataset.dshMobileComposerTools = 'true'
+        if (composerTrailing !== undefined && composerTrailing !== composerTools) {
+          composerTrailing.dataset.dshMobileComposerTrailing = 'true'
+          const modelTrigger = composerTrailing.querySelector<HTMLButtonElement>('button[aria-label^="选择模型"],button[aria-label^="Select model"]')
+          if (modelTrigger !== null) {
+            modelTrigger.dataset.dshMobileComposerModelTrigger = 'true'
+            modelTrigger.parentElement?.setAttribute('data-dsh-mobile-composer-model', 'true')
+            modelTrigger.querySelector<HTMLElement>('[class*="_triggerLabel"]')?.setAttribute('data-dsh-mobile-composer-model-label', 'true')
+          }
+        }
       }
     }
     if (handle !== undefined) handle.dataset.dshMobileHandle = 'true'

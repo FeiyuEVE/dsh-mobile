@@ -38,9 +38,10 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('white-space:normal !important; overflow:visible !important')
     expect(NATIVE_MOBILE_STYLES).toContain('margin-bottom:-6px !important')
     expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-attach')
-    expect(NATIVE_MOBILE_STYLES).toContain('max-width:clamp(120px,36vw,210px)')
-    expect(NATIVE_MOBILE_STYLES).toContain('flex:0 1 auto !important; width:auto !important; max-width:min(55vw,220px) !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('margin-left:auto !important; justify-content:flex-end !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-row] { display:grid !important; grid-template-columns:max-content minmax(0,1fr) !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 0 !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important')
   })
 
   it('uses bounded motion and disables every added animation for reduced motion', () => {
