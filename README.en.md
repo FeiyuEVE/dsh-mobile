@@ -18,7 +18,7 @@
 
 > The native app currently supports Android only; the iOS client remains a local experiment and is not included in builds or releases. This is a DeepSeek Harness community plugin.
 >
-> This release fixes intermittent mobile composer misalignment and wrapping on some screen sizes.
+> This release improves version compatibility and the mobile experience.
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
