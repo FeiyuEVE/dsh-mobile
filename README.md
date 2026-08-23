@@ -23,7 +23,7 @@
 
 > 当前原生 App 仅支持 Android；iOS 客户端尚处于本地实验阶段，暂不纳入构建与发布。本项目是 DeepSeek Harness 社区插件。
 >
-> 本次更新：版本适配与移动端体验优化。
+> 本次更新：适配 DeepSeek Harness 0.1.1，优化移动端交互与布局体验。
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
