@@ -501,10 +501,10 @@ class MainActivity : Activity() {
                     status.text = resources.getQuantityString(R.plurals.harnesses_found, found.size, found.size)
                     found.forEachIndexed { index, harness ->
                         if (index > 0) results.addView(spacer(8))
-                        val credential = credentialStore.load()
-                        val trusted = credential != null
-                            && credential.expiresAt > System.currentTimeMillis()
-                            && credential.instanceId == harness.instanceId
+                        val trustedCredential = credentialStore.load()?.takeIf {
+                            it.expiresAt > System.currentTimeMillis() && it.instanceId == harness.instanceId
+                        }
+                        val trusted = trustedCredential != null
                         results.addView(Button(this).apply {
                             text = getString(R.string.harness_list_item, harness.deviceName, harness.origin.serialized)
                             isAllCaps = false
@@ -519,9 +519,9 @@ class MainActivity : Activity() {
                                 harness.deviceName,
                             )
                             setOnClickListener {
-                                if (trusted && credential != null) {
+                                if (trustedCredential != null) {
                                     showRestoringTrust()
-                                    restoreTrustedDevice(harness.origin, credential) { showPairing(harness) }
+                                    restoreTrustedDevice(harness.origin, trustedCredential) { showPairing(harness) }
                                 } else {
                                     showPairing(harness)
                                 }
@@ -551,8 +551,7 @@ class MainActivity : Activity() {
 
     /** Open the QR scanner, requesting the CAMERA permission once when needed. */
     private fun openScanner() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-            && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), SCAN_CAMERA_REQUEST)
             return
         }
@@ -938,15 +937,12 @@ class MainActivity : Activity() {
         webView?.apply {
             stopLoading()
             clearHistory()
-            clearFormData()
             clearCache(true)
             clearSslPreferences()
         }
         WebStorage.getInstance().deleteAllData()
         WebViewDatabase.getInstance(this).apply {
-            clearFormData()
             clearHttpAuthUsernamePassword()
-            clearUsernamePassword()
         }
         WebView.clearClientCertPreferences(null)
         preferences.edit().clear().apply()

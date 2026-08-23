@@ -4,7 +4,7 @@
 
 ## Supported versions
 
-Only the newest prerelease receives security fixes while the project is in alpha. The README compatibility table identifies the exact DSH release tested with each plugin version.
+Security fixes target the newest stable release. Prereleases receive fixes only when the corresponding GitHub Release says they are supported. The README compatibility table identifies the exact DSH release tested with each plugin version.
 
 ## Reporting a vulnerability
 
@@ -27,7 +27,7 @@ The maintainer will acknowledge a complete report within seven days. Publication
 - Treat every extension `host.mjs` as a local program with the desktop user's Node.js privileges. It is never sandboxed and is not editable through the mobile gateway; only place code there that you trust.
 - Extension Actions and Routes receive filtered request data, a device identifier, and an abort signal. They cannot set proxy security headers or access the gateway's cookies, device tokens, CSRF tokens, or internal request headers.
 
-## Known alpha limitation
+## Known limitation
 
 The current DSH HTML boot process contains inline JavaScript, revives Schemastery callbacks with `new Function`, and applies some styles dynamically. To keep the stock Web UI runnable, the gateway's Content Security Policy currently includes `script-src 'self' 'unsafe-inline' 'unsafe-eval'` and `style-src 'self' 'unsafe-inline'`. The remaining directives still restrict origins, connections, frames, objects, workers, images, and form targets, but this policy does not eliminate script-injection risk. Removing these allowances requires upstream DSH support for nonces, stable hashes, external boot resources, and a non-evaluating schema representation.
 

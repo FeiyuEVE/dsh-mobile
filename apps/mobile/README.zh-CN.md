@@ -51,15 +51,14 @@ DeepSeek Harness 是这个轻量、社区维护的 Android WebView 薄壳的显�
 
 ## 构建
 
-需要 Android Studio 或 Android SDK 36、JDK 17 和 Gradle 8.11.1。
+需要 Android Studio 或 Android SDK 36 和 JDK 17。仓库已包含 Gradle 8.11.1 Wrapper。
 
 ```powershell
 Set-Location apps/mobile/android
-gradle wrapper --gradle-version 8.11.1
-./gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+./gradlew.bat :app:lintDebug :app:testDebugUnitTest :app:assembleDebug -x :app:lintAnalyzeDebugUnitTest -x :app:lintAnalyzeDebugAndroidTest
 ```
 
-Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。当前 Alpha 的 GitHub Release 只提供临时 debug 签名构建；正式发布必须使用仓库外保存的稳定签名密钥生成 release APK 或 AAB。
+Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。GitHub Release 使用仅保存在仓库 Secrets 中的稳定签名密钥生成已签名 Release APK；签名密钥与密码不会进入源码或构建产物。
 
 ## 验收
 

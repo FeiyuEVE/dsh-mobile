@@ -1,6 +1,8 @@
 package io.github.sayach.dshmobile
 
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
@@ -60,7 +62,7 @@ internal object NativeAuthClient {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) error("Bootstrap request failed (${connection.responseCode})")
             val length = connection.contentLengthLong
             if (length > maxBytes) error("Bootstrap response is too large")
-            val body = connection.inputStream.use { it.readNBytes(maxBytes + 1) }
+            val body = connection.inputStream.use { readAtMost(it, maxBytes + 1) }
             if (body.size > maxBytes) error("Bootstrap response is too large")
             return body
         } finally {
@@ -95,4 +97,28 @@ internal object NativeAuthClient {
             connection.disconnect()
         }
     }
+}
+
+/** Reads no more than [limit] bytes using APIs available on every supported Android version. */
+internal fun readAtMost(input: InputStream, limit: Int): ByteArray {
+    require(limit >= 0) { "limit must not be negative" }
+    if (limit == 0) return byteArrayOf()
+
+    val output = ByteArrayOutputStream(minOf(limit, 8 * 1024))
+    val buffer = ByteArray(minOf(limit, 8 * 1024))
+    var remaining = limit
+    while (remaining > 0) {
+        val count = input.read(buffer, 0, minOf(buffer.size, remaining))
+        if (count < 0) break
+        if (count == 0) {
+            val next = input.read()
+            if (next < 0) break
+            output.write(next)
+            remaining -= 1
+            continue
+        }
+        output.write(buffer, 0, count)
+        remaining -= count
+    }
+    return output.toByteArray()
 }

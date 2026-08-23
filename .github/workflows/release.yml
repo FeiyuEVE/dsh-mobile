@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.x
       - run: npm run check:release-tag
@@ -21,29 +21,16 @@ jobs:
   package:
     name: Plugin package
     needs: version
-    permissions:
-      contents: read
-      id-token: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: npm
-          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run verify
       - run: npm pack
-      - name: Publish npm package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
-            npm publish --access public
-          else
-            npm publish --provenance --access public
-          fi
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-package
@@ -60,26 +47,80 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Install Android API 36
         run: sdkmanager "platforms;android-36"
       - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: 8.11.1
-          cache-provider: basic
-      - run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          DSH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DSH_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          DSH_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for name in ANDROID_KEYSTORE_BASE64 DSH_ANDROID_KEYSTORE_PASSWORD DSH_ANDROID_KEY_ALIAS DSH_ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required Android signing secret: $name" >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/dsh-mobile-release.jks"
+      - name: Test and build signed Android package
+        env:
+          DSH_ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/dsh-mobile-release.jks
+          DSH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DSH_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          DSH_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease -x lintAnalyzeDebugUnitTest -x lintAnalyzeDebugAndroidTest
         working-directory: apps/mobile/android
+      - name: Verify Android signature
+        run: |
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose apps/mobile/android/app/build/outputs/apk/release/app-release.apk
       - name: Name Android package
-        run: cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk "dsh-mobile-android-${GITHUB_REF_NAME}.apk"
+        run: |
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "dsh-mobile-android-${GITHUB_REF_NAME}.apk"
+          sha256sum "dsh-mobile-android-${GITHUB_REF_NAME}.apk" > "dsh-mobile-android-${GITHUB_REF_NAME}.apk.sha256"
       - uses: actions/upload-artifact@v7
         with:
           name: android-package
-          path: dsh-mobile-android-${{ github.ref_name }}.apk
+          path: |
+            dsh-mobile-android-${{ github.ref_name }}.apk
+            dsh-mobile-android-${{ github.ref_name }}.apk.sha256
           if-no-files-found: error
+
+  publish:
+    name: Publish npm package
+    needs: [package, android]
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v8
+        with:
+          name: plugin-package
+          path: release-assets
+      - name: Publish npm package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          package="$(find release-assets -maxdepth 1 -type f -name 'dsh-mobile-*.tgz' -print -quit)"
+          test -n "$package"
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm publish "$package" --access public
+          else
+            npm publish "$package" --provenance --access public
+          fi
 
   github-release:
     name: GitHub release
-    needs: [package, android]
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write

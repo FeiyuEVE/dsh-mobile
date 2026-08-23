@@ -39,7 +39,7 @@ Use only short 150-200ms state transitions. Respect `prefers-reduced-motion`; no
 
 - Honor safe-area insets on every edge.
 - Keep conversation content full-width on narrow screens.
-- Avoid horizontal scrolling.
+- Prevent page-level horizontal overflow. Wide tables and code blocks may scroll inside their own containers.
 - Keep primary actions reachable above the soft keyboard.
 - Test 375px and 390px portrait, landscape, font scaling, and keyboard-open states.
 
@@ -57,4 +57,4 @@ Use only short 150-200ms state transitions. Respect `prefers-reduced-motion`; no
 - [ ] Safe-area and soft-keyboard handling.
 - [ ] Reduced motion supported.
 - [ ] No content hidden behind fixed controls.
-- [ ] No horizontal scrolling at 375px.
+- [ ] No page-level horizontal overflow at 375px; wide content scrolls only inside its container.

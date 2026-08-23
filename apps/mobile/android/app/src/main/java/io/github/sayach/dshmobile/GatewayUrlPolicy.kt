@@ -3,6 +3,7 @@ package io.github.sayach.dshmobile
 import java.net.URI
 
 /** A normalized HTTPS origin approved for the dedicated DSH WebView. */
+@ConsistentCopyVisibility
 internal data class GatewayOrigin private constructor(
     val host: String,
     val port: Int,

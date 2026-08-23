@@ -54,15 +54,14 @@ The network security configuration does not trust user-installed CAs. The plugin
 
 ## Build
 
-Requirements: Android Studio or Android SDK 36, JDK 17, and Gradle 8.11.1.
+Requirements: Android Studio or Android SDK 36 and JDK 17. The repository includes the Gradle 8.11.1 Wrapper.
 
 ```powershell
 Set-Location apps/mobile/android
-gradle wrapper --gradle-version 8.11.1
-./gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+./gradlew.bat :app:lintDebug :app:testDebugUnitTest :app:assembleDebug -x :app:lintAnalyzeDebugUnitTest -x :app:lintAnalyzeDebugAndroidTest
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Alpha Releases use ephemeral debug signing. A production release requires a stable signing key kept outside the repository and a signed release APK or AAB.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. GitHub Releases build a signed release APK with a stable signing key stored only in repository secrets; signing keys and passwords never enter the source tree or build artifacts.
 
 ## Acceptance
 

@@ -7,18 +7,20 @@
 <p align="center">Secure, live LAN access to DeepSeek Harness from a phone.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&amp;label=npm&amp;color=CB3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&amp;color=CB3837" alt="npm version"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
   <a href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
 </p>
 
-<p align="center"><a href="README.md">简体中文</a></p>
+<p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
 > The native app currently supports Android only; the iOS client remains a local experiment and is not included in builds or releases. This is a DeepSeek Harness community plugin.
 >
-> This release adds compatibility with DeepSeek Harness 0.1.1 and improves mobile interaction and layout.
+> Current release: DSH Mobile 0.1.4 supports DeepSeek Harness 0.1.1 and continues to refine mobile interaction and layout.
+>
+> The Android app uses a stable release signing key starting with 0.1.4. Users upgrading from 0.1.3 or earlier must uninstall the old app, install the new build, and pair once more; later releases can be installed in place. The plugin can be upgraded independently, and older app builds can continue connecting to the 0.1.4 plugin.
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>Download the Android app</strong></a></p>
 
@@ -136,7 +138,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0–0.1.3` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
+| `0.1.0–0.1.4` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 

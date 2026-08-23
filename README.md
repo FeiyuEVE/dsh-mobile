@@ -7,7 +7,7 @@
 <p align="center">在手机上安全、实时地使用电脑中的 DeepSeek Harness。</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?tag=alpha&label=npm&color=CB3837" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&color=CB3837" alt="npm 版本"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
@@ -18,12 +18,15 @@
   <a href="#能做什么">能做什么</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#扩展与自定义">扩展与自定义</a> ·
+  <a href="CHANGELOG.md">更新记录</a> ·
   <a href="README.en.md">English</a>
 </p>
 
 > 当前原生 App 仅支持 Android；iOS 客户端尚处于本地实验阶段，暂不纳入构建与发布。本项目是 DeepSeek Harness 社区插件。
 >
-> 本次更新：适配 DeepSeek Harness 0.1.1，优化移动端交互与布局体验。
+> 当前版本：DSH Mobile 0.1.4，适配 DeepSeek Harness 0.1.1，并持续优化移动端交互与布局体验。
+>
+> Android App 自 0.1.4 起使用稳定发布签名。已安装 0.1.3 或更早版本的用户需要卸载旧 App、安装新版并重新配对一次；此后版本可直接覆盖升级。插件可独立更新，旧版 App 仍可继续连接 0.1.4 插件。
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases"><strong>下载 Android App</strong></a></p>
 
@@ -142,7 +145,7 @@ flowchart LR
 
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |
-| `0.1.0–0.1.3` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
+| `0.1.0–0.1.4` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 
 插件启动时会检查 DSH Host 版本和移动布局所需的前端依赖，遇到未经验证的版本会直接报错而不是带病启动；CI 也会持续跟踪 DSH 主分支的布局契约。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 
