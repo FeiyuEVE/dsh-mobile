@@ -110,7 +110,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          package="$(find release-assets -maxdepth 1 -type f -name 'dsh-mobile-*.tgz' -print -quit)"
+          package="$(find "$GITHUB_WORKSPACE/release-assets" -maxdepth 1 -type f -name 'dsh-mobile-*.tgz' -print -quit)"
           test -n "$package"
           if [ -n "$NODE_AUTH_TOKEN" ]; then
             npm publish "$package" --access public
