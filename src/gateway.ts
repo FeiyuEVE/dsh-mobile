@@ -116,10 +116,10 @@ interface BootGraphEntry {
 
 /** Replace only DSH's layout client module while retaining its complete plugin graph. */
 export function rewriteMobileIndex(html: string): string {
-  const assignment = 'window.__DSH_BOOT__ = '
-  const start = html.indexOf(assignment)
-  if (start < 0) throw new Error('upstream DSH index has no boot manifest')
-  const valueStart = start + assignment.length
+  const assignment = /(?:window\.__DSH_BOOT__|globalThis\["__DSH_BOOT__"\])\s*=\s*/u.exec(html)
+  if (assignment?.index === undefined) throw new Error('upstream DSH index has no boot manifest')
+  const start = assignment.index
+  const valueStart = start + assignment[0].length
   const scriptEnd = html.indexOf('</script>', valueStart)
   if (scriptEnd < 0) throw new Error('upstream DSH boot manifest script is incomplete')
   const source = html.slice(valueStart, scriptEnd).trim().replace(/;$/u, '')
@@ -138,7 +138,7 @@ export function rewriteMobileIndex(html: string): string {
   }
   layout[0].url = MOBILE_LAYOUT_PATH
   layout[0].rev = 'dsh-mobile-layout-v1'
-  const replacement = `window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment}${JSON.stringify(parsed)};`
+  const replacement = `window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return `${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`
 }
 

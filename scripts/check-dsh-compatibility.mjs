@@ -12,6 +12,15 @@ async function text(path) {
   return readFile(resolve(sourceRoot, path), 'utf8')
 }
 
+async function optionalText(path) {
+  try {
+    return await text(path)
+  } catch (error) {
+    if (error !== null && typeof error === 'object' && error.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
 const plugin = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const supported = plugin.peerDependencies['@deepseek-ai/dsh-host-webserver'].split('||').map(value => value.trim())
 const root = await json('package.json')
@@ -27,6 +36,7 @@ const packages = [
   'packages/client/ui-sidebar/package.json',
   'packages/client/ui-conversation/package.json',
   'packages/client/ui-settings/package.json',
+  'packages/client/ui-user-questions/package.json',
 ]
 for (const path of packages) {
   const manifest = await json(path)
@@ -55,6 +65,22 @@ for (const declaration of [
 const conversation = await text('packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx')
 if (!conversation.includes('data-conversation-scroll')) {
   throw new Error('DSH conversation no longer exposes data-conversation-scroll')
+}
+
+const questions = await text('packages/client/ui-user-questions/src/client/QuestionComposer.tsx')
+const planReview = await text('packages/client/ui-user-questions/src/client/PlanReviewPanel.tsx')
+for (const marker of ['data-question-key', 'data-question-scroll']) {
+  if (!questions.includes(marker)) throw new Error(`DSH question UI contract changed: missing ${marker}`)
+}
+for (const marker of ['data-plan-review-key', 'data-plan-review-scroll']) {
+  if (!planReview.includes(marker)) throw new Error(`DSH plan-review UI contract changed: missing ${marker}`)
+}
+
+const hostInjections = await optionalText('packages/host/webserver/src/injections.ts')
+const legacyModules = await optionalText('packages/client/modules/src/index.ts')
+if (!hostInjections?.includes('globalThis[${name}] = ${value}')
+  && !legacyModules?.includes('window.__DSH_BOOT__ = ${json}')) {
+  throw new Error('DSH boot manifest uses an unsupported global injection syntax')
 }
 
 process.stdout.write(`DSH compatibility ok: ${root.version}\n`)

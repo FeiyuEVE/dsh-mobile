@@ -30,7 +30,7 @@ It also lets you customize the phone from a DSH conversation: `/mobile <what you
 
 - **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
 - **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
-- **A dedicated touch layout**: session drawer, tool details, settings, and composer reorganized for phones.
+- **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones.
 - **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
 - **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
 
@@ -134,7 +134,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.1.0-alpha.36` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7` |
+| `0.1.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 
 At startup, the plugin verifies the DSH Host version and the frontend dependencies required by the mobile layout; an unverified release fails with a clear error instead of serving a broken page. CI also tracks the DSH main branch layout contract. If a DSH upgrade reports an incompatibility, update DSH Mobile first.
 
