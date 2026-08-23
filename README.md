@@ -46,7 +46,7 @@ DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App
 已经安装 `dsh` 命令：
 
 ```powershell
-dsh plugin --profile web add dsh-mobile@alpha
+dsh plugin --profile web add dsh-mobile@latest
 dsh plugin --profile web exec dsh-mobile setup
 dsh --profile web
 ```
@@ -55,7 +55,7 @@ dsh --profile web
 
 ```powershell
 corepack enable; pnpm install
-pnpm dsh plugin --profile web add dsh-mobile@alpha
+pnpm dsh plugin --profile web add dsh-mobile@latest
 pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
@@ -140,7 +140,7 @@ flowchart LR
 
 | DSH Mobile       | 已验证的 DeepSeek Harness                |
 | ------------------ | ------------------------------------------ |
-| `0.1.0–0.1.1` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
+| `0.1.0–0.1.2` | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 
 插件启动时会检查 DSH Host 版本和移动布局所需的前端依赖，遇到未经验证的版本会直接报错而不是带病启动；CI 也会持续跟踪 DSH 主分支的布局契约。升级 DSH 后如遇兼容提示，请先升级 DSH Mobile。
 
