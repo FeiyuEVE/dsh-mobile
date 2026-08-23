@@ -100,12 +100,17 @@
       }
     },
     {
-      "name": "one-time pair fragment is accepted but not persisted",
-      "input": "https://DSH.LOCAL:3443/mobile-access/pair#token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "fingerprint-bound pair fragment is accepted but not persisted",
+      "input": "https://DSH.LOCAL:3443/mobile-access/pair#instance=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "expected": {
         "origin": "https://dsh.local:3443",
-        "initialURL": "https://dsh.local:3443/mobile-access/pair#token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "initialURL": "https://dsh.local:3443/mobile-access/pair#instance=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       }
+    },
+    {
+      "name": "legacy token-only pair fragment is rejected",
+      "input": "https://dsh.local:3443/mobile-access/pair#token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": null
     },
     {
       "name": "pair token never enters a query string",
@@ -119,7 +124,7 @@
     },
     {
       "name": "malformed pair fragment is rejected",
-      "input": "https://dsh.local:3443/mobile-access/pair#token=short",
+      "input": "https://dsh.local:3443/mobile-access/pair#instance=short&token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "expected": null
     }
   ],

@@ -16,10 +16,10 @@ internal enum class LoadFailure {
     NETWORK,
 }
 
-/** Enforces origin policy and accepts only the pairing-key-pinned private CA. */
+/** Enforces exact-origin navigation and optionally accepts the LAN pairing CA. */
 internal class SecureWebViewClient(
     private val origin: GatewayOrigin,
-    private val caCertificate: ByteArray,
+    private val caCertificate: ByteArray?,
     private val openExternal: (Uri) -> Unit,
     private val onBlocked: () -> Unit,
     private val onFailure: (LoadFailure) -> Unit,
@@ -49,7 +49,7 @@ internal class SecureWebViewClient(
     }
 
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-        val pinned = error.primaryError == SslError.SSL_UNTRUSTED
+        val pinned = caCertificate != null && error.primaryError == SslError.SSL_UNTRUSTED
             && GatewayUrlPolicy.isSameOrigin(origin, error.url)
             && PinnedTls.acceptsWebViewLeaf(origin, caCertificate, error.certificate.x509Certificate)
         if (pinned) {

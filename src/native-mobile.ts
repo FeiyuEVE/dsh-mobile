@@ -79,6 +79,9 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] pre { max-width:100%; overflow-x:auto; }
   [data-dsh-mobile-center] :is(img,video,canvas,svg) { max-width:100%; }
   [data-dsh-mobile-message-scroll] { box-sizing:border-box !important; width:100% !important; padding:8px 10px 20px !important; }
+  [data-dsh-mobile-history-loader] { position:relative !important; min-height:1px !important; }
+  [data-dsh-mobile-history-loader] button:not(:disabled) { position:absolute !important; width:1px !important; height:1px !important; margin:-1px !important; padding:0 !important; clip-path:inset(50%) !important; opacity:0 !important; overflow:hidden !important; pointer-events:none !important; }
+  [data-dsh-mobile-history-loader] button:disabled { min-height:28px !important; padding:4px 12px !important; }
   [data-dsh-mobile-message-column] { box-sizing:border-box !important; width:100% !important; max-width:none !important; margin:0 !important; padding:0 !important; gap:10px !important; }
   [data-dsh-mobile-message-column] > * { width:100% !important; max-width:100% !important; }
   [data-dsh-mobile-message-column] [data-disclosure-row] { box-sizing:border-box !important; display:grid !important; grid-template-columns:16px minmax(0,1fr) !important; grid-auto-rows:auto !important; align-items:center !important; column-gap:6px !important; width:100% !important; height:auto !important; min-height:40px !important; padding:4px 0 !important; }
@@ -154,6 +157,13 @@ function firstByClassSuffix(root: ParentNode, suffix: string): HTMLElement | und
   return Array.from(root.querySelectorAll<HTMLElement>('[class]')).find(element => classToken(element, suffix))
 }
 
+const AUTO_HISTORY_THRESHOLD_PX = 64
+
+/** Whether a user-driven scroll moved upward into the automatic history-loading zone. */
+export function shouldAutoLoadEarlier(previousTop: number, currentTop: number): boolean {
+  return currentTop <= AUTO_HISTORY_THRESHOLD_PX && currentTop < previousTop - 0.5
+}
+
 /** Add mobile semantics without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
@@ -208,6 +218,29 @@ export function installNativeMobileSurface(): () => void {
   let transitionRestartFrame = 0
   let transitionTimer = 0
   let transitionTarget: HTMLElement | undefined
+  let historyScroller: HTMLElement | undefined
+  let historyPreviousTop = 0
+  const historyLoadButton = (): HTMLButtonElement | undefined => {
+    const loader = historyScroller === undefined ? undefined : firstByClassSuffix(historyScroller, '_older')
+    return loader?.querySelector<HTMLButtonElement>('button') ?? undefined
+  }
+  const onHistoryScroll = (): void => {
+    if (historyScroller === undefined) return
+    const currentTop = Math.max(0, historyScroller.scrollTop)
+    const shouldLoad = shouldAutoLoadEarlier(historyPreviousTop, currentTop)
+    historyPreviousTop = currentTop
+    if (!shouldLoad) return
+    const button = historyLoadButton()
+    if (button === undefined || button.disabled || button.getAttribute('aria-disabled') === 'true') return
+    button.click()
+  }
+  const bindHistoryScroller = (next: HTMLElement | undefined): void => {
+    if (historyScroller === next) return
+    historyScroller?.removeEventListener('scroll', onHistoryScroll)
+    historyScroller = next
+    historyPreviousTop = next?.scrollTop ?? 0
+    historyScroller?.addEventListener('scroll', onHistoryScroll, { passive: true })
+  }
   const animateNavigation = (event: MouseEvent): void => {
     if (!(event.target instanceof Element)) return
     const trigger = event.target.closest<HTMLElement>('button,a,[role="tab"],[aria-selected]')
@@ -255,13 +288,28 @@ export function installNativeMobileSurface(): () => void {
     const center = frame === undefined ? dedicatedCenter : firstByClassSuffix(frame, '_centerCol')
     const details = frame === undefined ? undefined : firstByClassSuffix(frame, '_detailsCol')
     const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
-    if (center === undefined) return
+    if (center === undefined) {
+      bindHistoryScroller(undefined)
+      return
+    }
     if (center !== undefined) {
       center.dataset.dshMobileCenter = 'true'
       center.querySelector<HTMLElement>('header')?.setAttribute('data-dsh-mobile-header', 'true')
       viewArea = firstByClassSuffix(center, '_viewArea')
       if (viewArea !== undefined) viewArea.dataset.dshMobileView = 'true'
       const conversation = center.querySelector<HTMLElement>('[data-conversation-scroll]')
+      bindHistoryScroller(conversation ?? undefined)
+      const historyLoader = conversation === null ? undefined : firstByClassSuffix(conversation, '_older')
+      if (historyLoader !== undefined) {
+        historyLoader.dataset.dshMobileHistoryLoader = 'true'
+        historyLoader.setAttribute('aria-live', 'polite')
+        const button = historyLoader.querySelector<HTMLButtonElement>('button')
+        if (button !== null) {
+          button.tabIndex = -1
+          if (button.disabled) button.removeAttribute('aria-hidden')
+          else button.setAttribute('aria-hidden', 'true')
+        }
+      }
       const messageColumn = conversation === null ? undefined : firstByClassSuffix(conversation, '_column')
       const messageScroll = messageColumn?.parentElement
       if (messageColumn !== undefined && messageScroll !== null && messageScroll !== undefined && classToken(messageScroll, '_scroll')) {
@@ -337,7 +385,7 @@ export function installNativeMobileSurface(): () => void {
   }
   const schedule = (): void => { if (scheduled === 0) scheduled = requestAnimationFrame(sync) }
   const observer = new MutationObserver(schedule)
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'disabled'] })
   backdrop.addEventListener('click', () => { if (sidebar?.dataset.open === 'true') toggle?.click() })
   sync()
   return () => {
@@ -350,6 +398,7 @@ export function installNativeMobileSurface(): () => void {
     if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
     if (transitionTimer !== 0) clearTimeout(transitionTimer)
     transitionTarget?.removeAttribute('data-dsh-mobile-view-transition')
+    historyScroller?.removeEventListener('scroll', onHistoryScroll)
     document.removeEventListener('pointerdown', onPointerDown, true)
     document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('click', animateNavigation)

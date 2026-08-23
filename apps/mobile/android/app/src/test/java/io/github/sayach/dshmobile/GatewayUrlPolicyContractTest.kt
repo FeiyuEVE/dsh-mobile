@@ -67,20 +67,24 @@ class GatewayUrlPolicyContractTest {
     }
 
     @Test
-    fun pairingTokenExtractsOnlyTheOneTimeLinkToken() {
+    fun pairingKeyRequiresTheFingerprintBoundLink() {
+        val instanceId = "a".repeat(64)
         val token = "A".repeat(43)
-        assertEquals(token, GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair#token=$token"))
+        assertEquals(
+            PairingKey(instanceId, token),
+            GatewayUrlPolicy.pairingKey("https://192.168.1.20:3443/mobile-access/pair#instance=$instanceId&token=$token"),
+        )
 
         // A bare pairing key is not a link.
-        assertNull(GatewayUrlPolicy.pairingToken("dsh1.${"a".repeat(64)}.${"B".repeat(43)}"))
+        assertNull(GatewayUrlPolicy.pairingKey("dsh1.$instanceId.${"B".repeat(43)}"))
 
-        // The fixed pairing page without a fragment carries no token.
-        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair"))
+        // Legacy token-only links do not authenticate the certificate fingerprint.
+        assertNull(GatewayUrlPolicy.pairingKey("https://192.168.1.20:3443/mobile-access/pair#token=$token"))
 
-        // Wrong token length is rejected.
-        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/mobile-access/pair#token=${"C".repeat(42)}"))
+        // The fixed pairing page without a fragment carries no key.
+        assertNull(GatewayUrlPolicy.pairingKey("https://192.168.1.20:3443/mobile-access/pair"))
 
         // Any path other than the fixed pairing page is rejected.
-        assertNull(GatewayUrlPolicy.pairingToken("https://192.168.1.20:3443/other#token=${"D".repeat(43)}"))
+        assertNull(GatewayUrlPolicy.pairingKey("https://192.168.1.20:3443/other#instance=$instanceId&token=${"D".repeat(43)}"))
     }
 }

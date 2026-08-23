@@ -363,25 +363,27 @@ export class MobileAccessService extends Service {
   }
 
   /** Read a local client entry after validating that it remains inside its directory. */
-  async readClientFile(id: string, kind: 'script' | 'style'): Promise<{ readonly body: Buffer; readonly digest: string }> {
+  async readClientFile(id: string, kind: 'script' | 'style', signal?: AbortSignal): Promise<{ readonly body: Buffer; readonly digest: string }> {
+    signal?.throwIfAborted()
     const active = this.local.get(id)
     if (active === undefined) throw new MobileExtensionError('extension_not_found', 'extension not found', 404)
     const path = kind === 'script' ? active.scriptFile : active.styleFile
     if (path === undefined) throw new MobileExtensionError('extension_asset_not_found', 'extension asset not found', 404)
     const maximum = kind === 'script' ? EXTENSION_LIMITS.script : EXTENSION_LIMITS.css
     const file = await regularFile(path, maximum, kind)
-    const body = await readFile(file.path)
+    const body = await readFile(file.path, { signal })
     return { body, digest: createHash('sha256').update(body).digest('hex') }
   }
 
   /** Read a local static asset after containment and size checks. */
-  async readAsset(id: string, assetPath: string): Promise<{ readonly body: Buffer; readonly digest: string; readonly name: string }> {
+  async readAsset(id: string, assetPath: string, signal?: AbortSignal): Promise<{ readonly body: Buffer; readonly digest: string; readonly name: string }> {
+    signal?.throwIfAborted()
     const active = this.local.get(id)
     if (active === undefined) throw new MobileExtensionError('extension_not_found', 'extension not found', 404)
     let file
     try { file = await containedPath(join(active.directory, 'assets'), assetPath, EXTENSION_LIMITS.asset, 'asset') }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new MobileExtensionError('extension_asset_not_found', 'extension asset not found', 404); throw error }
-    const body = await readFile(file.path)
+    const body = await readFile(file.path, { signal })
     return { body, digest: createHash('sha256').update(body).digest('hex'), name: basename(file.path) }
   }
 

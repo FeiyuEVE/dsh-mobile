@@ -78,7 +78,7 @@ internal data class GatewayConnection(
 ) {
     companion object {
         private const val PAIR_PATH = "/mobile-access/pair"
-        private val PAIR_FRAGMENT = Regex("^token=[A-Za-z0-9_-]{43}$")
+        private val PAIR_FRAGMENT = Regex("^instance=[a-f0-9]{64}&token=[A-Za-z0-9_-]{43}$")
 
         /** Accepts a bare origin or the plugin's fixed one-time pairing URL. */
         fun parse(rawValue: String): GatewayConnection? {
@@ -100,7 +100,7 @@ internal data class GatewayConnection(
 
 /** Shared navigation and download decisions for the Android shell. */
 internal object GatewayUrlPolicy {
-    private val PAIR_TOKEN = Regex("^[A-Za-z0-9_-]{43}$")
+    private val PAIR_FRAGMENT = Regex("^instance=([a-f0-9]{64})&token=([A-Za-z0-9_-]{43})$")
     /** Returns a canonical origin for persistence, or `null` for unsafe input. */
     fun normalizeOrigin(rawValue: String): String? = GatewayOrigin.parse(rawValue)?.serialized
 
@@ -116,16 +116,12 @@ internal object GatewayUrlPolicy {
         return GatewayOrigin.fromCandidate(candidate) != null
     }
 
-    /**
-     * Extracts the one-time pairing token from the plugin's fixed pairing URL.
-     * The URL is the low-friction channel: paste it into the pairing field and
-     * the app derives the origin and token instead of a hand-typed 43-char key.
-     */
-    fun pairingToken(rawValue: String): String? {
+    /** Extracts the fingerprint-bound key from the plugin's fixed Android pairing URL. */
+    fun pairingKey(rawValue: String): PairingKey? {
         val connection = GatewayConnection.parse(rawValue) ?: return null
         val fragment = runCatching { URI(connection.initialUrl).fragment }.getOrNull() ?: return null
-        val token = fragment.removePrefix("token=")
-        return if (PAIR_TOKEN.matches(token)) token else null
+        val match = PAIR_FRAGMENT.matchEntire(fragment) ?: return null
+        return PairingKey(match.groupValues[1], match.groupValues[2])
     }
 
     /**

@@ -30,4 +30,14 @@ describe('authenticated computer image browser', () => {
     expect(() => resolveComputerImagePath('relative.png')).toThrow(/bad_path/)
     await expect(readComputerImage(join(root, 'notes.txt'))).rejects.toThrow(/unsupported_file_type/)
   })
+
+  it('stops directory and file reads when device authorization is revoked', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-image-abort-'))
+    const image = join(root, 'photo.png')
+    await writeFile(image, 'png')
+    const controller = new AbortController()
+    controller.abort(new Error('device_revoked'))
+    await expect(listComputerImages(root, controller.signal)).rejects.toThrow('device_revoked')
+    await expect(readComputerImage(image, controller.signal)).rejects.toThrow('device_revoked')
+  })
 })

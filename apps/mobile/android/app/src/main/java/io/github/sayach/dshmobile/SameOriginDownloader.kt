@@ -18,7 +18,7 @@ internal object SameOriginDownloader {
         initialUrl: String,
         userAgent: String?,
         cookieHeader: String?,
-        caCertificate: ByteArray,
+        caCertificate: ByteArray?,
         output: OutputStream,
     ) {
         var current = initialUrl
@@ -29,7 +29,7 @@ internal object SameOriginDownloader {
             val connection = URI(current).toURL().openConnection() as? HttpsURLConnection
                 ?: throw IOException("Download transport is not HTTPS")
             try {
-                connection.sslSocketFactory = PinnedTls.socketFactory(caCertificate)
+                if (caCertificate != null) connection.sslSocketFactory = PinnedTls.socketFactory(caCertificate)
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = 15_000
                 connection.readTimeout = 60_000

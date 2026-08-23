@@ -28,13 +28,27 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: native/funnel-host/go.sum
       - run: npm ci
+      - run: npm run build:funnel-host
       - run: npm run verify
-      - run: npm pack
+      - name: Pack plugin and release metadata
+        run: |
+          npm pack
+          sha256sum dsh-mobile-*.tgz > dsh-mobile-plugin.sha256
+          npm sbom --sbom-format cyclonedx > dsh-mobile-npm-sbom.cdx.json
+          (cd native/funnel-host && go list -m all) > dsh-mobile-funnel-go-modules.txt
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-package
-          path: dsh-mobile-*.tgz
+          path: |
+            dsh-mobile-*.tgz
+            dsh-mobile-plugin.sha256
+            dsh-mobile-npm-sbom.cdx.json
+            dsh-mobile-funnel-go-modules.txt
           if-no-files-found: error
 
   android:
@@ -112,6 +126,12 @@ jobs:
         run: |
           package="$(find "$GITHUB_WORKSPACE/release-assets" -maxdepth 1 -type f -name 'dsh-mobile-*.tgz' -print -quit)"
           test -n "$package"
+          version="${GITHUB_REF_NAME#v}"
+          published="$(npm view "dsh-mobile@$version" version 2>/dev/null || true)"
+          if [ "$published" = "$version" ]; then
+            echo "dsh-mobile@$version is already published; leaving the immutable npm release unchanged."
+            exit 0
+          fi
           if [ -n "$NODE_AUTH_TOKEN" ]; then
             npm publish "$package" --access public
           else
@@ -129,8 +149,16 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
-      - uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          prerelease: false
-          files: release-assets/*
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$GITHUB_REF_NAME already has a GitHub release; leaving its assets unchanged."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

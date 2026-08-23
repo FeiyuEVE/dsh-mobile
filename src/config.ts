@@ -85,6 +85,10 @@ export interface ResolvedGatewayConfig {
   readonly instanceId: string
   readonly pairingCaFile?: string
   readonly tls: TlsConfig
+  /** Whether the public hop is HTTPS, even when a trusted loopback proxy terminates TLS. */
+  readonly publicTls: boolean
+  /** LAN discovery is disabled for private proxy listeners such as Funnel ingress. */
+  readonly discovery: boolean
   readonly pairingTtlMs: number
   readonly deviceTtlMs: number
   readonly sessionTtlMs: number
@@ -296,6 +300,8 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
         : (() => { throw new Error('instanceId must be a lowercase SHA-256 value') })(),
     ...(value.pairingCaFile === undefined ? {} : { pairingCaFile: absoluteFile(value.pairingCaFile, 'pairingCaFile') }),
     tls,
+    publicTls: tls.mode === 'provided',
+    discovery: true,
     pairingTtlMs: integer(value.pairingTtlMs, 'pairingTtlMs', 120_000, 10_000, 600_000),
     deviceTtlMs,
     sessionTtlMs,

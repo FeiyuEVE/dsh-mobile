@@ -2,6 +2,14 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.2.0 - 2026-08-24
+
+- Add independent LAN and remote access flows with separate paired-device stores.
+- Add optional Tailscale Funnel and managed cpolar remote providers.
+- Restore saved Android connections automatically and improve mobile loading over limited links.
+- Page older session history on demand and compress eligible gateway responses.
+- Build the pinned Funnel host from source and publish checksums, an SBOM, and third-party notices.
+
 ## 0.1.4 - 2026-08-23
 
 - Keep the plugin compatible with DeepSeek Harness 0.1.1.

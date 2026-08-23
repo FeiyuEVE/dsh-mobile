@@ -17,6 +17,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer, type Ser
 import { connect, isIP, type AddressInfo, type Socket } from 'node:net'
 import { Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { createGzip } from 'node:zlib'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import Bonjour from 'bonjour-service'
 import * as QRCode from 'qrcode'
@@ -78,6 +79,8 @@ interface ActiveWebSocket {
 
 const MAX_CONTROL_BODY_BYTES = 16 * 1024
 const MAX_HEADER_BYTES = 16 * 1024
+const MOBILE_HISTORY_PAGE_MESSAGES = 10
+const SESSION_HISTORY_PATH = '/api/session.history'
 const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
@@ -429,6 +432,79 @@ function sanitizeResponseHeaders(headers: IncomingHttpHeaders, upstream: URL): O
   return clean
 }
 
+function acceptsGzip(header: string | undefined): boolean {
+  if (header === undefined) return false
+  let wildcard: boolean | undefined
+  for (const entry of header.split(',')) {
+    const [rawName, ...parameters] = entry.split(';')
+    const name = rawName?.trim().toLowerCase()
+    if (name === undefined || name === '') continue
+    let quality = 1
+    for (const parameter of parameters) {
+      const match = /^\s*q\s*=\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*$/iu.exec(parameter)
+      if (match !== null) quality = Number(match[1])
+    }
+    if (name === 'gzip') return quality > 0
+    if (name === '*') wildcard = quality > 0
+  }
+  return wildcard ?? false
+}
+
+function isCompressibleContentType(value: string | string[] | undefined): boolean {
+  const contentType = Array.isArray(value) ? value[0] : value
+  if (contentType === undefined) return false
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+  return mediaType.startsWith('text/')
+    || /^(?:application\/(?:javascript|json|xml|x-javascript)|image\/svg\+xml)$/u.test(mediaType)
+}
+
+function shouldCompressResponse(request: IncomingMessage, response: IncomingMessage): boolean {
+  const pathname = request.url?.split('?', 1)[0] ?? ''
+  const compressibleRequest = (request.method === 'GET'
+      && (pathname.startsWith('/plugins/') || pathname.startsWith('/assets/')))
+    || (request.method === 'POST' && pathname === SESSION_HISTORY_PATH)
+  return compressibleRequest
+    && response.statusCode === 200
+    && request.headers.range === undefined
+    && response.headers['content-range'] === undefined
+    && response.headers['content-encoding'] === undefined
+    && acceptsGzip(request.headers['accept-encoding'])
+    && isCompressibleContentType(response.headers['content-type'])
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function mobileHistoryRequestBody(request: IncomingMessage, body: Buffer): Buffer {
+  if (request.method !== 'POST' || request.url?.split('?', 1)[0] !== SESSION_HISTORY_PATH) return body
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body.toString('utf8'))
+  } catch {
+    return body
+  }
+  if (!isJsonRecord(parsed) || parsed.method !== 'session.history' || !isJsonRecord(parsed.payload)) return body
+  const requested = parsed.payload.maxMessages
+  if (typeof requested === 'number' && Number.isInteger(requested) && requested > 0 && requested <= MOBILE_HISTORY_PAGE_MESSAGES) {
+    return body
+  }
+  return Buffer.from(JSON.stringify({
+    ...parsed,
+    payload: { ...parsed.payload, maxMessages: MOBILE_HISTORY_PAGE_MESSAGES },
+  }))
+}
+
+function addVaryAcceptEncoding(headers: OutgoingHttpHeaders): void {
+  const existing = headers.vary
+  const rawValues: string[] = Array.isArray(existing)
+    ? existing.map(value => String(value))
+    : existing === undefined ? [] : [String(existing)]
+  const values = rawValues.flatMap(value => value.split(',').map(part => part.trim()).filter(Boolean))
+  if (!values.some(value => value.toLowerCase() === 'accept-encoding')) values.push('Accept-Encoding')
+  headers.vary = values.join(', ')
+}
+
 function requestCookies(request: IncomingMessage): ReadonlyMap<string, string> {
   const cookies = parseCookies(request.headers.cookie)
   if (cookies === undefined) throw new HttpError(401, 'authentication_failed')
@@ -530,6 +606,7 @@ function extensionContentType(path: string): string {
 /** Authenticated TLS edge in front of the ordinary loopback-only DSH Web server. */
 export class MobileAccessGateway {
   readonly access: AccessController
+  private readonly listenerTlsEnabled: boolean
   private readonly tlsEnabled: boolean
   private policy: RequestTrustPolicy | undefined
   private server: GatewayServer | undefined
@@ -549,7 +626,8 @@ export class MobileAccessGateway {
   private readonly renewLimiter: BoundedRateLimiter
 
   constructor(readonly config: ResolvedGatewayConfig, store: DeviceStore, private readonly extensions?: MobileAccessService) {
-    this.tlsEnabled = config.tls.mode === 'provided'
+    this.listenerTlsEnabled = config.tls.mode === 'provided'
+    this.tlsEnabled = config.publicTls
     this.access = new AccessController(store, {
       pairingTtlMs: config.pairingTtlMs,
       deviceTtlMs: config.deviceTtlMs,
@@ -592,7 +670,7 @@ export class MobileAccessGateway {
           else sendFailure(response, mapped.status, mapped.code, this.tlsEnabled)
         })
       }
-      const server = this.tlsEnabled
+      const server = this.listenerTlsEnabled
         ? createHttpsServer(await tlsOptions(this.config), handler)
         : createHttpServer({ maxHeaderSize: MAX_HEADER_BYTES }, handler)
       this.server = server
@@ -607,6 +685,7 @@ export class MobileAccessGateway {
           return
         }
         this.connectedSockets.add(socket)
+        socket.on('error', () => { socket.destroy() })
         socket.once('close', () => { this.connectedSockets.delete(socket) })
       })
       server.on('connect', (_request, socket) => { socket.destroy() })
@@ -634,7 +713,7 @@ export class MobileAccessGateway {
         this.config.allowedCidrs,
         this.tlsEnabled,
       )
-      await this.startDiscovery(address.port)
+      if (this.config.discovery) await this.startDiscovery(address.port)
     } catch (error) {
       await this.closeFailedStart()
       throw error
@@ -1012,55 +1091,70 @@ export class MobileAccessGateway {
       return
     }
     if (customAsset !== undefined) {
-      let body: Buffer
-      let mtime: Date | undefined
+      const operation = this.allocateRequest(authorization, response, {})
       try {
-        body = await readFile(customAsset.file)
+        let body: Buffer
+        let mtime: Date | undefined
         try {
-          const fileStat = await stat(customAsset.file)
-          mtime = fileStat.mtime
-        } catch { /* keep undefined */ }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        if (customAsset.fallback === undefined) throw new HttpError(503, 'mobile_frontend_unavailable')
-        body = Buffer.from(customAsset.fallback)
-      }
-      if (body.byteLength > 256 * 1024) throw new HttpError(413, 'payload_too_large')
-      const etag = createHash('sha256').update(body).digest('hex')
-      const ifNoneMatch = headerValue(request.headers, 'if-none-match')
-      if (ifNoneMatch !== undefined && ifNoneMatch === etag) {
+          body = await readFile(customAsset.file, { signal: operation.signal })
+          try {
+            const fileStat = await stat(customAsset.file)
+            mtime = fileStat.mtime
+          } catch { /* keep undefined */ }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          if (customAsset.fallback === undefined) throw new HttpError(503, 'mobile_frontend_unavailable')
+          body = Buffer.from(customAsset.fallback)
+        }
+        if (body.byteLength > 256 * 1024) throw new HttpError(413, 'payload_too_large')
+        const etag = createHash('sha256').update(body).digest('hex')
+        const ifNoneMatch = headerValue(request.headers, 'if-none-match')
+        if (ifNoneMatch !== undefined && ifNoneMatch === etag) {
+          setSecurityHeaders(response, this.tlsEnabled)
+          response.writeHead(304)
+          response.end()
+          return
+        }
         setSecurityHeaders(response, this.tlsEnabled)
-        response.writeHead(304)
-        response.end()
+        const responseHeaders: Record<string, string | number> = {
+          'Content-Type': customAsset.contentType,
+          'Content-Length': body.byteLength,
+          'ETag': etag,
+        }
+        if (mtime !== undefined) responseHeaders['Last-Modified'] = mtime.toUTCString()
+        response.writeHead(200, responseHeaders)
+        response.end(body)
         return
+      } finally {
+        operation.release()
       }
-      setSecurityHeaders(response, this.tlsEnabled)
-      const responseHeaders: Record<string, string | number> = {
-        'Content-Type': customAsset.contentType,
-        'Content-Length': body.byteLength,
-        'ETag': etag,
-      }
-      if (mtime !== undefined) responseHeaders['Last-Modified'] = mtime.toUTCString()
-      response.writeHead(200, responseHeaders)
-      response.end(body)
-      return
     }
     if (computerImages) {
-      const query = new URL(target.raw, this.address().origin).searchParams
-      sendJson(response, 200, await listComputerImages(query.get('path')), this.tlsEnabled)
-      return
+      const operation = this.allocateRequest(authorization, response, {})
+      try {
+        const query = new URL(target.raw, this.address().origin).searchParams
+        sendJson(response, 200, await listComputerImages(query.get('path'), operation.signal), this.tlsEnabled)
+        return
+      } finally {
+        operation.release()
+      }
     }
     if (computerImage) {
-      const query = new URL(target.raw, this.address().origin).searchParams
-      const image = await readComputerImage(query.get('path'))
-      setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(200, {
-        'Content-Type': image.contentType,
-        'Content-Length': image.body.byteLength,
-        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(image.name)}`,
-      })
-      response.end(image.body)
-      return
+      const operation = this.allocateRequest(authorization, response, {})
+      try {
+        const query = new URL(target.raw, this.address().origin).searchParams
+        const image = await readComputerImage(query.get('path'), operation.signal)
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(200, {
+          'Content-Type': image.contentType,
+          'Content-Length': image.body.byteLength,
+          'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(image.name)}`,
+        })
+        response.end(image.body)
+        return
+      } finally {
+        operation.release()
+      }
     }
     const stockFrontend = new URL(target.raw, this.address().origin).searchParams.get('frontend') === 'stock'
     const acceptsHtml = request.headers.accept?.split(',').some(value => value.trim().split(';', 1)[0] === 'text/html') ?? false
@@ -1084,35 +1178,46 @@ export class MobileAccessGateway {
     if (request.method !== 'GET' && request.method !== 'HEAD') this.requireCsrf(request, authorization)
     if (targetInfo.kind === 'manifest') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
-      const body = Buffer.from(JSON.stringify({ protocol: 1, extensions: extensions.manifest() }))
-      // The ETag must cover extension content, not just the manifest body, so
-      // editing mobile.js/css alone invalidates the client's cached manifest.
-      const etag = createHash('sha256').update(body).update(extensions.contentDigest()).digest('hex')
-      if (headerValue(request.headers, 'if-none-match') === etag) {
-        setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+      const operation = this.allocateRequest(authorization, response, {})
+      try {
+        operation.signal.throwIfAborted()
+        const body = Buffer.from(JSON.stringify({ protocol: 1, extensions: extensions.manifest() }))
+        // The ETag must cover extension content, not just the manifest body, so
+        // editing mobile.js/css alone invalidates the client's cached manifest.
+        const etag = createHash('sha256').update(body).update(extensions.contentDigest()).digest('hex')
+        if (headerValue(request.headers, 'if-none-match') === etag) {
+          setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+        }
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.byteLength, ETag: etag })
+        if (request.method === 'HEAD') response.end(); else response.end(body)
+        return
+      } finally {
+        operation.release()
       }
-      setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.byteLength, ETag: etag })
-      if (request.method === 'HEAD') response.end(); else response.end(body)
-      return
     }
     if (targetInfo.kind === 'script' || targetInfo.kind === 'style' || targetInfo.kind === 'asset') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
-      const file = targetInfo.kind === 'script'
-        ? await extensions.readClientFile(targetInfo.id, 'script')
-        : targetInfo.kind === 'style'
-          ? await extensions.readClientFile(targetInfo.id, 'style')
-          : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '')
-      if (headerValue(request.headers, 'if-none-match') === file.digest) {
-        setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+      const operation = this.allocateRequest(authorization, response, {})
+      try {
+        const file = targetInfo.kind === 'script'
+          ? await extensions.readClientFile(targetInfo.id, 'script', operation.signal)
+          : targetInfo.kind === 'style'
+            ? await extensions.readClientFile(targetInfo.id, 'style', operation.signal)
+            : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '', operation.signal)
+        if (headerValue(request.headers, 'if-none-match') === file.digest) {
+          setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
+        }
+        const contentType = targetInfo.kind === 'script'
+          ? 'text/javascript; charset=utf-8'
+          : targetInfo.kind === 'style' ? 'text/css; charset=utf-8' : extensionContentType(targetInfo.path ?? '')
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': file.body.byteLength, ETag: file.digest })
+        if (request.method === 'HEAD') response.end(); else response.end(file.body)
+        return
+      } finally {
+        operation.release()
       }
-      const contentType = targetInfo.kind === 'script'
-        ? 'text/javascript; charset=utf-8'
-        : targetInfo.kind === 'style' ? 'text/css; charset=utf-8' : extensionContentType(targetInfo.path ?? '')
-      setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': file.body.byteLength, ETag: file.digest })
-      if (request.method === 'HEAD') response.end(); else response.end(file.body)
-      return
     }
     if (targetInfo.kind === 'action') {
       if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
@@ -1249,10 +1354,12 @@ export class MobileAccessGateway {
     authorization: SessionAuthorization,
     response: ServerResponse,
     upstream: { request?: ClientRequest },
-  ): { id: number; release: () => void } {
+  ): { id: number; signal: AbortSignal; release: () => void } {
     if (this.activeRequests.size >= this.config.maxActiveRequests) throw new HttpError(429, 'busy')
     const id = this.nextOperationId++
+    const controller = new AbortController()
     const abort = (): void => {
+      controller.abort()
       upstream.request?.destroy()
       if (!response.destroyed) response.destroy()
     }
@@ -1261,6 +1368,7 @@ export class MobileAccessGateway {
     this.activeRequests.set(id, Object.freeze({ ...authorization, abort, timer }))
     return {
       id,
+      signal: controller.signal,
       release: () => {
         const entry = this.activeRequests.get(id)
         if (entry !== undefined) clearTimeout(entry.timer)
@@ -1282,6 +1390,11 @@ export class MobileAccessGateway {
     const operation = this.allocateRequest(authorization, response, holder)
     let bodyDone: Promise<void> | undefined
     try {
+      const bufferedBody = request.method === 'POST' && request.url?.split('?', 1)[0] === SESSION_HISTORY_PATH
+        ? mobileHistoryRequestBody(request, await readBoundedBody(request, this.config.maxBodyBytes))
+        : undefined
+      const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
+      if (bufferedBody !== undefined) upstreamHeaders['content-length'] = String(bufferedBody.byteLength)
       const upstreamResponse = new Promise<IncomingMessage>((resolve, reject) => {
         const upstreamRequest = requestHttp({
           protocol: 'http:',
@@ -1289,7 +1402,7 @@ export class MobileAccessGateway {
           port: Number(this.config.upstreamOrigin.port),
           method: request.method,
           path: request.url,
-          headers: sanitizeRequestHeaders(request, this.config.upstreamOrigin),
+          headers: upstreamHeaders,
           agent: false,
         })
         holder.request = upstreamRequest
@@ -1298,13 +1411,30 @@ export class MobileAccessGateway {
         })
         upstreamRequest.once('response', resolve)
         upstreamRequest.once('error', reject)
-        bodyDone = pipeline(request, new ByteLimitTransform(this.config.maxBodyBytes), upstreamRequest)
+        if (bufferedBody === undefined) {
+          bodyDone = pipeline(request, new ByteLimitTransform(this.config.maxBodyBytes), upstreamRequest)
+        } else {
+          upstreamRequest.end(bufferedBody)
+          bodyDone = Promise.resolve()
+        }
         void bodyDone.catch(reject)
       })
       const proxied = await upstreamResponse
       setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(proxied.statusCode ?? 502, sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin))
-      await Promise.all([bodyDone, pipeline(proxied, response)])
+      const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
+      const compressed = shouldCompressResponse(request, proxied)
+      if (compressed) {
+        delete headers['accept-ranges']
+        delete headers['content-length']
+        delete headers.etag
+        headers['content-encoding'] = 'gzip'
+        addVaryAcceptEncoding(headers)
+      }
+      response.writeHead(proxied.statusCode ?? 502, headers)
+      await Promise.all([
+        bodyDone,
+        compressed ? pipeline(proxied, createGzip(), response) : pipeline(proxied, response),
+      ])
     } catch (error) {
       holder.request?.destroy()
       await bodyDone?.catch(() => undefined)
@@ -1430,6 +1560,8 @@ export class MobileAccessGateway {
       client.destroy()
       upstream.destroy()
     }
+    client.on('error', closeBoth)
+    upstream.on('error', closeBoth)
     const timer = setTimeout(closeBoth, Math.max(1, authorization.expiresAt - Date.now()))
     timer.unref()
     const record: ActiveWebSocket = Object.freeze({ ...authorization, client, upstream, timer })
@@ -1444,8 +1576,16 @@ export class MobileAccessGateway {
     upstream.setTimeout(this.config.upstreamTimeoutMs, closeBoth)
     try {
       await new Promise<void>((resolve, reject) => {
-        upstream.once('connect', resolve)
-        upstream.once('error', reject)
+        const connected = (): void => {
+          upstream.off('error', failed)
+          resolve()
+        }
+        const failed = (error: Error): void => {
+          upstream.off('connect', connected)
+          reject(error)
+        }
+        upstream.once('connect', connected)
+        upstream.once('error', failed)
       })
       const requestLines = [
         `GET ${target.raw} HTTP/1.1`,
@@ -1479,17 +1619,17 @@ export class MobileAccessGateway {
   }
 
   /** Loopback-only DSH WebServer route for opening pairing and managing devices. */
-  localAdminRoute(): WebRoute {
+  localAdminRoute(prefix: string = LOCAL_ADMIN_PREFIX): WebRoute {
     return {
       kind: 'prefix',
-      path: LOCAL_ADMIN_PREFIX,
+      path: prefix,
       handler: async (request, response) => {
         try {
           const target = parseRequestTarget(request.url)
           const mutation = request.method === 'POST'
           assertLocalAdminTrust(request, mutation)
           if (target.search !== '') throw new HttpError(400, 'bad_request')
-          if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/status`) {
+          if (request.method === 'GET' && target.decodedPathname === `${prefix}/status`) {
             sendJson(response, 200, {
               gateway: this.address(),
               pairing: this.access.pairingStatus(),
@@ -1502,19 +1642,20 @@ export class MobileAccessGateway {
             }, false)
             return
           }
-          if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/devices`) {
+          if (request.method === 'GET' && target.decodedPathname === `${prefix}/devices`) {
             sendJson(response, 200, { devices: this.access.listDevices() }, false)
             return
           }
-          if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/pairing/open`) {
+          if (request.method === 'POST' && target.decodedPathname === `${prefix}/pairing/open`) {
             const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
             if (body.ttlMs !== undefined && typeof body.ttlMs !== 'number') throw new HttpError(400, 'bad_request')
             const opened = await this.access.openPairing(body.ttlMs as number | undefined)
-            const pairUrl = `${this.address().origin}/mobile-access/pair#token=${opened.token}`
+            const pairUrl = `${this.address().origin}/mobile-access/pair#instance=${this.config.instanceId}&token=${opened.token}`
+            const appPairUrl = pairUrl
             // The QR code is an enhancement; a failed render must not waste an opened window.
             let qrSvg = ''
             try {
-              qrSvg = await QRCode.toString(pairUrl, { type: 'svg', margin: 1 })
+              qrSvg = await QRCode.toString(appPairUrl, { type: 'svg', margin: 1 })
             } catch {
               // keep qrSvg empty
             }
@@ -1522,11 +1663,12 @@ export class MobileAccessGateway {
               ...opened,
               appKey: `dsh1.${this.config.instanceId}.${opened.token}`,
               pairUrl,
+              appPairUrl,
               qrSvg,
             }, false)
             return
           }
-          if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/devices/revoke`) {
+          if (request.method === 'POST' && target.decodedPathname === `${prefix}/devices/revoke`) {
             const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
             if (typeof body.deviceId !== 'string' || !/^[a-f\d]{32}$/u.test(body.deviceId)) {
               throw new HttpError(400, 'bad_request')
@@ -1536,7 +1678,7 @@ export class MobileAccessGateway {
             sendJson(response, 200, { revoked: true }, false)
             return
           }
-          if (request.method === 'POST' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/devices/reset`) {
+          if (request.method === 'POST' && target.decodedPathname === `${prefix}/devices/reset`) {
             const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
             if (body.confirm !== true) throw new HttpError(400, 'bad_request')
             await this.access.resetDevices()

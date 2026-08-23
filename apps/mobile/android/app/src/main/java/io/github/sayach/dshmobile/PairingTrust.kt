@@ -25,17 +25,6 @@ internal object PairingTrust {
         certificate.encoded
     }.getOrNull()
 
-    /**
-     * Trust a pairing-link CA by its own fingerprint. The pairing URL does not carry
-     * the instance id; the fingerprint anchors the exact HTTPS origin the user pasted,
-     * matching the key flow where instanceId equals the same CA fingerprint.
-     */
-    fun trustByOwnFingerprint(der: ByteArray): Pair<ByteArray, String>? = runCatching {
-        val certificate = certificate(der)
-        assertCa(certificate)
-        certificate.encoded to fingerprint(certificate)
-    }.getOrNull()
-
     /** SHA-256 fingerprint of the DER certificate, lowercase hex as used by the gateway. */
     fun fingerprint(certificate: X509Certificate): String =
         MessageDigest.getInstance("SHA-256").digest(certificate.encoded)

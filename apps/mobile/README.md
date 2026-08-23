@@ -10,9 +10,9 @@ Android is the only supported native target. The iOS client remains an unpublish
 
 1. Complete the plugin quick start and run `dsh-mobile setup`.
 2. Install the Android APK from GitHub Releases.
-3. Select **Create and copy key** or **Copy pairing link** in **Mobile Access** in desktop DSH; the panel shows a pairing QR code.
-4. Open the app, tap **Scan QR code**, and point the camera at the screen to pair — or tap **Scan**, select the discovered DSH, and paste the key or pairing link, which the app resolves into origin and token.
-5. Connect. Certificate trust stays private to the app; Android settings are not changed.
+3. Choose **Local network** or **Remote access** on the app home screen.
+4. For LAN, create a key or pairing link under **Mobile Access → Local network**. For remote access, configure a provider and create the remote pairing QR code. Scan the corresponding QR code or paste its link in the app.
+5. The two paths store separate device credentials. LAN certificate trust stays private to the app; remote access uses the provider's public HTTPS certificate and requires no provider app on the phone.
 
 After the first pairing, the app encrypts a revocable, long-lived device token with Android Keystore. Every later launch uses it to renew a short Web session before opening DSH, so the pairing key is not requested again unless the device is revoked, the trust expires, or app data is cleared. If the computer receives another LAN address, the app scans the default port, matches the stable DSH installation identifier, and updates the saved origin automatically. Discovery never exposes the device token or Session credentials.
 

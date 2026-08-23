@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { restrictPrivateFile } from './private-file.js'
 
 /** Versioned durable preference for the resident mobile-access runtime. */
 export interface MobileAccessControlState {
@@ -113,6 +114,7 @@ export class JsonMobileAccessControlStore implements MobileAccessControlStore {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new Error('mobile-access control state must be a regular file no larger than 4 KiB')
     }
+    await restrictPrivateFile(this.file)
     let parsed: unknown
     try {
       parsed = JSON.parse(await readFile(this.file, 'utf8')) as unknown
@@ -141,8 +143,8 @@ export class JsonMobileAccessControlStore implements MobileAccessControlStore {
         flag: 'wx',
         mode: 0o600,
       })
-      await chmod(temporary, 0o600)
       await rename(temporary, this.file)
+      await restrictPrivateFile(this.file)
     } catch (error) {
       try {
         await rm(temporary, { force: true })

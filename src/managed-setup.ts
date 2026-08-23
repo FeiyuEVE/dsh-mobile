@@ -4,11 +4,12 @@ import {
   createPublicKey,
 } from 'node:crypto'
 import { execFile as execFileCallback } from 'node:child_process'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { generate } from 'selfsigned'
+import { restrictPrivateFile } from './private-file.js'
 
 /** One active private IPv4 address tied to a stable operating-system interface name. */
 export interface LanNetwork {
@@ -216,8 +217,8 @@ async function atomicWrite(file: string, contents: string | Uint8Array): Promise
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const temporary = join(directory, `.${basename(file)}.${process.pid}.tmp`)
   await writeFile(temporary, contents, { mode: 0o600 })
-  await chmod(temporary, 0o600)
   await rename(temporary, file)
+  await restrictPrivateFile(file)
 }
 
 /** Create a long-lived CA or migrate the legacy self-signed server certificate as that CA. */
@@ -263,11 +264,13 @@ export async function ensureManagedCa(
     await Promise.all([atomicWrite(setup.caCertFile, certPem), atomicWrite(setup.caKeyFile, keyPem)])
   }
   if (certPem === undefined || keyPem === undefined) throw new Error('managed TLS CA creation did not produce key material')
+  await Promise.all([restrictPrivateFile(setup.caCertFile), restrictPrivateFile(setup.caKeyFile)])
   return assertMatchingCa(certPem, keyPem)
 }
 
 /** Sign and atomically install a server leaf for the interface's current address. */
 export async function refreshManagedServerCertificate(setup: ManagedSetup, address: string): Promise<void> {
+  await Promise.all([restrictPrivateFile(setup.tls.caCertFile), restrictPrivateFile(setup.tls.caKeyFile)])
   const [caCert, caKey] = await Promise.all([
     readFile(setup.tls.caCertFile, 'utf8'),
     readFile(setup.tls.caKeyFile, 'utf8'),

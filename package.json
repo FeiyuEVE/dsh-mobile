@@ -1,8 +1,8 @@
 {
   "name": "dsh-mobile",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": false,
-  "description": "DeepSeek Harness 移动端适配与安全局域网访问插件，支持 Android App 和手机浏览器。",
+  "description": "DeepSeek Harness 移动端适配与安全访问插件，支持局域网、远程连接、Android App 和手机浏览器。",
   "type": "module",
   "bin": {
     "dsh-mobile": "lib/cli.js"
@@ -27,13 +27,15 @@
     "lib/client.js.map",
     "lib/mobile-layout.js",
     "lib/mobile-layout.js.map",
+    "bin/dsh-mobile-funnel-win32-x64.exe",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
     "assets/brand/*.png",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
@@ -51,6 +53,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "build:funnel-host": "node ./scripts/build-funnel-host.mjs",
     "check:mobile-release": "node ./scripts/check-mobile-release.mjs",
     "check:dsh-compatibility": "node ./scripts/check-dsh-compatibility.mjs",
     "check:release-tag": "node ./scripts/check-release-version.mjs --tag-env",
@@ -84,6 +87,9 @@
     "plugin",
     "android",
     "lan",
+    "remote-access",
+    "tailscale",
+    "cpolar",
     "mobile",
     "https"
   ],

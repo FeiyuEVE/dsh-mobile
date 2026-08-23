@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile as execFileCallback } from 'node:child_process'
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -12,6 +12,7 @@ import {
   type ManagedSetup,
 } from './managed-setup.js'
 import { assertExtensionId } from './extensions.js'
+import { restrictPrivateFile } from './private-file.js'
 
 interface SetupOptions {
   readonly address?: string
@@ -128,11 +129,11 @@ async function setup(args: readonly string[]): Promise<void> {
   await refreshManagedServerCertificate(managedSetup, network.address)
   await writeFile(androidCertificate, ca.raw, { mode: 0o600 })
   await Promise.all([
-    chmod(caCertFile, 0o600),
-    chmod(caKeyFile, 0o600),
-    chmod(certFile, 0o600),
-    chmod(keyFile, 0o600),
-    chmod(androidCertificate, 0o600),
+    restrictPrivateFile(caCertFile),
+    restrictPrivateFile(caKeyFile),
+    restrictPrivateFile(certFile),
+    restrictPrivateFile(keyFile),
+    restrictPrivateFile(androidCertificate),
   ])
   if (options.configureFirewall) await configureWindowsFirewall(options.port)
 
@@ -179,6 +180,10 @@ async function setup(args: readonly string[]): Promise<void> {
         .map(([key, value]) => [key, typeof value === 'string' ? value.replaceAll('\\', '/') : value])),
     }, null, 2)}\n`, { mode: 0o600 }),
     writeFile(join(directory, 'control.json'), '{"version":1,"enabled":true}\n', { mode: 0o600 }),
+  ])
+  await Promise.all([
+    restrictPrivateFile(join(directory, 'setup.json')),
+    restrictPrivateFile(join(directory, 'control.json')),
   ])
 
   console.log(`DSH Mobile follows ${network.name} and is currently configured for ${origin}`)

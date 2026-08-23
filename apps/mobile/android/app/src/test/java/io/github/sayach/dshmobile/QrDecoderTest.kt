@@ -11,7 +11,7 @@ import org.junit.Test
 class QrDecoderTest {
     @Test
     fun decodesRenderedPairingLink() {
-        val text = "https://192.168.1.20:3443/mobile-access/pair#token=${"A".repeat(43)}"
+        val text = "https://192.168.1.20:3443/mobile-access/pair#instance=${"a".repeat(64)}&token=${"A".repeat(43)}"
         val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 256, 256)
         assertEquals(text, QrDecoder.decodeNv21(toGrayscale(matrix, 256), 256, 256))
     }

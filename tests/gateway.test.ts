@@ -6,6 +6,7 @@ import { request as requestHttps } from 'node:https'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { connect, type AddressInfo, type Socket } from 'node:net'
+import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseGatewayConfig } from '../src/config.js'
 import { MobileAccessGateway } from '../src/gateway.js'
@@ -30,6 +31,12 @@ interface UpstreamObservation {
 const cleanups: Array<() => Promise<void>> = []
 const TEST_GATEWAY_PORT = 38080
 const TEST_FAILED_START_PORT = 38081
+const SESSION_HISTORY_PATH = '/api/session.history'
+const COMPRESSIBLE_SCRIPT = 'globalThis.__compressionProbe = true;\n'.repeat(256)
+const HISTORY_RESPONSE = JSON.stringify({
+  type: 'client-response',
+  result: { ok: true, value: { events: [{ event: { type: 'assistant/chunk', content: 'history '.repeat(2_048) } }] } },
+})
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
@@ -188,6 +195,23 @@ async function upstream(): Promise<{
       response.end(body)
       return
     }
+    if (incoming.url === '/plugins/compressible.js') {
+      response.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'content-length': Buffer.byteLength(COMPRESSIBLE_SCRIPT),
+        etag: '"compressible-script"',
+      })
+      response.end(COMPRESSIBLE_SCRIPT)
+      return
+    }
+    if (incoming.url === '/api/session.history') {
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(HISTORY_RESPONSE),
+      })
+      response.end(HISTORY_RESPONSE)
+      return
+    }
     const body = `${JSON.stringify({ ok: true, method: incoming.method, url: incoming.url })}\n`
     response.writeHead(200, {
       'content-type': 'application/json',
@@ -203,6 +227,7 @@ async function upstream(): Promise<{
   server.on('upgrade', (incoming, socket) => {
     const networkSocket = socket as Socket
     upgraded.add(networkSocket)
+    networkSocket.on('error', () => { networkSocket.destroy() })
     networkSocket.once('close', () => { upgraded.delete(networkSocket) })
     upgradeObservations.push(incoming.headers)
     const key = incoming.headers['sec-websocket-key']
@@ -452,11 +477,12 @@ describe('HTTP gateway', () => {
       body: '{}',
     })
     expect(opened.status).toBe(201)
-    const pairing = JSON.parse(opened.body) as { token: string; appKey: string; pairUrl: string; qrSvg?: string }
+    const pairing = JSON.parse(opened.body) as { token: string; appKey: string; pairUrl: string; appPairUrl: string; qrSvg?: string }
     expect(pairing.token).toMatch(/^[\w-]{43}$/)
     expect(pairing.appKey).toBe(`dsh1.${instance.config.instanceId}.${pairing.token}`)
-    expect(pairing.pairUrl).toContain(`#token=${pairing.token}`)
+    expect(pairing.pairUrl).toBe(`${instance.address().origin}/mobile-access/pair#instance=${instance.config.instanceId}&token=${pairing.token}`)
     expect(pairing.pairUrl).not.toContain(`?token=${pairing.token}`)
+    expect(pairing.appPairUrl).toBe(pairing.pairUrl)
     expect(pairing.qrSvg).toContain('<svg')
 
     const paired = await request(instance.address().port, '/mobile-access/auth/pair', {
@@ -676,6 +702,74 @@ describe('HTTP gateway', () => {
     expect(duplicateCookie.status).toBe(401)
   })
 
+  it('compresses text assets when the authenticated client accepts gzip', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const compressed = await request(instance.address().port, '/plugins/compressible.js', {
+      headers: { ...headers, 'accept-encoding': 'br, gzip, deflate' },
+    })
+    expect(compressed.status).toBe(200)
+    expect(compressed.headers['content-encoding']).toBe('gzip')
+    expect(compressed.headers['content-length']).toBeUndefined()
+    expect(compressed.headers.etag).toBeUndefined()
+    expect(compressed.headers.vary).toBe('Accept-Encoding')
+    expect(gunzipSync(compressed.rawBody).toString('utf8')).toBe(COMPRESSIBLE_SCRIPT)
+    expect(compressed.rawBody.length).toBeLessThan(Buffer.byteLength(COMPRESSIBLE_SCRIPT) / 4)
+
+    const identity = await request(instance.address().port, '/plugins/compressible.js', {
+      headers: { ...headers, 'accept-encoding': 'gzip;q=0, identity' },
+    })
+    expect(identity.status).toBe(200)
+    expect(identity.headers['content-encoding']).toBeUndefined()
+    expect(identity.body).toBe(COMPRESSIBLE_SCRIPT)
+  })
+
+  it('uses mobile-sized pages and compresses session history', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+      'accept-encoding': 'gzip',
+    }
+    const historyRequest = (maxMessages: number): string => JSON.stringify({
+      type: 'client-request',
+      rpcId: crypto.randomUUID(),
+      method: 'session.history',
+      payload: { sessionId: 'session-example', maxMessages },
+    })
+
+    const compressed = await request(instance.address().port, SESSION_HISTORY_PATH, {
+      method: 'POST',
+      headers,
+      body: historyRequest(50),
+    })
+    expect(compressed.status).toBe(200)
+    expect(compressed.headers['content-encoding']).toBe('gzip')
+    expect(compressed.headers['content-length']).toBeUndefined()
+    expect(gunzipSync(compressed.rawBody).toString('utf8')).toBe(HISTORY_RESPONSE)
+    const capped = inner.observations.at(-1)
+    expect(capped?.url).toBe(SESSION_HISTORY_PATH)
+    expect(JSON.parse(capped?.body ?? '{}')).toMatchObject({ payload: { maxMessages: 10 } })
+    expect(capped?.headers['content-length']).toBe(String(Buffer.byteLength(capped?.body ?? '')))
+
+    await request(instance.address().port, SESSION_HISTORY_PATH, {
+      method: 'POST',
+      headers: { ...headers, 'accept-encoding': 'identity' },
+      body: historyRequest(5),
+    })
+    expect(JSON.parse(inner.observations.at(-1)?.body ?? '{}')).toMatchObject({ payload: { maxMessages: 5 } })
+  })
+
   it('renews, logs out, and revokes without exposing the persistent credential to the app path', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
@@ -880,6 +974,24 @@ describe('WebSocket gateway', () => {
     const opened = await openWebSocket(instance, '/api/events.mux', paired.session, undefined, undefined)
     expect(opened.response).toContain('101 Switching Protocols')
     opened.socket.destroy()
+  })
+
+  it('keeps the gateway alive when a mobile WebSocket resets abruptly', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
+    expect(opened.response).toContain('101 Switching Protocols')
+    opened.socket.resetAndDestroy()
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    const response = await request(instance.address().port, '/assets/app.js', {
+      headers: {
+        ...browserHeaders(instance),
+        cookie: `${SESSION_COOKIE}=${paired.session}`,
+      },
+    })
+    expect(response.status).toBe(200)
   })
 
   it('allows only the two known paths, forwards only the Session Cookie, and closes both on revocation', async () => {

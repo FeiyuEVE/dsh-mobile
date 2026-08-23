@@ -21,7 +21,10 @@ The maintainer will acknowledge a complete report within seven days. Publication
 - Browser clients require a certificate trusted by that browser platform. Android uses the pairing-key-bound app-private CA. Its WebView exception is restricted to `SSL_UNTRUSTED` for an exact-origin, currently valid leaf signed by that CA; hostname, validity, signature, and every other TLS error remain fail-closed.
 - Keep pairing closed except during a short local onboarding action.
 - Revoke a lost device immediately and rotate the device registry if credential theft is suspected.
-- Do not expose the gateway directly to the public Internet.
+- Do not expose the LAN gateway through router port forwarding. Optional remote access uses a separate loopback gateway behind the selected Tailscale Funnel or cpolar service. The provider terminates public TLS, while DSH pairing, device authentication, CSRF checks, and session revocation remain enforced by the plugin gateway.
+- The Funnel node stores its Tailscale login state under `$DSH_HOME/mobile-access/remote/tailscale/`. The plugin does not request or store a Tailscale password, Auth Key, or OAuth secret.
+- cpolar is downloaded only after confirmation from a pinned official artifact whose size and SHA-256 are verified. Its Authtoken is stored in a private, self-update-disabled configuration under `$DSH_HOME/mobile-access/`, never returned by the admin API or written to logs. Cleanup removes the managed executable, configuration, logs, and independent remote device registry.
+- Disabling remote access stops the selected provider process without affecting LAN access. Resetting remote access also removes provider state and the independent remote device registry.
 - Treat every paired device as a fully trusted operator. Stock DSH methods reached through the authenticated loopback proxy may read configuration or run tools with the desktop user's authority.
 - Treat `mobile.js` as application code with the paired page's same-origin authority. Restrict write access to trusted host-side DSH sessions and review generated API calls or browser-permission use.
 - Treat every extension `host.mjs` as a local program with the desktop user's Node.js privileges. It is never sandboxed and is not editable through the mobile gateway; only place code there that you trust.

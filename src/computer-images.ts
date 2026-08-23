@@ -36,7 +36,8 @@ export function resolveComputerImagePath(path: string | null): string {
 }
 
 /** List folders and supported image files without following symbolic links. */
-export async function listComputerImages(path: string | null): Promise<ComputerImageListing> {
+export async function listComputerImages(path: string | null, signal?: AbortSignal): Promise<ComputerImageListing> {
+  signal?.throwIfAborted()
   const target = resolveComputerImagePath(path)
   const rows: ComputerImageEntry[] = []
   let truncated = false
@@ -44,6 +45,7 @@ export async function listComputerImages(path: string | null): Promise<ComputerI
   try {
     directory = await opendir(target)
     for await (const entry of directory) {
+      signal?.throwIfAborted()
       if (entry.isSymbolicLink()) continue
       const kind = entry.isDirectory() ? 'directory' : IMAGE_TYPES[extname(entry.name).toLowerCase()] === undefined ? undefined : 'image'
       if (kind === undefined) continue
@@ -53,7 +55,8 @@ export async function listComputerImages(path: string | null): Promise<ComputerI
       }
       rows.push({ kind, name: entry.name, path: resolve(target, entry.name) })
     }
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason
     throw new HttpError(404, 'directory_unavailable')
   } finally {
     await directory?.close().catch(() => undefined)
@@ -71,7 +74,8 @@ export async function listComputerImages(path: string | null): Promise<ComputerI
 }
 
 /** Read one bounded regular image file selected by an authenticated device. */
-export async function readComputerImage(path: string | null): Promise<{ body: Buffer; contentType: string; name: string }> {
+export async function readComputerImage(path: string | null, signal?: AbortSignal): Promise<{ body: Buffer; contentType: string; name: string }> {
+  signal?.throwIfAborted()
   const target = resolveComputerImagePath(path)
   const contentType = IMAGE_TYPES[extname(target).toLowerCase()]
   if (contentType === undefined) throw new HttpError(415, 'unsupported_file_type')
@@ -84,8 +88,9 @@ export async function readComputerImage(path: string | null): Promise<{ body: Bu
   if (!info.isFile() || info.isSymbolicLink()) throw new HttpError(404, 'file_unavailable')
   if (info.size > MAX_IMAGE_BYTES) throw new HttpError(413, 'file_too_large')
   try {
-    return { body: await readFile(target), contentType, name: basename(target) }
-  } catch {
+    return { body: await readFile(target, { signal }), contentType, name: basename(target) }
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason
     throw new HttpError(404, 'file_unavailable')
   }
 }

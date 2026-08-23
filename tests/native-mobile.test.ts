@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NATIVE_MOBILE_STYLES } from '../src/native-mobile.js'
+import { NATIVE_MOBILE_STYLES, shouldAutoLoadEarlier } from '../src/native-mobile.js'
 
 describe('native mobile presentation', () => {
   it('keeps touch focus quiet without removing keyboard focus globally', () => {
@@ -46,6 +46,16 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 0 !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:not(:disabled)')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:disabled')
+  })
+
+  it('loads older history only after an upward scroll reaches the top zone', () => {
+    expect(shouldAutoLoadEarlier(180, 64)).toBe(true)
+    expect(shouldAutoLoadEarlier(65, 64)).toBe(true)
+    expect(shouldAutoLoadEarlier(64, 64)).toBe(false)
+    expect(shouldAutoLoadEarlier(40, 48)).toBe(false)
+    expect(shouldAutoLoadEarlier(180, 80)).toBe(false)
   })
 
   it('uses bounded motion and disables every added animation for reduced motion', () => {

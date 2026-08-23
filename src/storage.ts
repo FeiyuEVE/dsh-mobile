@@ -1,6 +1,7 @@
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { restrictPrivateFile } from './private-file.js'
 
 /** Persistent record containing only a digest of the long-lived device credential. */
 export interface StoredDevice {
@@ -89,6 +90,7 @@ export class JsonDeviceStore implements DeviceStore {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
       throw new Error('device state must be a regular file no larger than 1 MiB')
     }
+    await restrictPrivateFile(this.file)
     let parsed: unknown
     try {
       parsed = JSON.parse(await readFile(this.file, 'utf8')) as unknown
@@ -112,7 +114,7 @@ export class JsonDeviceStore implements DeviceStore {
     try {
       await writeFile(temporary, `${JSON.stringify(validated)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
       await rename(temporary, this.file)
-      await chmod(this.file, 0o600)
+      await restrictPrivateFile(this.file)
     } catch (error) {
       try {
         await rm(temporary, { force: true })

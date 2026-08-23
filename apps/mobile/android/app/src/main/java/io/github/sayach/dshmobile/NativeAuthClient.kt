@@ -22,14 +22,14 @@ internal data class NativeSession(
 
 /** Uses platform TLS validation for native pairing and renewal. */
 internal object NativeAuthClient {
-    fun pair(origin: GatewayOrigin, token: String, caCertificate: ByteArray): NativeSession = post(
+    fun pair(origin: GatewayOrigin, token: String, caCertificate: ByteArray?): NativeSession = post(
         origin,
         "/mobile-access/auth/native-pair",
         JSONObject().put("token", token).put("label", "DeepSeek Harness Android"),
         caCertificate,
     )
 
-    fun renew(origin: GatewayOrigin, deviceToken: String, caCertificate: ByteArray): NativeSession = post(
+    fun renew(origin: GatewayOrigin, deviceToken: String, caCertificate: ByteArray?): NativeSession = post(
         origin,
         "/mobile-access/auth/native-renew",
         JSONObject().put("deviceToken", deviceToken),
@@ -70,10 +70,10 @@ internal object NativeAuthClient {
         }
     }
 
-    private fun post(origin: GatewayOrigin, path: String, body: JSONObject, caCertificate: ByteArray): NativeSession {
+    private fun post(origin: GatewayOrigin, path: String, body: JSONObject, caCertificate: ByteArray?): NativeSession {
         val connection = URL(origin.serialized + path).openConnection() as HttpsURLConnection
         try {
-            connection.sslSocketFactory = PinnedTls.socketFactory(caCertificate)
+            if (caCertificate != null) connection.sslSocketFactory = PinnedTls.socketFactory(caCertificate)
             connection.requestMethod = "POST"
             connection.connectTimeout = 3_000
             connection.readTimeout = 5_000
