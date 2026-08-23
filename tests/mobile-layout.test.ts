@@ -28,6 +28,37 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('"inject":["@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-theme"]')
     expect(output).toContain('"url":"/conversation.js"')
     expect(output).not.toContain('"url":"/layout.js"')
+    expect(output).toContain('viewport-fit=cover')
+  })
+
+  it('orders the authenticated mobile client before settings without retaining the sidebar cycle', () => {
+    const output = rewriteMobileIndex(index([
+      { id: '@deepseek-ai/dsh-client-connection', url: '/connection.js', rev: 'connection', inject: [] },
+      { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime', inject: ['@deepseek-ai/dsh-client-connection'] },
+      {
+        id: '@deepseek-ai/dsh-client-ui-layout',
+        url: '/layout.js',
+        rev: 'layout',
+        inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'],
+      },
+      {
+        id: '@deepseek-ai/dsh-client-ui-settings',
+        url: '/settings.js',
+        rev: 'settings',
+        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-runtime'],
+      },
+      {
+        id: 'dsh-mobile',
+        url: '/dsh-mobile.js',
+        rev: 'mobile',
+        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-sidebar'],
+        immediately: true,
+      },
+    ]))
+
+    expect(output).toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime"]')
+    expect(output).toContain('"id":"@deepseek-ai/dsh-client-ui-settings","url":"/settings.js","rev":"settings","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","dsh-mobile"]')
+    expect(output).not.toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-sidebar"]')
   })
 
   it('accepts the DSH 0.1.1 global injection syntax', () => {

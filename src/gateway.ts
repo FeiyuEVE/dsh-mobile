@@ -84,8 +84,12 @@ const DISCOVERY_INTERVAL_MS = 3_000
 const MDNS_SERVICE_TYPE = 'dsh-mobile'
 const MOBILE_LAYOUT_MODULE = '@deepseek-ai/dsh-client-ui-layout'
 const MOBILE_LAYOUT_PATH = `${AUTH_PREFIX}/mobile-layout.js`
+const MOBILE_CLIENT_MODULE = 'dsh-mobile'
+const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
+const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
+const SETTINGS_MODULE = '@deepseek-ai/dsh-client-ui-settings'
 const MOBILE_LAYOUT_DEPENDENCIES = Object.freeze([
-  '@deepseek-ai/dsh-client-runtime',
+  RUNTIME_MODULE,
   '@deepseek-ai/dsh-client-ui-theme',
 ])
 const PAIR_PAGE = `<!doctype html>
@@ -114,6 +118,42 @@ interface BootGraphEntry {
   immediately?: boolean
 }
 
+function ensureMobileViewport(html: string): string {
+  const viewport = /<meta\b(?=[^>]*\bname\s*=\s*["']viewport["'])[^>]*>/iu
+  const match = viewport.exec(html)
+  if (match === null) {
+    const head = /<head\b[^>]*>/iu.exec(html)
+    if (head?.index === undefined) return html
+    const position = head.index + head[0].length
+    return `${html.slice(0, position)}<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">${html.slice(position)}`
+  }
+  if (/\bviewport-fit\s*=\s*cover\b/iu.test(match[0])) return html
+  const content = /\bcontent\s*=\s*(["'])(.*?)\1/iu
+  const next = content.test(match[0])
+    ? match[0].replace(content, (_whole, quote: string, value: string) => `content=${quote}${value},viewport-fit=cover${quote}`)
+    : match[0].replace(/\s*\/?>$/u, ' content="width=device-width,initial-scale=1,viewport-fit=cover">')
+  return `${html.slice(0, match.index)}${next}${html.slice(match.index + match[0].length)}`
+}
+
+function orderAuthenticatedSettings(entries: BootGraphEntry[]): void {
+  const mobile = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === MOBILE_CLIENT_MODULE)
+  const settings = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === SETTINGS_MODULE)
+  if (mobile.length === 0 || settings.length === 0) return
+  if (mobile.length !== 1 || settings.length !== 1) throw new Error('upstream DSH mobile settings graph is ambiguous')
+  if (!Array.isArray(mobile[0]?.inject)
+    || !mobile[0].inject.includes(CONNECTION_MODULE)
+    || !mobile[0].inject.includes(RUNTIME_MODULE)) {
+    throw new Error('dsh-mobile client has unsupported dependencies')
+  }
+  if (!Array.isArray(settings[0]?.inject)
+    || !settings[0].inject.includes(CONNECTION_MODULE)
+    || !settings[0].inject.includes(RUNTIME_MODULE)) {
+    throw new Error('upstream DSH settings module has unsupported dependencies')
+  }
+  mobile[0].inject = [CONNECTION_MODULE, RUNTIME_MODULE]
+  if (!settings[0].inject.includes(MOBILE_CLIENT_MODULE)) settings[0].inject = [...settings[0].inject, MOBILE_CLIENT_MODULE]
+}
+
 /** Replace only DSH's layout client module while retaining its complete plugin graph. */
 export function rewriteMobileIndex(html: string): string {
   const assignment = /(?:window\.__DSH_BOOT__|globalThis\["__DSH_BOOT__"\])\s*=\s*/u.exec(html)
@@ -138,8 +178,9 @@ export function rewriteMobileIndex(html: string): string {
   }
   layout[0].url = MOBILE_LAYOUT_PATH
   layout[0].rev = 'dsh-mobile-layout-v1'
+  orderAuthenticatedSettings(entries)
   const replacement = `window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
-  return `${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`
+  return ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)
 }
 
 const PAIR_SCRIPT = `(() => {

@@ -3,10 +3,15 @@ import { installNativeMobileSurface, NATIVE_MOBILE_STYLES } from './native-mobil
 
 interface ClientContext {
   effect(effect: () => void | (() => void), label?: string): void
+  get(name: 'connection'): MobileConnectionHandle
   slots: {
     inject(key: string, callback: () => (() => void)): () => void
     register(options: { name: string; id: string }, component: (props: { wide: boolean }) => unknown): () => void
   }
+}
+
+interface MobileConnectionHandle {
+  isLoopback: boolean
 }
 
 interface MobileExtensionContext {
@@ -74,6 +79,18 @@ if (typeof window !== 'undefined' && window.dshMobile === undefined) {
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+}
+
+/**
+ * Match DSH's client-side privilege hint to the authenticated mobile gateway.
+ * The gateway authenticates the paired device and forwards allowed requests to
+ * DSH's loopback listener, so settings RPCs receive the same Host-side checks
+ * as the desktop page even though the phone's visible URL is a LAN address.
+ */
+export function trustAuthenticatedGatewayConnection(connection: MobileConnectionHandle): () => void {
+  const previous = connection.isLoopback
+  connection.isLoopback = true
+  return () => { connection.isLoopback = previous }
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
@@ -459,6 +476,11 @@ const CONTROL_STYLES = `
 
 /** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
+  ctx.effect(() => {
+    if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
+    return trustAuthenticatedGatewayConnection(ctx.get('connection'))
+  }, 'dsh-mobile: authenticated gateway client trust')
+
   ctx.effect(() => {
     const loopback = isLoopbackHost(location.hostname) && !new URLSearchParams(location.search).has('dsh-mobile-preview')
     const style = element('style'); style.dataset.plugin = 'dsh-mobile'; style.textContent = loopback

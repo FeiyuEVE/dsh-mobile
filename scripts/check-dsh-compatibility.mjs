@@ -30,6 +30,7 @@ if (!supported.includes(root.version)) {
 
 const packages = [
   'packages/host/webserver/package.json',
+  'packages/client/connection/package.json',
   'packages/client/runtime/package.json',
   'packages/client/ui-theme/package.json',
   'packages/client/ui-layout/package.json',
@@ -65,6 +66,24 @@ for (const declaration of [
 const conversation = await text('packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx')
 if (!conversation.includes('data-conversation-scroll')) {
   throw new Error('DSH conversation no longer exposes data-conversation-scroll')
+}
+
+const connectionSource = await text('packages/client/connection/src/client/index.ts')
+for (const declaration of [
+  'readonly isLoopback: boolean',
+  'isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)',
+]) {
+  if (!connectionSource.includes(declaration)) throw new Error(`DSH connection trust contract changed: missing ${declaration}`)
+}
+
+const settingsSource = await text('packages/client/ui-settings/src/client/index.ts')
+if (!settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")) {
+  throw new Error('DSH settings trust contract changed')
+}
+
+const sidebarSource = await text('packages/client/ui-sidebar/src/client/SidebarRoot.tsx')
+for (const declaration of ['css.fallbackBrandName', 'DSH Local Build']) {
+  if (!sidebarSource.includes(declaration)) throw new Error(`DSH sidebar fallback brand changed: missing ${declaration}`)
 }
 
 const questions = await text('packages/client/ui-user-questions/src/client/QuestionComposer.tsx')
