@@ -2,6 +2,10 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.2.1 - 2026-08-25
+
+- Add a stable Android app download entry to the desktop Mobile Access panel.
+
 ## 0.2.0 - 2026-08-24
 
 - Add independent LAN and remote access flows with separate paired-device stores.
