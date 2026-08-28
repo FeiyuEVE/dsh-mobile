@@ -12,6 +12,13 @@ class SafeAreaPaddingTest {
     }
 
     @Test
+    fun reservesOnlyTheImeAreaBeyondTheWebSafeArea() {
+        assertEquals(0, additionalImeInset(coveredBottom = 48, webSafeBottom = 48))
+        assertEquals(0, additionalImeInset(coveredBottom = 0, webSafeBottom = 48))
+        assertEquals(792, additionalImeInset(coveredBottom = 840, webSafeBottom = 48))
+    }
+
+    @Test
     fun unionsSystemBarsCutoutAndImePerEdge() {
         val systemBars = SafeAreaEdges(left = 0, top = 72, right = 24, bottom = 48)
         val displayCutout = SafeAreaEdges(left = 36, top = 96, right = 0, bottom = 0)

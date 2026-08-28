@@ -1214,15 +1214,17 @@ class MainActivity : Activity() {
         root.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP))
         setContentView(root)
 
-        // Reserve the top safe area natively, then remove that already-owned
-        // inset before the WebView computes its CSS safe-area environment.
+        // Native chrome owns the status-bar strip. The WebView keeps the remaining
+        // system-bar safe area while its viewport shrinks above the keyboard.
         root.setOnApplyWindowInsetsListener { _, insets ->
             val top = resolveTopSafeInset(insets)
+            val ime = resolveWebViewImeInset(insets)
             browser.layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ).apply {
                 topMargin = top
+                bottomMargin = ime
             }
             statusBarBackdrop.layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1239,7 +1241,7 @@ class MainActivity : Activity() {
             bar.alpha = if (toolbarHidden) 0f else 1f
             loading.translationY = bar.translationY
             loading.alpha = bar.alpha
-            insetsBelowTopSafeArea(insets, top)
+            insetsForWebContent(insets, top)
         }
         root.requestApplyInsets()
 

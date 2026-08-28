@@ -1,6 +1,7 @@
 package io.github.sayach.dshmobile
 
 import android.graphics.Color
+import android.graphics.Insets
 import android.os.Build
 import android.view.View
 import android.view.Window
@@ -63,9 +64,37 @@ internal fun resolveTopSafeInset(insets: WindowInsets): Int {
     )
 }
 
-/** Removes the already-reserved top safe area before dispatching insets to the WebView. */
-internal fun insetsBelowTopSafeArea(insets: WindowInsets, top: Int): WindowInsets =
-    if (top > 0) insets.inset(0, top, 0, 0) else insets
+/** Returns the keyboard overlap that must resize the WebView viewport. */
+@Suppress("DEPRECATION")
+internal fun resolveWebViewImeInset(insets: WindowInsets): Int {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        return additionalImeInset(
+            insets.getInsets(WindowInsets.Type.ime()).bottom,
+            insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
+        )
+    }
+    return additionalImeInset(insets.systemWindowInsetBottom, insets.stableInsetBottom)
+}
+
+/**
+ * Removes native-owned top and IME offsets before dispatching the remaining safe area to the WebView.
+ */
+@Suppress("DEPRECATION")
+internal fun insetsForWebContent(insets: WindowInsets, top: Int): WindowInsets {
+    val belowTop = if (top > 0) insets.inset(0, top, 0, 0) else insets
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        return WindowInsets.Builder(belowTop)
+            .setInsets(WindowInsets.Type.ime(), Insets.NONE)
+            .setVisible(WindowInsets.Type.ime(), false)
+            .build()
+    }
+    return belowTop.replaceSystemWindowInsets(
+        belowTop.systemWindowInsetLeft,
+        belowTop.systemWindowInsetTop,
+        belowTop.systemWindowInsetRight,
+        minOf(belowTop.systemWindowInsetBottom, insets.stableInsetBottom),
+    )
+}
 
 @Suppress("DEPRECATION")
 private fun resolveSafeArea(insets: WindowInsets): SafeAreaEdges {

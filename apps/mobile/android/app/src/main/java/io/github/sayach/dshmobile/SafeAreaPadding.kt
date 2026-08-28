@@ -27,6 +27,10 @@ internal data class SafeAreaEdges(
 internal fun topSafeInset(statusBarTop: Int, displayCutoutTop: Int): Int =
     max(statusBarTop, displayCutoutTop)
 
+/** Returns the keyboard overlap not already represented by the web safe area. */
+internal fun additionalImeInset(coveredBottom: Int, webSafeBottom: Int): Int =
+    max(0, coveredBottom - webSafeBottom)
+
 /** Immutable content padding captured before system insets are installed. */
 internal data class ContentPadding(
     val left: Int,
