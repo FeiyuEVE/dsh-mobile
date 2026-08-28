@@ -10,6 +10,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 - Preserve fallback discovery when Android 13+ nearby Wi-Fi permission is declined, and provide concise guidance for QR, pairing, session, rate-limit, and service failures.
 - Forward authenticated DSH and plugin mutations with CSRF protection, restoring mobile plugin-market and other non-GET actions.
 - Refine Android status-bar and safe-area behavior, keep settings actions readable on narrow screens, and refresh the app icon.
+- Support DeepSeek Harness 0.1.2-alpha.1 and its batched renderer-based client boot while retaining the dedicated mobile layout and the complete community-plugin graph.
 
 ## 0.2.2 - 2026-08-27
 

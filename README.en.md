@@ -17,7 +17,7 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin for the DeepSeek Harness 0.1.1 series (verified with 0.1.1-rc.2); the native app supports Android only.
+> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin verified with DeepSeek Harness 0.1.1-rc.2 and 0.1.2-alpha.1; the native app supports Android only.
 >
 > **0.3.0 update**: one-click diagnostics, version guidance, and faster connection recovery; sanitized reports help isolate network, firewall, and provider failures.
 >
@@ -181,7 +181,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
-| `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
+| `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.2.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |

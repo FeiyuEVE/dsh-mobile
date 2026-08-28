@@ -46,8 +46,19 @@ import {
 /** Stable Cordis plugin name. */
 export const name = 'dsh-mobile'
 
-/** The stock WebServer serves the control card; commands exposes /mobile to the DSH agent. */
-export const inject = ['webServer', 'commands']
+/** The stock WebServer serves the control card; Connection authenticates the loopback DSH origin. */
+export const inject = ['webServer', 'commands', 'connection']
+
+interface BrowserAuthenticatedConnection {
+  authenticatedUrl?: (baseUrl: string) => string
+}
+
+function upstreamAuthenticatedUrl(ctx: Context, upstreamOrigin: URL): string | undefined {
+  const connection = (ctx as Context & { readonly connection?: BrowserAuthenticatedConnection }).connection
+  return typeof connection?.authenticatedUrl === 'function'
+    ? connection.authenticatedUrl(upstreamOrigin.origin)
+    : undefined
+}
 
 function installedDshVersion(): unknown {
   const manifest = createRequire(import.meta.url)('@deepseek-ai/dsh-host-webserver/package.json') as unknown
@@ -218,6 +229,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
   const template = loopbackTemplate(loaded)
+  const upstreamLoginUrl = upstreamAuthenticatedUrl(ctx, template.upstreamOrigin)
   const instanceId = await stableInstanceId(loaded, template)
   const stateDirectory = dirname(template.stateFile)
   const remoteDirectory = join(stateDirectory, 'remote')
@@ -257,6 +269,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       resolved,
       new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
       mobileAccess,
+      upstreamLoginUrl,
     )
     await candidate.start()
     lanGateway = candidate
@@ -314,6 +327,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         resolved,
         new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
         mobileAccess,
+        upstreamLoginUrl,
       )
       await candidate.start()
       return candidate

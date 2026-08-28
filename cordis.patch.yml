@@ -13,7 +13,7 @@
 
     - id: mobile-access
       name: dsh-mobile
-      inject: [webServer]
+      inject: [webServer, connection]
       config:
         setupFile: !!js dshHomePath('mobile-access/setup.json')
         stateFile: !!js dshHomePath('mobile-access/devices.json')

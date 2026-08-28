@@ -34,6 +34,8 @@ const TEST_GATEWAY_PORT = 38080
 const TEST_FAILED_START_PORT = 38081
 const SESSION_HISTORY_PATH = '/api/session.history'
 const COMPRESSIBLE_SCRIPT = 'globalThis.__compressionProbe = true;\n'.repeat(256)
+const UPSTREAM_LAUNCH_TOKEN = 'test-launch-token'
+const UPSTREAM_BROWSER_COOKIE = 'dsh-auth-test=v1.signed-cookie'
 const HISTORY_RESPONSE = JSON.stringify({
   type: 'client-response',
   result: { ok: true, value: { events: [{ event: { type: 'assistant/chunk', content: 'history '.repeat(2_048) } }] } },
@@ -167,7 +169,7 @@ function websocketAccept(key: string): string {
   return createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, 'ascii').digest('base64')
 }
 
-async function upstream(): Promise<{
+async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentication = false): Promise<{
   port: number
   observations: UpstreamObservation[]
   upgradeObservations: IncomingHttpHeaders[]
@@ -186,13 +188,50 @@ async function upstream(): Promise<{
       headers: incoming.headers,
       body: Buffer.concat(chunks).toString('utf8'),
     })
+    if (requireAuthentication && incoming.url === `/?token=${UPSTREAM_LAUNCH_TOKEN}`) {
+      response.writeHead(303, {
+        location: '/',
+        'set-cookie': `${UPSTREAM_BROWSER_COOKIE}; Max-Age=1800; Path=/; HttpOnly; SameSite=Strict`,
+      })
+      response.end()
+      return
+    }
+    if (requireAuthentication && incoming.headers.cookie !== UPSTREAM_BROWSER_COOKIE) {
+      response.writeHead(401, { 'content-type': 'text/plain' })
+      response.end('authentication required')
+      return
+    }
     if (incoming.url === '/hold') {
       held.push(() => { response.writeHead(200); response.end('released') })
       return
     }
     if (incoming.url === '/' && incoming.headers.accept?.includes('text/html')) {
-      const body = '<!doctype html><html><head><script>window.__DSH_BOOT__ = {"rev":"stock","entries":[{"id":"@deepseek-ai/dsh-client-ui-layout","url":"/plugins/layout.js","rev":"stock-layout","inject":["@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-theme"]},{"id":"feature","url":"/plugins/feature.js","rev":"feature"}]};</script></head><body></body></html>'
+      const entries = boot === 'legacy'
+        ? [
+            { id: '@deepseek-ai/dsh-client-ui-layout', url: '/plugins/layout.js', rev: 'stock-layout', inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'] },
+            { id: 'feature', url: '/plugins/feature.js', rev: 'feature' },
+          ]
+        : [
+            { id: '@deepseek-ai/dsh-client-ui-renderer', url: '/plugins/renderer.js?rev=renderer', rev: 'renderer' },
+            {
+              id: '@deepseek-ai/dsh-client-ui-layout',
+              url: '/plugins/layout.js?rev=layout',
+              rev: 'layout',
+              inject: ['@deepseek-ai/dsh-client-locale', '@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-session', '@deepseek-ai/dsh-client-ui-theme'],
+            },
+            { id: 'feature', url: '/plugins/feature.js?rev=feature', rev: 'feature' },
+          ]
+      const graph = boot === 'legacy'
+        ? { rev: 'stock', entries }
+        : { rev: 'stock', entries, batches: [{ phase: 'application', url: '/plugins/application.js?rev=stock', rev: 'stock-batch', entries: entries.map(entry => entry.id) }] }
+      const body = `<!doctype html><html><head><script>globalThis["__DSH_BOOT__"] = ${JSON.stringify(graph)};</script></head><body></body></html>`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(body) })
+      response.end(body)
+      return
+    }
+    if (boot === 'batched' && incoming.url?.startsWith('/plugins/') === true) {
+      const body = `globalThis.__loadedMobileFixture ??= []; globalThis.__loadedMobileFixture.push(${JSON.stringify(incoming.url)});\n`
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-length': Buffer.byteLength(body) })
       response.end(body)
       return
     }
@@ -232,6 +271,10 @@ async function upstream(): Promise<{
     networkSocket.on('error', () => { networkSocket.destroy() })
     networkSocket.once('close', () => { upgraded.delete(networkSocket) })
     upgradeObservations.push(incoming.headers)
+    if (requireAuthentication && incoming.headers.cookie !== UPSTREAM_BROWSER_COOKIE) {
+      networkSocket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      return
+    }
     const key = incoming.headers['sec-websocket-key']
     if (typeof key !== 'string') {
       networkSocket.destroy()
@@ -262,6 +305,7 @@ async function gateway(
   upstreamPort: number,
   overrides: Record<string, unknown> = {},
   testSessionTtlMs?: number,
+  upstreamAuthenticatedUrl?: string,
 ): Promise<MobileAccessGateway> {
   const resolved = parseGatewayConfig({
     listenHost: '127.0.0.1',
@@ -274,7 +318,7 @@ async function gateway(
     ...overrides,
   })
   const effective = testSessionTtlMs === undefined ? resolved : Object.freeze({ ...resolved, sessionTtlMs: testSessionTtlMs })
-  const instance = new MobileAccessGateway(effective, new MemoryDeviceStore())
+  const instance = new MobileAccessGateway(effective, new MemoryDeviceStore(), undefined, upstreamAuthenticatedUrl)
   await instance.start()
   cleanups.push(() => instance.close())
   return instance
@@ -456,6 +500,77 @@ describe('HTTP gateway', () => {
     expect(stock.status).toBe(200)
     expect(stock.body).not.toContain('__DSH_MOBILE_FRONTEND__')
     expect(stock.body).toContain('/plugins/layout.js')
+  })
+
+  it('serves a DSH 0.1.2 mobile application batch without the stock layout factory', async () => {
+    const inner = await upstream('batched')
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-batched-layout-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const mobileLayoutFile = join(directory, 'mobile-layout.js')
+    await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
+    const instance = await gateway(inner.port, { mobileLayoutFile })
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    const match = /"url":"(\/mobile-access\/mobile-boot\/[a-f\d]{64}\.js)"/u.exec(mobile.body)
+    expect(match?.[1]).toBeDefined()
+    const path = match![1]!
+    const batch = await request(instance.address().port, path, { headers })
+    expect(batch.status).toBe(200)
+    expect(batch.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(batch.headers.etag).toMatch(/^[a-f\d]{64}$/u)
+    expect(batch.body).toContain('/plugins/renderer.js?rev=renderer')
+    expect(batch.body).toContain('__dedicatedMobileLayout = true')
+    expect(batch.body).toContain('/plugins/feature.js?rev=feature')
+    expect(batch.body).not.toContain('/plugins/layout.js?rev=layout')
+    expect(batch.body.indexOf('renderer.js')).toBeLessThan(batch.body.indexOf('__dedicatedMobileLayout'))
+    expect(batch.body.indexOf('__dedicatedMobileLayout')).toBeLessThan(batch.body.indexOf('feature.js'))
+
+    const cached = await request(instance.address().port, path, {
+      headers: { ...headers, 'if-none-match': String(batch.headers.etag) },
+    })
+    expect(cached.status).toBe(304)
+    const unauthenticated = await request(instance.address().port, path, { headers: browserHeaders(instance) })
+    expect(unauthenticated.status).toBe(401)
+    expect(inner.observations.map(observation => observation.url)).toContain('/plugins/renderer.js?rev=renderer')
+    expect(inner.observations.map(observation => observation.url)).toContain('/plugins/feature.js?rev=feature')
+    expect(inner.observations.map(observation => observation.url)).not.toContain('/plugins/layout.js?rev=layout')
+    expect(inner.observations.map(observation => observation.url)).not.toContain('/plugins/application.js?rev=stock')
+  })
+
+  it('keeps the DSH 0.1.2 browser-auth cookie inside the authenticated mobile gateway', async () => {
+    const inner = await upstream('batched', true)
+    const authenticatedUrl = `http://127.0.0.1:${String(inner.port)}/?token=${UPSTREAM_LAUNCH_TOKEN}`
+    const instance = await gateway(inner.port, {}, undefined, authenticatedUrl)
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    expect(mobile.headers['set-cookie']).toBeUndefined()
+    const asset = await request(instance.address().port, '/assets/app.js', { headers })
+    expect(asset.status).toBe(200)
+    expect(asset.headers['set-cookie']).toBeUndefined()
+    const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
+    expect(opened.response).toContain('101 Switching Protocols')
+    opened.socket.destroy()
+
+    expect(inner.observations.filter(observation => observation.url?.includes('token=')).length).toBe(1)
+    for (const observed of inner.observations.filter(observation => !observation.url.includes('token='))) {
+      expect(observed.headers.cookie).toBe(UPSTREAM_BROWSER_COOKIE)
+    }
+    expect(inner.upgradeObservations).toHaveLength(1)
+    expect(inner.upgradeObservations[0]?.cookie).toBe(UPSTREAM_BROWSER_COOKIE)
   })
 
   it('keeps pairing and device management on a loopback Host-fenced route', async () => {

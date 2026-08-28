@@ -76,6 +76,11 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
       return () => { if (command === definition) command = undefined }
     },
   } as never)
+  context.provide('connection', {
+    authenticatedUrl(baseUrl: string) {
+      return `${baseUrl}/?token=test-launch-token`
+    },
+  } as never)
   await context.plugin({ Config, inject, apply }, {
     listenPort: 38083,
     stateFile: join(directory, 'devices.json'),
@@ -145,8 +150,8 @@ describe('remote Funnel gateway configuration', () => {
 })
 
 describe('stock DSH lifecycle', () => {
-  it('requires the WebServer and commands services', () => {
-    expect(inject).toEqual(['webServer', 'commands'])
+  it('requires the WebServer, commands, and Connection services', () => {
+    expect(inject).toEqual(['webServer', 'commands', 'connection'])
   })
 
   it('keeps a loopback control route available while the LAN listener is stopped', async () => {

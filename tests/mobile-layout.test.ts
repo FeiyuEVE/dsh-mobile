@@ -54,14 +54,58 @@ describe('dedicated mobile layout boot', () => {
         id: 'dsh-mobile',
         url: '/dsh-mobile.js',
         rev: 'mobile',
-        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-sidebar'],
+        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-sidebar'],
         immediately: true,
       },
     ]))
 
     expect(output).toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime"]')
     expect(output).toContain('"id":"@deepseek-ai/dsh-client-ui-settings","url":"/settings.js","rev":"settings","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","dsh-mobile"]')
-    expect(output).not.toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-sidebar"]')
+    expect(output).not.toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-sidebar"]')
+  })
+
+  it('rebuilds the DSH 0.1.2 application batch around the dedicated layout', () => {
+    const entries = [
+      { id: '@deepseek-ai/dsh-client-connection', url: '/plugins/connection.js?rev=connection', rev: 'connection', inject: [] },
+      { id: '@deepseek-ai/dsh-client-ui-renderer', url: '/plugins/renderer.js?rev=renderer', rev: 'renderer', inject: [] },
+      {
+        id: '@deepseek-ai/dsh-client-ui-layout',
+        url: '/plugins/layout.js?rev=layout',
+        rev: 'layout',
+        inject: [
+          '@deepseek-ai/dsh-client-locale',
+          '@deepseek-ai/dsh-client-ui-renderer',
+          '@deepseek-ai/dsh-client-ui-session',
+          '@deepseek-ai/dsh-client-ui-theme',
+        ],
+      },
+      {
+        id: '@deepseek-ai/dsh-client-ui-settings',
+        url: '/plugins/settings.js?rev=settings',
+        rev: 'settings',
+        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-api-remotes'],
+      },
+      {
+        id: 'dsh-mobile',
+        url: '/plugins/dsh-mobile.js?rev=mobile',
+        rev: 'mobile',
+        inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-sidebar'],
+        immediately: true,
+      },
+    ]
+    const source = `<!doctype html><html><head><script>globalThis["__DSH_BOOT__"] = ${JSON.stringify({
+      rev: 'stock',
+      entries,
+      batches: [{ phase: 'application', url: '/plugins/application.js?rev=stock', rev: 'stock-batch', entries: entries.map(entry => entry.id) }],
+    })};</script></head><body></body></html>`
+    const output = rewriteMobileIndex(source)
+
+    expect(output).toContain('"url":"/mobile-access/mobile-layout.js"')
+    expect(output).toContain('"inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-renderer"]')
+    expect(output).toContain('"inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-api-remotes","dsh-mobile"]')
+    expect(output).toMatch(/"url":"\/mobile-access\/mobile-boot\/[a-f\d]{64}\.js"/u)
+    expect(output).not.toContain('/plugins/application.js?rev=stock')
+    expect(output).toContain(`"entries":${JSON.stringify(entries.map(entry => entry.id))}`)
   })
 
   it('accepts the DSH 0.1.1 global injection syntax', () => {

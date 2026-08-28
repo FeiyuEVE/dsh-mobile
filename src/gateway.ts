@@ -92,15 +92,34 @@ const DISCOVERY_INTERVAL_MS = 3_000
 const MDNS_SERVICE_TYPE = 'dsh-mobile'
 const MOBILE_LAYOUT_MODULE = '@deepseek-ai/dsh-client-ui-layout'
 const MOBILE_LAYOUT_PATH = `${AUTH_PREFIX}/mobile-layout.js`
+const MOBILE_BOOT_BATCH_PREFIX = `${AUTH_PREFIX}/mobile-boot/`
+const MAX_MOBILE_BOOT_BATCH_BYTES = 32 * 1024 * 1024
+const MAX_MOBILE_BOOT_ENTRY_BYTES = 8 * 1024 * 1024
+const MAX_MOBILE_BOOT_BATCHES = 8
+const UPSTREAM_AUTH_REFRESH_MARGIN_MS = 60_000
+const UPSTREAM_COOKIE_PAIR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+=[\x21-\x3A\x3C-\x7E]*$/u
 const CUSTOM_STYLE_FALLBACK = '/* Add mobile overrides in the DSH home mobile-access/mobile.css file. */\n'
 const CUSTOM_SCRIPT_FALLBACK = 'window.dshMobile?.register(() => undefined)\n'
 const MOBILE_CLIENT_MODULE = 'dsh-mobile'
 const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
 const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
+const RENDERER_MODULE = '@deepseek-ai/dsh-client-ui-renderer'
+const SIDEBAR_MODULE = '@deepseek-ai/dsh-client-ui-sidebar'
 const SETTINGS_MODULE = '@deepseek-ai/dsh-client-ui-settings'
-const MOBILE_LAYOUT_DEPENDENCIES = Object.freeze([
-  RUNTIME_MODULE,
-  '@deepseek-ai/dsh-client-ui-theme',
+const MOBILE_LAYOUT_DEPENDENCY_PROFILES = Object.freeze([
+  Object.freeze({
+    slots: RUNTIME_MODULE,
+    dependencies: Object.freeze([RUNTIME_MODULE, '@deepseek-ai/dsh-client-ui-theme']),
+  }),
+  Object.freeze({
+    slots: RENDERER_MODULE,
+    dependencies: Object.freeze([
+      '@deepseek-ai/dsh-client-locale',
+      RENDERER_MODULE,
+      '@deepseek-ai/dsh-client-ui-session',
+      '@deepseek-ai/dsh-client-ui-theme',
+    ]),
+  }),
 ])
 const MOBILE_CSRF_FETCH_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const method=String(init?.method??source?.method??'GET').toUpperCase();if(method==='GET'||method==='HEAD')return nativeFetch(input,init);const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;if(raw===undefined||new URL(raw,location.href).origin!==location.origin)return nativeFetch(input,init);const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}return nativeFetch(input,{...init,headers})};})();`
 const PAIR_PAGE = `<!doctype html>
@@ -129,6 +148,37 @@ interface BootGraphEntry {
   immediately?: boolean
 }
 
+interface BootGraphBatch {
+  phase: 'bootstrap' | 'application'
+  url: string
+  rev: string
+  entries: string[]
+}
+
+interface MobileBootBatchEntry {
+  readonly id: string
+  readonly url: string
+  readonly rev: string
+}
+
+interface MobileBootBatchPlan {
+  readonly key: string
+  readonly path: string
+  readonly entries: readonly MobileBootBatchEntry[]
+}
+
+interface RewrittenMobileIndex {
+  readonly html: string
+  readonly batch?: MobileBootBatchPlan
+}
+
+interface StoredMobileBootBatch {
+  readonly plan: MobileBootBatchPlan
+  body?: Buffer
+  etag?: string
+  layoutMtimeMs?: number
+}
+
 function ensureMobileViewport(html: string): string {
   const viewport = /<meta\b(?=[^>]*\bname\s*=\s*["']viewport["'])[^>]*>/iu
   const match = viewport.exec(html)
@@ -146,27 +196,33 @@ function ensureMobileViewport(html: string): string {
   return `${html.slice(0, match.index)}${next}${html.slice(match.index + match[0].length)}`
 }
 
-function orderAuthenticatedSettings(entries: BootGraphEntry[]): void {
+function orderAuthenticatedSettings(entries: BootGraphEntry[], slotsProvider: string): void {
   const mobile = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === MOBILE_CLIENT_MODULE)
   const settings = entries.filter(entry => entry !== null && typeof entry === 'object' && entry.id === SETTINGS_MODULE)
   if (mobile.length === 0 || settings.length === 0) return
   if (mobile.length !== 1 || settings.length !== 1) throw new Error('upstream DSH mobile settings graph is ambiguous')
   if (!Array.isArray(mobile[0]?.inject)
     || !mobile[0].inject.includes(CONNECTION_MODULE)
-    || !mobile[0].inject.includes(RUNTIME_MODULE)) {
+    || !mobile[0].inject.includes(SIDEBAR_MODULE)) {
     throw new Error('dsh-mobile client has unsupported dependencies')
   }
   if (!Array.isArray(settings[0]?.inject)
-    || !settings[0].inject.includes(CONNECTION_MODULE)
-    || !settings[0].inject.includes(RUNTIME_MODULE)) {
+    || !settings[0].inject.includes(CONNECTION_MODULE)) {
     throw new Error('upstream DSH settings module has unsupported dependencies')
   }
-  mobile[0].inject = [CONNECTION_MODULE, RUNTIME_MODULE]
+  mobile[0].inject = [CONNECTION_MODULE, slotsProvider]
   if (!settings[0].inject.includes(MOBILE_CLIENT_MODULE)) settings[0].inject = [...settings[0].inject, MOBILE_CLIENT_MODULE]
 }
 
-/** Replace only DSH's layout client module while retaining its complete plugin graph. */
-export function rewriteMobileIndex(html: string): string {
+function revisionedMobileBatchPath(entries: readonly MobileBootBatchEntry[]): { readonly key: string; readonly path: string } {
+  const key = createHash('sha256')
+    .update(DSH_MOBILE_VERSION)
+    .update(JSON.stringify(entries))
+    .digest('hex')
+  return { key, path: `${MOBILE_BOOT_BATCH_PREFIX}${key}.js` }
+}
+
+function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
   const assignment = /(?:window\.__DSH_BOOT__|globalThis\["__DSH_BOOT__"\])\s*=\s*/u.exec(html)
   if (assignment?.index === undefined) throw new Error('upstream DSH index has no boot manifest')
   const start = assignment.index
@@ -174,7 +230,7 @@ export function rewriteMobileIndex(html: string): string {
   const scriptEnd = html.indexOf('</script>', valueStart)
   if (scriptEnd < 0) throw new Error('upstream DSH boot manifest script is incomplete')
   const source = html.slice(valueStart, scriptEnd).trim().replace(/;$/u, '')
-  const parsed = JSON.parse(source) as { rev?: unknown; entries?: unknown }
+  const parsed = JSON.parse(source) as { rev?: unknown; entries?: unknown; batches?: unknown }
   if (typeof parsed.rev !== 'string' || !Array.isArray(parsed.entries)) {
     throw new Error('upstream DSH boot manifest is malformed')
   }
@@ -183,15 +239,61 @@ export function rewriteMobileIndex(html: string): string {
   if (layout.length !== 1 || typeof layout[0]?.url !== 'string' || typeof layout[0].rev !== 'string') {
     throw new Error('upstream DSH boot manifest has no unique layout module')
   }
-  if (!Array.isArray(layout[0].inject)
-    || MOBILE_LAYOUT_DEPENDENCIES.some(dependency => !layout[0]?.inject?.includes(dependency))) {
+  if (!Array.isArray(layout[0].inject)) {
     throw new Error('upstream DSH layout module has unsupported dependencies')
   }
+  const dependencyProfile = MOBILE_LAYOUT_DEPENDENCY_PROFILES.find(profile => (
+    profile.dependencies.every(dependency => layout[0]?.inject?.includes(dependency))
+  ))
+  if (dependencyProfile === undefined) throw new Error('upstream DSH layout module has unsupported dependencies')
   layout[0].url = MOBILE_LAYOUT_PATH
-  layout[0].rev = 'dsh-mobile-layout-v1'
-  orderAuthenticatedSettings(entries)
+  layout[0].rev = `dsh-mobile-layout-${DSH_MOBILE_VERSION}`
+  orderAuthenticatedSettings(entries, dependencyProfile.slots)
+
+  let mobileBatch: MobileBootBatchPlan | undefined
+  if (parsed.batches !== undefined) {
+    if (!Array.isArray(parsed.batches)) throw new Error('upstream DSH boot manifest batches are malformed')
+    const batches = parsed.batches as BootGraphBatch[]
+    const entryById = new Map(entries.map(entry => [entry.id, entry]))
+    if (entryById.size !== entries.length) throw new Error('upstream DSH boot manifest has duplicate entries')
+    const layoutBatches: BootGraphBatch[] = []
+    for (const batch of batches) {
+      if (batch === null || typeof batch !== 'object'
+        || (batch.phase !== 'bootstrap' && batch.phase !== 'application')
+        || typeof batch.url !== 'string' || typeof batch.rev !== 'string'
+        || !Array.isArray(batch.entries) || batch.entries.length === 0
+        || batch.entries.some(id => typeof id !== 'string' || !entryById.has(id))) {
+        throw new Error('upstream DSH boot manifest batches are malformed')
+      }
+      if (batch.entries.includes(MOBILE_LAYOUT_MODULE)) layoutBatches.push(batch)
+    }
+    if (layoutBatches.length !== 1 || layoutBatches[0]?.phase !== 'application') {
+      throw new Error('upstream DSH boot manifest has no unique application layout batch')
+    }
+    const layoutBatch = layoutBatches[0]
+    const planEntries = layoutBatch.entries.map((id): MobileBootBatchEntry => {
+      const entry = entryById.get(id)
+      if (entry === undefined || typeof entry.url !== 'string' || typeof entry.rev !== 'string') {
+        throw new Error('upstream DSH boot manifest batches are malformed')
+      }
+      return Object.freeze({ id, url: entry.url, rev: entry.rev })
+    })
+    const revision = revisionedMobileBatchPath(planEntries)
+    layoutBatch.url = revision.path
+    layoutBatch.rev = revision.key
+    mobileBatch = Object.freeze({ ...revision, entries: Object.freeze(planEntries) })
+    parsed.rev = createHash('sha256').update(JSON.stringify({ entries, batches })).digest('hex').slice(0, 16)
+  }
   const replacement = `${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
-  return ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)
+  return Object.freeze({
+    html: ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`),
+    ...(mobileBatch === undefined ? {} : { batch: mobileBatch }),
+  })
+}
+
+/** Replace only DSH's layout client module while retaining its complete plugin graph. */
+export function rewriteMobileIndex(html: string): string {
+  return rewriteMobileIndexWithBatch(html).html
 }
 
 const PAIR_SCRIPT = `(() => {
@@ -580,6 +682,11 @@ function extensionTarget(pathname: string):
   return undefined
 }
 
+function mobileBootBatchKey(pathname: string): string | undefined {
+  const match = new RegExp(`^${MOBILE_BOOT_BATCH_PREFIX.replaceAll('/', '\\/')}([a-f\\d]{64})\\.js$`, 'u').exec(pathname)
+  return match?.[1]
+}
+
 async function readBoundedBody(request: IncomingMessage, maximum: number): Promise<Buffer> {
   const declared = request.headers['content-length']
   if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > maximum)) {
@@ -638,6 +745,11 @@ export class MobileAccessGateway {
   private readonly connectedSockets = new Set<Socket>()
   private readonly activeRequests = new Map<number, ActiveRequest>()
   private readonly activeWebSockets = new Map<number, ActiveWebSocket>()
+  private readonly mobileBootBatches = new Map<string, StoredMobileBootBatch>()
+  private upstreamCookie: string | undefined
+  private upstreamCookieExpiresAt = 0
+  private upstreamCookieTask: Promise<string> | undefined
+  private upstreamAuthRequest: ClientRequest | undefined
   private nextOperationId = 1
   private closing = false
   private started = false
@@ -645,7 +757,12 @@ export class MobileAccessGateway {
   private readonly removeSessionListener: () => void
   private readonly renewLimiter: BoundedRateLimiter
 
-  constructor(readonly config: ResolvedGatewayConfig, store: DeviceStore, private readonly extensions?: MobileAccessService) {
+  constructor(
+    readonly config: ResolvedGatewayConfig,
+    store: DeviceStore,
+    private readonly extensions?: MobileAccessService,
+    private readonly upstreamAuthenticatedUrl?: string,
+  ) {
     this.listenerTlsEnabled = config.tls.mode === 'provided'
     this.tlsEnabled = config.publicTls
     this.access = new AccessController(store, {
@@ -1055,6 +1172,7 @@ export class MobileAccessGateway {
     const computerImages = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-images`
     const computerImage = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-image`
     const requestedExtension = extensionTarget(target.decodedPathname)
+    const requestedMobileBootBatch = mobileBootBatchKey(target.decodedPathname)
     const customAsset = request.method === 'GET'
       ? target.decodedPathname === `${AUTH_PREFIX}/custom.css`
         ? {
@@ -1076,7 +1194,8 @@ export class MobileAccessGateway {
               }
           : undefined
       : undefined
-    if (customAsset === undefined && !computerImages && !computerImage && extensionTarget(target.decodedPathname) === undefined
+    if (customAsset === undefined && requestedMobileBootBatch === undefined && !computerImages && !computerImage
+      && extensionTarget(target.decodedPathname) === undefined
       && (target.decodedPathname === AUTH_PREFIX || target.decodedPathname.startsWith(`${AUTH_PREFIX}/`))) {
       throw new HttpError(404, 'not_found')
     }
@@ -1112,6 +1231,10 @@ export class MobileAccessGateway {
     const extension = requestedExtension
     if (extension !== undefined) {
       await this.handleExtensionRequest(extension, target, request, response, authorization)
+      return
+    }
+    if (requestedMobileBootBatch !== undefined) {
+      await this.serveMobileBootBatch(requestedMobileBootBatch, request, response, authorization)
       return
     }
     if (customAsset !== undefined) {
@@ -1328,6 +1451,88 @@ export class MobileAccessGateway {
     await pipeline(result.body, new ByteLimitTransform(4 * 1024 * 1024), response)
   }
 
+  /** Exchange DSH's process-local launch token for an authority-bound cookie kept inside this gateway. */
+  private async upstreamCookieHeader(): Promise<string | undefined> {
+    if (this.upstreamAuthenticatedUrl === undefined) return undefined
+    if (this.upstreamCookie !== undefined
+      && this.upstreamCookieExpiresAt > Date.now() + UPSTREAM_AUTH_REFRESH_MARGIN_MS) {
+      return this.upstreamCookie
+    }
+    if (this.upstreamCookieTask !== undefined) return this.upstreamCookieTask
+    const task = this.exchangeUpstreamCookie()
+    this.upstreamCookieTask = task
+    try {
+      return await task
+    } finally {
+      if (this.upstreamCookieTask === task) this.upstreamCookieTask = undefined
+    }
+  }
+
+  private async exchangeUpstreamCookie(): Promise<string> {
+    const authenticatedUrl = this.upstreamAuthenticatedUrl
+    if (authenticatedUrl === undefined) throw new HttpError(502, 'upstream_unavailable')
+    let target: URL
+    try {
+      target = new URL(authenticatedUrl)
+    } catch {
+      throw new HttpError(502, 'upstream_unavailable')
+    }
+    if (target.origin !== this.config.upstreamOrigin.origin || target.pathname !== '/'
+      || target.hash !== '' || target.search === '') {
+      throw new HttpError(502, 'upstream_unavailable')
+    }
+    try {
+      const proxied = await new Promise<IncomingMessage>((resolve, reject) => {
+        const upstreamRequest = requestHttp({
+          protocol: 'http:',
+          hostname: stripIpv6Brackets(this.config.upstreamOrigin.hostname),
+          port: Number(this.config.upstreamOrigin.port),
+          method: 'GET',
+          path: `${target.pathname}${target.search}`,
+          headers: {
+            host: this.config.upstreamOrigin.host,
+            accept: 'text/html',
+            'accept-encoding': 'identity',
+          },
+          agent: false,
+        })
+        this.upstreamAuthRequest = upstreamRequest
+        upstreamRequest.setTimeout(this.config.upstreamTimeoutMs, () => {
+          upstreamRequest.destroy(new Error('upstream timeout'))
+        })
+        upstreamRequest.once('response', resolve)
+        upstreamRequest.once('error', reject)
+        upstreamRequest.end()
+      })
+      await new Promise<void>((resolve, reject) => {
+        proxied.once('end', resolve)
+        proxied.once('error', reject)
+        proxied.resume()
+      })
+      const setCookie = proxied.headers['set-cookie']?.[0]
+      const pair = setCookie?.split(';', 1)[0]
+      const maxAgeText = setCookie === undefined
+        ? undefined
+        : /(?:^|;\s*)Max-Age=(\d+)(?:;|$)/iu.exec(setCookie)?.[1]
+      const maxAgeSeconds = maxAgeText === undefined ? Number.NaN : Number(maxAgeText)
+      const expiresAt = Date.now() + maxAgeSeconds * 1000
+      if (proxied.statusCode !== 303 || pair === undefined || pair.length > 4096
+        || !UPSTREAM_COOKIE_PAIR.test(pair) || !Number.isSafeInteger(expiresAt)
+        || maxAgeSeconds <= 0) {
+        throw new HttpError(502, 'upstream_unavailable')
+      }
+      this.upstreamCookie = pair
+      this.upstreamCookieExpiresAt = expiresAt
+      return pair
+    } catch (error) {
+      if (error instanceof HttpError) throw error
+      throw new HttpError(502, 'upstream_unavailable')
+    } finally {
+      this.upstreamAuthRequest?.destroy()
+      this.upstreamAuthRequest = undefined
+    }
+  }
+
   private async proxyMobileIndex(
     request: IncomingMessage,
     response: ServerResponse,
@@ -1337,6 +1542,8 @@ export class MobileAccessGateway {
     const operation = this.allocateRequest(authorization, response, holder)
     try {
       const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
+      const upstreamCookie = await this.upstreamCookieHeader()
+      if (upstreamCookie !== undefined) upstreamHeaders.cookie = upstreamCookie
       upstreamHeaders['accept-encoding'] = 'identity'
       const proxied = await new Promise<IncomingMessage>((resolve, reject) => {
         const upstreamRequest = requestHttp({
@@ -1367,7 +1574,9 @@ export class MobileAccessGateway {
       }
       let body: Buffer
       try {
-        body = Buffer.from(rewriteMobileIndex(Buffer.concat(chunks).toString('utf8')))
+        const rewritten = rewriteMobileIndexWithBatch(Buffer.concat(chunks).toString('utf8'))
+        if (rewritten.batch !== undefined) this.rememberMobileBootBatch(rewritten.batch)
+        body = Buffer.from(rewritten.html)
       } catch {
         throw new HttpError(502, 'upstream_unavailable')
       }
@@ -1389,6 +1598,127 @@ export class MobileAccessGateway {
       else throw new HttpError(502, 'upstream_unavailable')
     } finally {
       operation.release()
+    }
+  }
+
+  private rememberMobileBootBatch(plan: MobileBootBatchPlan): void {
+    const existing = this.mobileBootBatches.get(plan.key)
+    this.mobileBootBatches.delete(plan.key)
+    this.mobileBootBatches.set(plan.key, existing ?? { plan })
+    while (this.mobileBootBatches.size > MAX_MOBILE_BOOT_BATCHES) {
+      const oldest = this.mobileBootBatches.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.mobileBootBatches.delete(oldest)
+    }
+  }
+
+  private async serveMobileBootBatch(
+    key: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): Promise<void> {
+    if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
+    const stored = this.mobileBootBatches.get(key)
+    if (stored === undefined) throw new HttpError(404, 'not_found')
+    const operation = this.allocateRequest(authorization, response, {})
+    try {
+      const layoutStat = await stat(this.config.mobileLayoutFile)
+      if (stored.body === undefined || stored.etag === undefined || stored.layoutMtimeMs !== layoutStat.mtimeMs) {
+        const body = await this.assembleMobileBootBatch(stored.plan, operation.signal)
+        stored.body = body
+        stored.etag = createHash('sha256').update(body).digest('hex')
+        stored.layoutMtimeMs = layoutStat.mtimeMs
+      }
+      if (headerValue(request.headers, 'if-none-match') === stored.etag) {
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(304, { ETag: stored.etag, 'Cache-Control': 'private, no-cache' })
+        response.end()
+        return
+      }
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': stored.body.byteLength,
+        'Cache-Control': 'private, no-cache',
+        ETag: stored.etag,
+      })
+      if (request.method === 'HEAD') response.end()
+      else response.end(stored.body)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new HttpError(503, 'mobile_frontend_unavailable')
+      throw error
+    } finally {
+      operation.release()
+    }
+  }
+
+  private async assembleMobileBootBatch(plan: MobileBootBatchPlan, signal: AbortSignal): Promise<Buffer> {
+    const bodies = new Array<Buffer>(plan.entries.length)
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (cursor < plan.entries.length) {
+        const index = cursor++
+        const entry = plan.entries[index]!
+        bodies[index] = entry.id === MOBILE_LAYOUT_MODULE
+          ? await readFile(this.config.mobileLayoutFile, { signal })
+          : await this.readUpstreamClientBundle(entry.url, signal)
+        if (bodies[index]!.byteLength > MAX_MOBILE_BOOT_ENTRY_BYTES) throw new HttpError(502, 'upstream_unavailable')
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(8, plan.entries.length) }, worker))
+    const total = bodies.reduce((bytes, body) => bytes + body.byteLength + 2, 0)
+    if (total > MAX_MOBILE_BOOT_BATCH_BYTES) throw new HttpError(502, 'upstream_unavailable')
+    return Buffer.concat(bodies.flatMap(body => [body, Buffer.from('\n;\n')]))
+  }
+
+  private async readUpstreamClientBundle(source: string, signal: AbortSignal): Promise<Buffer> {
+    if (!source.startsWith('/plugins/') || source.includes('#')) throw new HttpError(502, 'upstream_unavailable')
+    const target = new URL(source, this.config.upstreamOrigin)
+    if (target.origin !== this.config.upstreamOrigin.origin) throw new HttpError(502, 'upstream_unavailable')
+    let upstreamRequest: ClientRequest | undefined
+    const aborted = (): void => { upstreamRequest?.destroy(new Error('request aborted')) }
+    signal.addEventListener('abort', aborted, { once: true })
+    try {
+      const upstreamCookie = await this.upstreamCookieHeader()
+      const proxied = await new Promise<IncomingMessage>((resolve, reject) => {
+        upstreamRequest = requestHttp({
+          protocol: 'http:',
+          hostname: stripIpv6Brackets(this.config.upstreamOrigin.hostname),
+          port: Number(this.config.upstreamOrigin.port),
+          method: 'GET',
+          path: `${target.pathname}${target.search}`,
+          headers: {
+            host: this.config.upstreamOrigin.host,
+            accept: 'text/javascript',
+            'accept-encoding': 'identity',
+            ...(upstreamCookie === undefined ? {} : { cookie: upstreamCookie }),
+          },
+          agent: false,
+        })
+        upstreamRequest.setTimeout(this.config.upstreamTimeoutMs, () => {
+          upstreamRequest?.destroy(new Error('upstream timeout'))
+        })
+        upstreamRequest.once('response', resolve)
+        upstreamRequest.once('error', reject)
+        upstreamRequest.end()
+      })
+      if ((proxied.statusCode ?? 502) !== 200) throw new HttpError(502, 'upstream_unavailable')
+      const chunks: Buffer[] = []
+      let bytes = 0
+      for await (const chunk of proxied) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        bytes += buffer.byteLength
+        if (bytes > MAX_MOBILE_BOOT_ENTRY_BYTES) throw new HttpError(502, 'upstream_unavailable')
+        chunks.push(buffer)
+      }
+      return Buffer.concat(chunks)
+    } catch (error) {
+      if (error instanceof HttpError) throw error
+      throw new HttpError(502, 'upstream_unavailable')
+    } finally {
+      signal.removeEventListener('abort', aborted)
+      upstreamRequest?.destroy()
     }
   }
 
@@ -1436,6 +1766,8 @@ export class MobileAccessGateway {
         ? mobileHistoryRequestBody(request, await readBoundedBody(request, this.config.maxBodyBytes))
         : undefined
       const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
+      const upstreamCookie = await this.upstreamCookieHeader()
+      if (upstreamCookie !== undefined) upstreamHeaders.cookie = upstreamCookie
       if (bufferedBody !== undefined) upstreamHeaders['content-length'] = String(bufferedBody.byteLength)
       const upstreamResponse = new Promise<IncomingMessage>((resolve, reject) => {
         const upstreamRequest = requestHttp({
@@ -1593,6 +1925,7 @@ export class MobileAccessGateway {
     if (decodedKey.length !== 16 || decodedKey.toString('base64') !== key) throw new HttpError(400, 'bad_request')
     const authorization = this.authorize(request)
     if (this.activeWebSockets.size >= this.config.maxWebSockets) throw new HttpError(429, 'busy')
+    const upstreamCookie = await this.upstreamCookieHeader()
 
     const upstream = connect({
       host: stripIpv6Brackets(this.config.upstreamOrigin.hostname),
@@ -1641,6 +1974,7 @@ export class MobileAccessGateway {
         `Sec-WebSocket-Key: ${key}`,
         'Sec-WebSocket-Version: 13',
       ]
+      if (upstreamCookie !== undefined) requestLines.push(`Cookie: ${upstreamCookie}`)
       const protocol = headerValue(request.headers, 'sec-websocket-protocol')
       const extensions = headerValue(request.headers, 'sec-websocket-extensions')
       if (protocol !== undefined) requestLines.push(`Sec-WebSocket-Protocol: ${protocol}`)
@@ -1748,6 +2082,8 @@ export class MobileAccessGateway {
 
   private async performClose(): Promise<void> {
     this.closing = true
+    this.upstreamAuthRequest?.destroy()
+    this.upstreamAuthRequest = undefined
     this.removeSessionListener()
     const accessClose = this.access.close()
     for (const request of this.activeRequests.values()) request.abort()
