@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
+  combineClientSignals,
   diagnosticEntriesForRender,
   diagnosticOverallForChecks,
   diagnosticServerCopy,
   DIAGNOSTIC_REASON_MESSAGES,
+  extensionRouteUrl,
   handleMissingExtensionManifest,
   MOBILE_CONTROL_MESSAGES,
   normalizeDiagnosticOverall,
@@ -16,6 +18,7 @@ import {
   registerUniqueDisposable,
   renderDiagnosticPayloadSafely,
   selectMobileControlLocale,
+  startExtensionChangeStream,
   startLifecycleRefreshScheduler,
   validateDiagnosticChecks,
 } from '../src/client.js'
@@ -175,6 +178,78 @@ describe('custom asset refresh lifecycle', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
     stop()
   })
+
+  it('accepts a push refresh without starting a parallel cycle', async () => {
+    const fakeDocument = new FakeDocument()
+    const fakeWindow = new FakeWindow()
+    let release: (() => void) | undefined
+    const refresh = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+    const stop = startLifecycleRefreshScheduler(refresh, {}, { document: fakeDocument, window: fakeWindow })
+    await Promise.resolve()
+    stop.refresh()
+    stop.refresh()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    release?.()
+    await vi.waitFor(() => { expect(refresh).toHaveBeenCalledTimes(2) })
+    stop()
+  })
+
+  it('keeps one event stream and reconnects with bounded exponential backoff', async () => {
+    vi.useFakeTimers()
+    class FakeEventSource {
+      onopen: ((event: Event) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+      readonly listeners = new Map<string, EventListener>()
+      readonly close = vi.fn()
+      addEventListener(name: string, listener: EventListener): void { this.listeners.set(name, listener) }
+    }
+    const fakeWindow = new FakeWindow()
+    const sources: FakeEventSource[] = []
+    const changed = vi.fn()
+    const stop = startExtensionChangeStream(changed, {
+      window: fakeWindow,
+      create: () => { const source = new FakeEventSource(); sources.push(source); return source as unknown as EventSource },
+    })
+    expect(sources).toHaveLength(1)
+    sources[0]?.listeners.get('extensions-changed')?.(new Event('extensions-changed'))
+    expect(changed).toHaveBeenCalledTimes(1)
+    sources[0]?.onerror?.(new Event('error'))
+    expect(sources[0]?.close).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(sources).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(sources).toHaveLength(2)
+    sources[1]?.onerror?.(new Event('error'))
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(sources).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(sources).toHaveLength(3)
+    fakeWindow.dispatchEvent(new Event('online'))
+    expect(sources[2]?.close).toHaveBeenCalledTimes(1)
+    expect(sources).toHaveLength(4)
+    stop()
+    expect(sources[3]?.close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('extension request isolation', () => {
+  it('combines abort lifetimes without AbortSignal.any', () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const combined = combineClientSignals(extension.signal, caller.signal)
+    caller.abort('caller stopped')
+    expect(combined.aborted).toBe(true)
+    expect(combined.reason).toBe('caller stopped')
+  })
+
+  it('normalizes route URLs before enforcing the current extension namespace', () => {
+    const origin = 'https://dsh.example/'
+    expect(extensionRouteUrl('demo', '/status?full=1', origin).href).toBe('https://dsh.example/mobile-access/extensions/demo/routes/status?full=1')
+    expect(extensionRouteUrl('demo', '/status?path=%2Ftmp%2Fimage.png', origin).searchParams.get('path')).toBe('/tmp/image.png')
+    for (const path of ['/../other/routes/status', '/%2e%2e/other/routes/status', '/safe/%2f../other', '//evil.test/x', '/ok#fragment']) {
+      expect(() => extensionRouteUrl('demo', path, origin)).toThrowError('extension routes must be relative')
+    }
+  })
 })
 
 describe('per-extension activation lifecycle', () => {
@@ -294,7 +369,7 @@ describe('client extension manifest reconciliation', () => {
     await expect(pending).resolves.toBe(false)
   })
 
-  it('publishes authority before a later hang so omission and 404 remove earlier managed resources', async () => {
+  it('updates authoritative ids and clears managed resources on manifest removal', async () => {
     const lifecycle = new PerIdActivationLifecycle<string>()
     const authoritative = new Set<string>()
     const managedStyles = new Set<string>()

@@ -1120,6 +1120,47 @@ function mobileRequest(path: string, init: RequestInit = {}): Promise<Response> 
   return fetch(target, { ...init, headers, credentials: 'same-origin', cache: 'no-store', redirect: 'error' })
 }
 
+/** Combine extension and caller abort lifetimes on WebViews without AbortSignal.any. */
+export function combineClientSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+  if (first.aborted || second.aborted) {
+    const aborted = new AbortController()
+    aborted.abort(first.aborted ? first.reason : second.reason)
+    return aborted.signal
+  }
+  const controller = new AbortController()
+  const cleanup = (): void => {
+    first.removeEventListener('abort', abortFirst)
+    second.removeEventListener('abort', abortSecond)
+  }
+  const abortFirst = (): void => { cleanup(); controller.abort(first.reason) }
+  const abortSecond = (): void => { cleanup(); controller.abort(second.reason) }
+  first.addEventListener('abort', abortFirst, { once: true })
+  second.addEventListener('abort', abortSecond, { once: true })
+  return controller.signal
+}
+
+/** Resolve one SDK route and prove its normalized path remains in the current extension namespace. */
+export function extensionRouteUrl(id: string, path: string, baseUrl: string): URL {
+  const rawPathname = path.split(/[?#]/u, 1)[0] ?? ''
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(id) || !path.startsWith('/') || path.startsWith('//')
+    || rawPathname.includes('\\') || rawPathname.includes('\0') || /%(?:2f|5c)/iu.test(rawPathname)) {
+    throw new TypeError('extension routes must be relative')
+  }
+  const origin = new URL(baseUrl).origin
+  const prefix = `/mobile-access/extensions/${id}/routes`
+  let target: URL
+  try { target = new URL(`${prefix}${path}`, origin) } catch { throw new TypeError('extension routes must be relative') }
+  let decodedPathname: string
+  try { decodedPathname = decodeURIComponent(target.pathname) } catch { throw new TypeError('extension routes must be relative') }
+  if (target.origin !== origin || target.hash !== '' || decodedPathname.includes('\\')
+    || decodedPathname !== prefix && !decodedPathname.startsWith(`${prefix}/`)) {
+    throw new TypeError('extension routes must be relative')
+  }
+  const relative = decodedPathname.slice(prefix.length)
+  if (relative.split('/').some(part => part === '.' || part === '..')) throw new TypeError('extension routes must be relative')
+  return target
+}
+
 export function registerUniqueDisposable<T extends { readonly dispose: () => void }>(
   entries: Map<string, T>,
   claimedIds: Set<string>,
@@ -1149,7 +1190,7 @@ export function reconcileRemovedExtensions(currentIds: Iterable<string>, seen: R
   for (const id of new Set(currentIds)) if (!seen.has(id)) dispose(id)
 }
 
-/** Publish validated authority before resource loading can hang or time out. */
+/** Reconcile managed resources against one validated authoritative id set. */
 export function publishAuthoritativeExtensionIds(
   authoritativeIds: Set<string>,
   seen: ReadonlySet<string>,
@@ -1215,6 +1256,11 @@ interface LifecycleSchedulerRuntime {
   readonly window: Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout' | 'clearTimeout'>
 }
 
+export interface LifecycleRefreshController {
+  (): void
+  refresh(): void
+}
+
 function refreshAborted(signal: AbortSignal): boolean { return signal.aborted }
 
 /** Run one coalesced refresh cycle, slowing down when the page is hidden. */
@@ -1222,7 +1268,7 @@ export function startLifecycleRefreshScheduler(
   refresh: (signal: AbortSignal) => void | Promise<void>,
   options: { readonly visibleIntervalMs?: number; readonly hiddenIntervalMs?: number; readonly cycleTimeoutMs?: number } = {},
   runtime: LifecycleSchedulerRuntime = { document, window },
-): () => void {
+): LifecycleRefreshController {
   const visibleIntervalMs = options.visibleIntervalMs ?? 45_000
   const hiddenIntervalMs = options.hiddenIntervalMs ?? 300_000
   const cycleTimeoutMs = options.cycleTimeoutMs ?? 30_000
@@ -1280,7 +1326,7 @@ export function startLifecycleRefreshScheduler(
   runtime.window.addEventListener('focus', run)
   runtime.window.addEventListener('online', run)
   run()
-  return () => {
+  const stop = (): void => {
     disposed = true
     queued = false
     controller?.abort()
@@ -1290,6 +1336,64 @@ export function startLifecycleRefreshScheduler(
     runtime.document.removeEventListener('visibilitychange', onVisibilityChange)
     runtime.window.removeEventListener('focus', run)
     runtime.window.removeEventListener('online', run)
+  }
+  return Object.assign(stop, { refresh: run })
+}
+
+interface ExtensionEventRuntime {
+  readonly window: Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout' | 'clearTimeout'>
+  readonly create: (url: string) => Pick<EventSource, 'close' | 'onopen' | 'onerror' | 'addEventListener'>
+}
+
+/** Maintain one authenticated same-origin extension event stream with bounded reconnect backoff. */
+export function startExtensionChangeStream(
+  changed: () => void,
+  runtime: ExtensionEventRuntime = {
+    window,
+    create: url => new EventSource(url, { withCredentials: true }),
+  },
+): () => void {
+  let source: ReturnType<ExtensionEventRuntime['create']> | undefined
+  let timer: number | undefined
+  let disposed = false
+  let retryMs = 1_000
+  const clearTimer = (): void => {
+    if (timer === undefined) return
+    runtime.window.clearTimeout(timer)
+    timer = undefined
+  }
+  const connect = (): void => {
+    if (disposed || source !== undefined) return
+    clearTimer()
+    const next = runtime.create('/mobile-access/extensions/events')
+    source = next
+    next.onopen = () => { retryMs = 1_000 }
+    next.addEventListener('extensions-changed', changed)
+    next.onerror = () => {
+      if (source !== next) return
+      next.close()
+      source = undefined
+      if (disposed) return
+      const delay = retryMs
+      retryMs = Math.min(30_000, retryMs * 2)
+      timer = runtime.window.setTimeout(connect, delay)
+    }
+  }
+  const reconnectNow = (): void => {
+    if (disposed) return
+    source?.close()
+    source = undefined
+    retryMs = 1_000
+    connect()
+  }
+  runtime.window.addEventListener('online', reconnectNow)
+  connect()
+  return () => {
+    disposed = true
+    clearTimer()
+    source?.close()
+    source = undefined
+    runtime.window.removeEventListener('online', reconnectNow)
   }
 }
 
@@ -1540,7 +1644,7 @@ function installCustomAssets(): () => void {
     const ensureCurrent = (): void => { if (controller.signal.aborted) throw controller.signal.reason }
     const requestSignal = (signal?: AbortSignal | null): AbortSignal => signal === undefined || signal === null
       ? controller.signal
-      : AbortSignal.any([controller.signal, signal])
+      : combineClientSignals(controller.signal, signal)
     const mountSurface = (surface: MobileSurface): (() => void) => {
       ensureCurrent()
       if (!/^[a-z][a-z0-9-]{0,63}$/u.test(surface.id) || surface.label.length > 120) throw new Error('invalid mobile surface')
@@ -1560,9 +1664,8 @@ function installCustomAssets(): () => void {
         },
         fetch: (path: string, init?: RequestInit) => {
           ensureCurrent()
-          if (!path.startsWith('/') || path.startsWith('//') || path.includes('://')
-            || path.split('/').some(part => part === '..' || part === '.')) throw new TypeError('extension routes must be relative')
-          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/routes${path}`, { ...init, signal: requestSignal(init?.signal) })
+          const target = extensionRouteUrl(id, path, location.href)
+          return mobileRequest(target.href, { ...init, signal: requestSignal(init?.signal) })
         },
       },
       ui: {
@@ -1578,7 +1681,7 @@ function installCustomAssets(): () => void {
       signal: controller.signal, document, window,
     }
   }
-  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal): Promise<boolean> => activations.activate(
+  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal, commitGeneration?: () => void): Promise<boolean> => activations.activate(
     definition.id,
     definition,
     cycleSignal,
@@ -1606,6 +1709,7 @@ function installCustomAssets(): () => void {
         commit: value => {
           if (definitions.get(definition.id) !== definition || controller.signal.aborted) throw new Error('stale mobile extension activation')
           for (const surface of value.surfaces.values()) surface.host().append(surface.container)
+          commitGeneration?.()
         },
         dispose: value => {
           controller.abort(new DOMException('mobile extension disposed', 'AbortError'))
@@ -1691,7 +1795,6 @@ function installCustomAssets(): () => void {
       if (refreshAborted(signal) || payload === undefined) return false
       const entries = payload.extensions
       const seen = new Set(entries.map(entry => entry.id))
-      publishAuthoritativeExtensionIds(manifestExtensionIds, seen, managedManifestIdSources(), disposeManifestExtension)
       const scriptRevision = payload.legacy.scriptRevision
       const styleRevision = payload.legacy.styleRevision
       let refreshComplete = true
@@ -1703,15 +1806,25 @@ function installCustomAssets(): () => void {
         if (await refreshCssLegacy(legacyStyle, signal, legacyCssState)) legacyStyleRevision = styleRevision
         else refreshComplete = false
       }
+      const commitStyle = (id: string, change: 'retain' | 'remove' | 'replace', css?: string, etag?: string): void => {
+        if (change === 'retain') return
+        const oldStyle = styleNodes.get(id)
+        if (change === 'remove') {
+          oldStyle?.remove()
+          styleNodes.delete(id)
+          styleEtags.delete(id)
+          return
+        }
+        if (oldStyle?.textContent !== css) {
+          const node = element('style'); node.dataset.dshMobileExtensionStyle = id; node.textContent = css ?? ''; document.head.append(node); styleNodes.set(id, node); oldStyle?.remove()
+        }
+        if (etag !== undefined && etag !== '') styleEtags.set(id, etag)
+      }
       for (const entry of entries) {
-        if (entry.styleUrl === undefined) {
-          styleNodes.get(entry.id)?.remove(); styleNodes.delete(entry.id); styleEtags.delete(entry.id)
-        }
-        if (entry.scriptUrl === undefined) {
-          activations.remove(entry.id); scriptDigests.delete(entry.id)
-          if (managedDefinitionIds.delete(entry.id)) definitions.delete(entry.id)
-        }
+        let previousDefinition: MobileClientDefinition | undefined
+        let evaluatedDefinition = false
         try {
+          let styleChange: 'retain' | 'remove' | 'replace' = entry.styleUrl === undefined ? 'remove' : 'retain'
           let pendingCss: string | undefined
           let pendingStyleEtag: string | undefined
           const cssUrl = typeof entry.styleUrl === 'string' ? entry.styleUrl : undefined
@@ -1724,16 +1837,24 @@ function installCustomAssets(): () => void {
               if (!cssResponse.ok) throw new Error('mobile extension style failed to load')
               pendingStyleEtag = cssResponse.headers.get('etag') ?? undefined
               pendingCss = await cssResponse.text()
+              styleChange = 'replace'
               if (refreshAborted(signal)) return false
             }
           }
 
           const scriptUrl = typeof entry.scriptUrl === 'string' ? entry.scriptUrl : undefined
-          if (scriptUrl !== undefined) {
+          if (scriptUrl === undefined) {
+            if (refreshAborted(signal)) return false
+            commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag)
+            activations.remove(entry.id)
+            scriptDigests.delete(entry.id)
+            if (managedDefinitionIds.delete(entry.id)) definitions.delete(entry.id)
+          } else {
             const scriptHeaders: Record<string, string> = {}
             const storedDigest = scriptDigests.get(entry.id)
             if (storedDigest !== undefined) scriptHeaders['if-none-match'] = storedDigest
             const scriptResponse = await fetch(scriptUrl, { credentials: 'same-origin', cache: 'no-store', headers: scriptHeaders, signal })
+            let nextDigest: string | undefined
             if (scriptResponse.status !== 304) {
               if (!scriptResponse.ok) throw new Error('mobile extension script failed to load')
               const source = await scriptResponse.text()
@@ -1742,7 +1863,7 @@ function installCustomAssets(): () => void {
               if (refreshAborted(signal)) return false
               const key = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
               if (scriptDigests.get(entry.id) !== key) {
-                const previousDefinition = definitions.get(entry.id)
+                previousDefinition = definitions.get(entry.id)
                 try {
                   expectedDefinitionId = entry.id
                   try {
@@ -1750,10 +1871,8 @@ function installCustomAssets(): () => void {
                   } finally { expectedDefinitionId = undefined }
                   const nextDefinition = definitions.get(entry.id)
                   if (nextDefinition === undefined || nextDefinition === previousDefinition) throw new Error('mobile extension did not define its manifest id')
-                  if (!await activateDefinition(nextDefinition, signal)) throw new Error('mobile extension activation failed')
-                  if (refreshAborted(signal)) return false
-                  managedDefinitionIds.add(entry.id)
-                  scriptDigests.set(entry.id, key)
+                  evaluatedDefinition = true
+                  nextDigest = key
                 } catch (error) {
                   if (previousDefinition === undefined) definitions.delete(entry.id)
                   else definitions.set(entry.id, previousDefinition)
@@ -1762,23 +1881,30 @@ function installCustomAssets(): () => void {
               }
             }
             const definition = definitions.get(entry.id)
-            if (definition !== undefined && !activations.hasActive(entry.id) && !await activateDefinition(definition, signal)) throw new Error('mobile extension activation failed')
-          }
-
-          if (refreshAborted(signal)) return false
-          if (pendingCss !== undefined) {
-            const oldStyle = styleNodes.get(entry.id)
-            if (oldStyle?.textContent !== pendingCss) {
-              const node = element('style'); node.dataset.dshMobileExtensionStyle = entry.id; node.textContent = pendingCss; document.head.append(node); styleNodes.set(entry.id, node); oldStyle?.remove()
+            const commitGeneration = (): void => { commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag) }
+            if (definition === undefined) throw new Error('mobile extension definition is unavailable')
+            if (evaluatedDefinition || !activations.hasActive(entry.id)) {
+              if (!await activateDefinition(definition, signal, commitGeneration)) throw new Error('mobile extension activation failed')
+            } else {
+              if (refreshAborted(signal)) return false
+              commitGeneration()
             }
-            if (pendingStyleEtag !== undefined && pendingStyleEtag !== '') styleEtags.set(entry.id, pendingStyleEtag)
+            managedDefinitionIds.add(entry.id)
+            if (nextDigest !== undefined) scriptDigests.set(entry.id, nextDigest)
           }
         } catch {
+          if (evaluatedDefinition) {
+            if (previousDefinition === undefined) definitions.delete(entry.id)
+            else definitions.set(entry.id, previousDefinition)
+          }
           refreshComplete = false
         }
       }
       if (refreshAborted(signal)) return false
-      manifestEtag = refreshComplete ? nextManifestEtag : ''
+      if (refreshComplete) {
+        publishAuthoritativeExtensionIds(manifestExtensionIds, seen, managedManifestIdSources(), disposeManifestExtension)
+        manifestEtag = nextManifestEtag
+      } else manifestEtag = ''
       return refreshComplete
     } catch { return false }
   }
@@ -1787,7 +1913,8 @@ function installCustomAssets(): () => void {
   const stopRefresh = startLifecycleRefreshScheduler(async signal => {
     await refreshExtensions(signal)
   })
-  return () => { disposed = true; stopRefresh(); started = false; legacyDispose?.(); legacyDispose = undefined; legacyRoot?.remove(); legacyRoot = undefined; legacyStyle.remove(); activations.dispose(); for (const node of styleNodes.values()) node.remove(); styleNodes.clear(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
+  const stopEvents = startExtensionChangeStream(() => { stopRefresh.refresh() })
+  return () => { disposed = true; stopEvents(); stopRefresh(); started = false; legacyDispose?.(); legacyDispose = undefined; legacyRoot?.remove(); legacyRoot = undefined; legacyStyle.remove(); activations.dispose(); for (const node of styleNodes.values()) node.remove(); styleNodes.clear(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
 }
 
 interface LegacyCssState { etag: string; modified: string }

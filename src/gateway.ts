@@ -101,6 +101,8 @@ const UPSTREAM_AUTH_REFRESH_MARGIN_MS = 60_000
 const UPSTREAM_COOKIE_PAIR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+=[\x21-\x3A\x3C-\x7E]*$/u
 const CUSTOM_STYLE_FALLBACK = '/* Add mobile overrides in the DSH home mobile-access/mobile.css file. */\n'
 const CUSTOM_SCRIPT_FALLBACK = 'window.dshMobile?.register(() => undefined)\n'
+const EXTENSION_CHANGE_POLL_MS = 2_000
+const EXTENSION_EVENT_HEARTBEAT_MS = 15_000
 const MOBILE_CLIENT_MODULE = 'dsh-mobile'
 const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
 const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
@@ -667,12 +669,14 @@ function discoveryBroadcastTargets(cidrs: readonly ParsedCidr[]): readonly strin
 
 function extensionTarget(pathname: string):
   | { readonly kind: 'manifest' }
+  | { readonly kind: 'events' }
   | { readonly kind: 'script' | 'style' | 'asset'; readonly id: string; readonly path?: string }
   | { readonly kind: 'action'; readonly id: string; readonly action: string }
   | { readonly kind: 'route'; readonly id: string; readonly path: string }
   | undefined {
   const prefix = `${AUTH_PREFIX}/extensions`
   if (pathname === prefix || pathname === `${prefix}/` || pathname === `${prefix}/manifest`) return { kind: 'manifest' }
+  if (pathname === `${prefix}/events`) return { kind: 'events' }
   if (!pathname.startsWith(`${prefix}/`)) return undefined
   const parts = pathname.slice(prefix.length + 1).split('/')
   const id = parts.shift()
@@ -754,6 +758,11 @@ export class MobileAccessGateway {
   private readonly activeRequests = new Map<number, ActiveRequest>()
   private readonly activeWebSockets = new Map<number, ActiveWebSocket>()
   private readonly mobileBootBatches = new Map<string, StoredMobileBootBatch>()
+  private readonly extensionEventListeners = new Set<(revision: number) => void>()
+  private extensionEventRevision = 0
+  private extensionChangeTimer: NodeJS.Timeout | undefined
+  private extensionChangeTask: Promise<void> | undefined
+  private legacyCustomDigest = ''
   private upstreamCookie: string | undefined
   private upstreamCookieExpiresAt = 0
   private upstreamCookieTask: Promise<string> | undefined
@@ -763,6 +772,7 @@ export class MobileAccessGateway {
   private started = false
   private closeTask: Promise<void> | undefined
   private readonly removeSessionListener: () => void
+  private readonly removeExtensionContentListener: () => void
   private readonly renewLimiter: BoundedRateLimiter
 
   constructor(
@@ -791,6 +801,9 @@ export class MobileAccessGateway {
     this.removeSessionListener = this.access.onSessionEnded(authorization => {
       this.abortSessionResources(authorization.sessionKey)
     })
+    this.removeExtensionContentListener = this.extensions?.onContentChanged(() => {
+      this.broadcastExtensionChange()
+    }) ?? (() => undefined)
   }
 
   /** Initialize durable state, validate TLS, and bind the externally reachable listener. */
@@ -859,6 +872,9 @@ export class MobileAccessGateway {
         this.tlsEnabled,
       )
       if (this.config.discovery) await this.startDiscovery(address.port)
+      await this.pollLegacyCustomChanges()
+      this.extensionChangeTimer = setInterval(() => { void this.pollLegacyCustomChanges() }, EXTENSION_CHANGE_POLL_MS)
+      this.extensionChangeTimer.unref()
     } catch (error) {
       await this.closeFailedStart()
       throw error
@@ -924,6 +940,9 @@ export class MobileAccessGateway {
   }
 
   private async closeFailedStart(): Promise<void> {
+    if (this.extensionChangeTimer !== undefined) clearInterval(this.extensionChangeTimer)
+    this.extensionChangeTimer = undefined
+    this.removeExtensionContentListener()
     if (this.discoveryTimer !== undefined) clearInterval(this.discoveryTimer)
     this.discoveryTimer = undefined
     await this.closeBonjour()
@@ -1330,6 +1349,11 @@ export class MobileAccessGateway {
   ): Promise<void> {
     const extensions = this.extensions
     if (extensions === undefined) throw new HttpError(404, 'not_found')
+    if (targetInfo.kind === 'events') {
+      if (request.method !== 'GET' || target.search !== '') throw new HttpError(request.method === 'GET' ? 400 : 405, request.method === 'GET' ? 'bad_request' : 'method_not_allowed')
+      this.openExtensionEventStream(request, response, authorization)
+      return
+    }
     if (targetInfo.kind === 'manifest') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
       const operation = this.allocateRequest(authorization, response, {})
@@ -1855,6 +1879,76 @@ export class MobileAccessGateway {
     }
   }
 
+  private broadcastExtensionChange(): void {
+    if (this.closing) return
+    this.extensionEventRevision += 1
+    for (const listener of this.extensionEventListeners) listener(this.extensionEventRevision)
+  }
+
+  private pollLegacyCustomChanges(): Promise<void> {
+    if (this.extensionChangeTask !== undefined) return this.extensionChangeTask
+    const digestFile = async (path: string, fallback: string): Promise<string> => {
+      try {
+        const info = await stat(path)
+        if (!info.isFile() || info.size > 256 * 1024) return `invalid:${String(info.size)}:${String(info.mtimeMs)}`
+        return createHash('sha256').update(await readFile(path)).digest('hex')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return createHash('sha256').update(fallback).digest('hex')
+        return `error:${String((error as NodeJS.ErrnoException).code ?? 'unknown')}`
+      }
+    }
+    const task = Promise.all([
+      digestFile(this.config.customScriptFile, CUSTOM_SCRIPT_FALLBACK),
+      digestFile(this.config.customCssFile, CUSTOM_STYLE_FALLBACK),
+    ]).then(parts => {
+      const next = createHash('sha256').update(parts.join('|')).digest('hex')
+      if (this.legacyCustomDigest !== '' && next !== this.legacyCustomDigest) this.broadcastExtensionChange()
+      this.legacyCustomDigest = next
+    }).finally(() => {
+      if (this.extensionChangeTask === task) this.extensionChangeTask = undefined
+    })
+    this.extensionChangeTask = task
+    return task
+  }
+
+  private openExtensionEventStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): void {
+    const operation = this.allocateRequest(authorization, response, {})
+    let closed = false
+    let heartbeat: NodeJS.Timeout | undefined
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      if (heartbeat !== undefined) clearInterval(heartbeat)
+      this.extensionEventListeners.delete(send)
+      request.removeListener('aborted', close)
+      response.removeListener('close', close)
+      operation.release()
+    }
+    const send = (revision: number): void => {
+      if (closed || response.destroyed || response.writableEnded) return
+      response.write(`id: ${String(revision)}\nevent: extensions-changed\ndata: {\"revision\":${String(revision)}}\n\n`)
+    }
+    setSecurityHeaders(response, this.tlsEnabled)
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    response.write('retry: 2000\n: ready\n\n')
+    this.extensionEventListeners.add(send)
+    heartbeat = setInterval(() => {
+      if (!closed && !response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
+    }, EXTENSION_EVENT_HEARTBEAT_MS)
+    heartbeat.unref()
+    request.once('aborted', close)
+    response.once('close', close)
+  }
+
   private async readUpgradeResponse(upstream: Socket, expectedAccept: string): Promise<{ header: string; remainder: Buffer }> {
     return new Promise((resolve, reject) => {
       let buffer = Buffer.alloc(0)
@@ -2103,6 +2197,9 @@ export class MobileAccessGateway {
 
   private async performClose(): Promise<void> {
     this.closing = true
+    if (this.extensionChangeTimer !== undefined) clearInterval(this.extensionChangeTimer)
+    this.extensionChangeTimer = undefined
+    this.removeExtensionContentListener()
     this.upstreamAuthRequest?.destroy()
     this.upstreamAuthRequest = undefined
     this.removeSessionListener()

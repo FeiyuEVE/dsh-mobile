@@ -118,8 +118,8 @@ export interface MobileExtensionStatus {
 interface ActiveLocalExtension {
   readonly manifest: LocalExtensionManifest
   readonly directory: string
-  readonly scriptFile?: string
-  readonly styleFile?: string
+  readonly scriptBody?: Buffer
+  readonly styleBody?: Buffer
   readonly host: MobileExtensionDefinition
   readonly controller: AbortController
   readonly cleanups: readonly (() => void | Promise<void>)[]
@@ -219,12 +219,19 @@ async function optionalFile(root: string, name: string, maximum: number, field: 
   }
 }
 
-async function optionalBytes(root: string, name: string, maximum: number, field: string): Promise<Buffer> {
+async function optionalBytes(root: string, name: string, maximum: number, field: string): Promise<Buffer | undefined> {
   const path = await optionalFile(root, name, maximum, field)
-  return path === undefined ? Buffer.alloc(0) : readFile(path)
+  return path === undefined ? undefined : readFile(path)
 }
 
-async function extensionFingerprint(directory: string): Promise<{ readonly manifest: LocalExtensionManifest; readonly digest: string }> {
+interface LocalExtensionFingerprint {
+  readonly manifest: LocalExtensionManifest
+  readonly digest: string
+  readonly scriptBody?: Buffer
+  readonly styleBody?: Buffer
+}
+
+async function extensionFingerprint(directory: string): Promise<LocalExtensionFingerprint> {
   const manifestFile = await regularFile(join(directory, 'extension.json'), EXTENSION_LIMITS.manifest, 'extension.json')
   const manifestBody = await readFile(manifestFile.path)
   const manifest = parseExtensionManifest(JSON.parse(manifestBody.toString('utf8')) as unknown)
@@ -234,7 +241,17 @@ async function extensionFingerprint(directory: string): Promise<{ readonly manif
     optionalBytes(directory, 'mobile.js', EXTENSION_LIMITS.script, 'mobile.js'),
     optionalBytes(directory, 'mobile.css', EXTENSION_LIMITS.css, 'mobile.css'),
   ])
-  return { manifest, digest: createHash('sha256').update(manifestBody).update(host).update(script).update(style).digest('hex') }
+  const digest = createHash('sha256').update(manifestBody)
+  for (const [name, body] of [['host', host], ['script', script], ['style', style]] as const) {
+    digest.update(`\0${name}:${body === undefined ? 'absent' : 'present'}\0`)
+    if (body !== undefined) digest.update(body)
+  }
+  return {
+    manifest,
+    digest: digest.digest('hex'),
+    ...(script === undefined ? {} : { scriptBody: script }),
+    ...(style === undefined ? {} : { styleBody: style }),
+  }
 }
 
 function routeKey(route: MobileHostRoute): string {
@@ -282,9 +299,23 @@ function validateDefinition(definition: MobileExtensionDefinition): MobileExtens
   return Object.freeze({ ...manifest, ...(definition.actions === undefined ? {} : { actions: Object.freeze({ ...definition.actions }) }), ...(routes.length === 0 ? {} : { routes: Object.freeze(routes) }) })
 }
 
-function combineSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
-  if (first.aborted || second.aborted) return AbortSignal.abort(first.aborted ? first.reason : second.reason)
-  return AbortSignal.any([first, second])
+/** Combine two abort lifetimes without relying on AbortSignal.any in older WebViews. */
+export function combineSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+  if (first.aborted || second.aborted) {
+    const aborted = new AbortController()
+    aborted.abort(first.aborted ? first.reason : second.reason)
+    return aborted.signal
+  }
+  const controller = new AbortController()
+  const cleanup = (): void => {
+    first.removeEventListener('abort', abortFirst)
+    second.removeEventListener('abort', abortSecond)
+  }
+  const abortFirst = (): void => { cleanup(); controller.abort(first.reason) }
+  const abortSecond = (): void => { cleanup(); controller.abort(second.reason) }
+  first.addEventListener('abort', abortFirst, { once: true })
+  second.addEventListener('abort', abortSecond, { once: true })
+  return controller.signal
 }
 
 /** Host registry and service consumed by both npm plugins and local extensions. */
@@ -292,7 +323,8 @@ export class MobileAccessService extends Service {
   private readonly registered = new Map<string, RegisteredExtension>()
   private readonly local = new Map<string, ActiveLocalExtension>()
   private readonly failures = new Map<string, string>()
-  private contentHash = ''
+  private readonly contentListeners = new Set<() => void>()
+  private contentHash = createHash('sha256').update('').digest('hex')
   private localRoot: string | undefined
   private localContext: Context | undefined
   private localTimer: NodeJS.Timeout | undefined
@@ -322,12 +354,23 @@ export class MobileAccessService extends Service {
     return this.contentHash
   }
 
+  /** Subscribe to committed extension generation changes. */
+  onContentChanged(listener: () => void): () => void {
+    this.contentListeners.add(listener)
+    return () => { this.contentListeners.delete(listener) }
+  }
+
   private updateContentHash(): void {
     const parts = [
       ...[...this.registered.values()].map(entry => entry.definition.id),
       ...[...this.local.values()].map(active => `${active.manifest.id}:${active.digest}`),
     ]
-    this.contentHash = createHash('sha256').update(parts.sort().join('|')).digest('hex')
+    const next = createHash('sha256').update(parts.sort().join('|')).digest('hex')
+    if (next === this.contentHash) return
+    this.contentHash = next
+    for (const listener of this.contentListeners) {
+      try { listener() } catch { /* One observer cannot block a committed generation. */ }
+    }
   }
 
   /** Return the current client-facing manifest, deterministically sorted by id. */
@@ -339,8 +382,8 @@ export class MobileAccessService extends Service {
     })
     for (const active of this.local.values()) entries.set(active.manifest.id, {
       ...active.manifest,
-      ...(active.scriptFile === undefined ? {} : { scriptUrl: `/mobile-access/extensions/${active.manifest.id}/mobile.js` }),
-      ...(active.styleFile === undefined ? {} : { styleUrl: `/mobile-access/extensions/${active.manifest.id}/mobile.css` }),
+      ...(active.scriptBody === undefined ? {} : { scriptUrl: `/mobile-access/extensions/${active.manifest.id}/mobile.js` }),
+      ...(active.styleBody === undefined ? {} : { styleUrl: `/mobile-access/extensions/${active.manifest.id}/mobile.css` }),
       assetsUrl: `/mobile-access/extensions/${active.manifest.id}/assets/`,
     })
     return [...entries.values()].sort((left, right) => left.id.localeCompare(right.id))
@@ -367,11 +410,9 @@ export class MobileAccessService extends Service {
     signal?.throwIfAborted()
     const active = this.local.get(id)
     if (active === undefined) throw new MobileExtensionError('extension_not_found', 'extension not found', 404)
-    const path = kind === 'script' ? active.scriptFile : active.styleFile
-    if (path === undefined) throw new MobileExtensionError('extension_asset_not_found', 'extension asset not found', 404)
-    const maximum = kind === 'script' ? EXTENSION_LIMITS.script : EXTENSION_LIMITS.css
-    const file = await regularFile(path, maximum, kind)
-    const body = await readFile(file.path, { signal })
+    const snapshot = kind === 'script' ? active.scriptBody : active.styleBody
+    if (snapshot === undefined) throw new MobileExtensionError('extension_asset_not_found', 'extension asset not found', 404)
+    const body = Buffer.from(snapshot)
     return { body, digest: createHash('sha256').update(body).digest('hex') }
   }
 
@@ -450,6 +491,7 @@ export class MobileAccessService extends Service {
     this.local.clear()
     this.failures.clear()
     await disposeLocal(previous)
+    this.updateContentHash()
   }
 
   /** Refresh all local extensions atomically; failures keep the previous snapshot. */
@@ -480,6 +522,15 @@ export class MobileAccessService extends Service {
         if (previous?.directory === resolve(directory) && previous.digest === fingerprint.digest) staged.push(previous)
         else {
           const fresh = await loadLocalExtension(directory, this.localContext, fingerprint)
+          try {
+            const confirmed = await extensionFingerprint(directory)
+            if (confirmed.digest !== fingerprint.digest) {
+              throw new MobileExtensionError('extension_changed_during_activation', `extension ${fingerprint.manifest.id} changed during activation`, 409)
+            }
+          } catch (error) {
+            await disposeLocal([fresh])
+            throw error
+          }
           staged.push(fresh); stagedFresh.push(fresh)
         }
       }
@@ -525,15 +576,19 @@ async function disposeLocal(entries: readonly ActiveLocalExtension[]): Promise<v
   }
 }
 
-async function loadLocalExtension(directory: string, context: Context, known?: { readonly manifest: LocalExtensionManifest; readonly digest: string }): Promise<ActiveLocalExtension> {
+async function loadLocalExtension(directory: string, context: Context, known?: LocalExtensionFingerprint): Promise<ActiveLocalExtension> {
   const root = resolve(directory)
   const rootStat = await lstat(root)
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new MobileExtensionError('invalid_extension', 'extension directory must be real')
   const manifestFile = await regularFile(join(root, 'extension.json'), EXTENSION_LIMITS.manifest, 'extension.json')
   const manifest = known?.manifest ?? parseExtensionManifest(JSON.parse(await readFile(manifestFile.path, 'utf8')) as unknown)
   if (manifest.id !== basename(root)) throw new MobileExtensionError('invalid_manifest', 'extension id must match its directory name')
-  const scriptFile = await optionalFile(root, 'mobile.js', EXTENSION_LIMITS.script, 'mobile.js')
-  const styleFile = await optionalFile(root, 'mobile.css', EXTENSION_LIMITS.css, 'mobile.css')
+  const scriptBody = known === undefined
+    ? await optionalFile(root, 'mobile.js', EXTENSION_LIMITS.script, 'mobile.js').then(path => path === undefined ? undefined : readFile(path))
+    : known.scriptBody
+  const styleBody = known === undefined
+    ? await optionalFile(root, 'mobile.css', EXTENSION_LIMITS.css, 'mobile.css').then(path => path === undefined ? undefined : readFile(path))
+    : known.styleBody
   const hostFile = await optionalFile(root, 'host.mjs', EXTENSION_LIMITS.script, 'host.mjs')
   const controller = new AbortController()
   const actions: Record<string, MobileHostAction> = {}
@@ -574,7 +629,7 @@ async function loadLocalExtension(directory: string, context: Context, known?: {
     const host = validateDefinition({ ...manifest, actions, routes })
     activationOpen = false
     const digest = known?.digest ?? createHash('sha256').update(manifest.id).digest('hex')
-    return Object.freeze({ manifest, directory: root, ...(scriptFile === undefined ? {} : { scriptFile }), ...(styleFile === undefined ? {} : { styleFile }), host, controller, cleanups: Object.freeze(cleanups), digest })
+    return Object.freeze({ manifest, directory: root, ...(scriptBody === undefined ? {} : { scriptBody }), ...(styleBody === undefined ? {} : { styleBody }), host, controller, cleanups: Object.freeze(cleanups), digest })
   } catch (error) {
     activationOpen = false
     await withActivationTimeout(Promise.allSettled(pendingEffects), manifest.id).catch(() => undefined)

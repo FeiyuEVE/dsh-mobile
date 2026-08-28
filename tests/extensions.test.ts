@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MobileAccessService, MobileExtensionError, parseExtensionManifest } from '../src/extensions.js'
+import { combineSignals, MobileAccessService, MobileExtensionError, parseExtensionManifest } from '../src/extensions.js'
 
 const contexts: Context[] = []
 const directories: string[] = []
@@ -48,5 +48,56 @@ describe('mobile extension registry', () => {
     await expect(service.invoke('demo', 'ping', {}, { deviceId: 'device', signal: new AbortController().signal })).resolves.toEqual({ version: 2 })
     await service.stopLocal()
     expect(service.manifest()).toEqual([])
+  })
+
+  it('keeps the complete previous client generation when a replacement host fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-rollback-')); directories.push(root)
+    const directory = join(root, 'demo')
+    await (await import('node:fs/promises')).mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'extension.json'), JSON.stringify({ schemaVersion: 1, id: 'demo', name: 'Demo', version: '1.0.0' }))
+    await writeFile(join(directory, 'mobile.js'), 'window.goodGeneration = true')
+    await writeFile(join(directory, 'mobile.css'), '.good-generation { color: green }')
+    await writeFile(join(directory, 'host.mjs'), 'export default async api => api.action("ping", { async run() { return "good" } })')
+    const context = new Context(); contexts.push(context)
+    const service = new MobileAccessService(context)
+    await service.startLocal(root, context)
+
+    expect((await service.readClientFile('demo', 'script')).body.toString('utf8')).toContain('goodGeneration')
+    expect((await service.readClientFile('demo', 'style')).body.toString('utf8')).toContain('good-generation')
+    let committedChanges = 0
+    service.onContentChanged(() => { committedChanges += 1 })
+    await writeFile(join(directory, 'mobile.js'), 'window.badGeneration = true')
+    await writeFile(join(directory, 'mobile.css'), '.bad-generation { color: red }')
+    await writeFile(join(directory, 'host.mjs'), 'export default async () => { throw new Error("replacement failed") }')
+    await service.refreshLocal()
+
+    expect((await service.readClientFile('demo', 'script')).body.toString('utf8')).toContain('goodGeneration')
+    expect((await service.readClientFile('demo', 'style')).body.toString('utf8')).toContain('good-generation')
+    await expect(service.invoke('demo', 'ping', {}, { deviceId: 'device', signal: new AbortController().signal })).resolves.toBe('good')
+    expect(service.status()).toEqual({ loaded: 1, failed: 1 })
+    expect(committedChanges).toBe(0)
+  })
+
+  it('notifies observers only after committed registry changes', () => {
+    const context = new Context(); contexts.push(context)
+    const service = new MobileAccessService(context)
+    let changes = 0
+    const unsubscribe = service.onContentChanged(() => { changes += 1 })
+    const dispose = service.registerExtension({ schemaVersion: 1, id: 'sample', name: 'Sample', version: '1.0.0' })
+    expect(changes).toBe(1)
+    dispose()
+    expect(changes).toBe(2)
+    unsubscribe()
+    service.registerExtension({ schemaVersion: 1, id: 'other', name: 'Other', version: '1.0.0' })
+    expect(changes).toBe(2)
+  })
+
+  it('combines host and request abort lifetimes without AbortSignal.any', () => {
+    const generation = new AbortController()
+    const request = new AbortController()
+    const combined = combineSignals(generation.signal, request.signal)
+    request.abort('request stopped')
+    expect(combined.aborted).toBe(true)
+    expect(combined.reason).toBe('request stopped')
   })
 })
