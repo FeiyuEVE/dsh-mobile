@@ -24,13 +24,13 @@
   <a href="README.en.md">English</a>
 </p>
 
-> DSH Mobile 0.3.0 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
+> DSH Mobile 0.3.1 是 DeepSeek Harness 社区插件，原生 App 仅支持 Android。
 >
-> **0.3.0 更新**：新增一键连接诊断、版本提示与更清晰的配对/网络报错；改进局域网和远程连接恢复、缓存与首次加载；适配 DSH 0.1.2 的工作区、模型、会话及社区插件同步；优化状态栏、键盘、窄屏布局和 App 图标。
+> **0.3 系列更新**：新增一键连接诊断、版本提示与更清晰的配对/网络报错；改进局域网和远程连接恢复、缓存与首次加载；适配 DSH 0.1.2 的工作区、模型、会话及社区插件同步；优化状态栏、键盘、窄屏布局和 App 图标。
 >
-> **使用 DeepSeek Harness 0.1.2-alpha.1 时，请将插件与 App 同步升级至 0.3.0**；旧 App 的状态栏策略不适配新版 Web，0.1.3 及更早版本还需卸载重装并重新配对。
+> **使用 DeepSeek Harness 0.1.2-alpha.1 时，请将插件与 App 同步升级至 0.3.1**；旧 App 的状态栏策略不适配新版 Web，0.1.3 及更早版本还需卸载重装并重新配对。
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.0/dsh-mobile-android-v0.3.0.apk"><strong>下载 Android App 0.3.0</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.0">版本说明与校验文件</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.1/dsh-mobile-android-v0.3.1.apk"><strong>下载 Android App 0.3.1</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.1">版本说明与校验文件</a></p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
 
@@ -189,6 +189,7 @@ flowchart LR
 
 | DSH Mobile | 已验证的 DeepSeek Harness                                               |
 | ------------ | ------------------------------------------------------------------------- |
+| `0.3.1`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.3.0`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`、`0.1.2-alpha.1` |
 | `0.2.2`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`                  |
 | `0.2.1`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2`                  |

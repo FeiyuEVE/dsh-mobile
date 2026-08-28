@@ -17,13 +17,13 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin; the native app supports Android only.
+> DSH Mobile 0.3.1 is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.0 update**: one-click diagnostics, version guidance, and clearer pairing and network errors; faster LAN and remote recovery, caching, and first load; DSH 0.1.2 Workspace, model, session, and community-plugin synchronization; plus status-bar, keyboard, narrow-screen, and app-icon refinements.
+> **0.3 series update**: one-click diagnostics, version guidance, and clearer pairing and network errors; faster LAN and remote recovery, caching, and first load; DSH 0.1.2 Workspace, model, session, and community-plugin synchronization; plus status-bar, keyboard, narrow-screen, and app-icon refinements.
 >
-> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.0**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
+> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.1**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.0/dsh-mobile-android-v0.3.0.apk"><strong>Download Android app 0.3.0</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.0">Release notes and checksums</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.1/dsh-mobile-android-v0.3.1.apk"><strong>Download Android app 0.3.1</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.1">Release notes and checksums</a></p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel or cpolar remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
 
@@ -179,6 +179,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.2.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
