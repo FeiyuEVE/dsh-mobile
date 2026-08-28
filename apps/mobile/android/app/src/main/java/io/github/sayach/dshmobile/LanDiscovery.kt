@@ -1,6 +1,8 @@
 package io.github.sayach.dshmobile
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -27,7 +29,7 @@ private data class LocalSubnet(val first: Int, val second: Int, val third: Int, 
 internal object LanDiscovery {
     fun scan(context: Context, port: Int = 3443, canceled: AtomicBoolean? = null): List<DiscoveredHarness> {
         if (canceled?.get() == true) return emptyList()
-        val subnets = localSubnets()
+        val subnets = localSubnets(context)
         val discoveryExecutor = Executors.newFixedThreadPool(2)
         val discovered = try {
             discoveryExecutor.invokeAll(
@@ -121,22 +123,43 @@ internal object LanDiscovery {
         DiscoveredHarness(deviceName, origin, instanceId)
     }.getOrNull()
 
-    private fun localSubnets(): List<LocalSubnet> {
-        val addresses = runCatching {
-            Collections.list(NetworkInterface.getNetworkInterfaces()).asSequence()
-                .filter { network -> runCatching { network.isUp && !network.isLoopback }.getOrDefault(false) }
-                .flatMap { network -> Collections.list(network.inetAddresses).asSequence() }
+    private fun localSubnets(context: Context): List<LocalSubnet> {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val preferred = runCatching {
+            listOfNotNull(connectivity.activeNetwork).asSequence()
+                .filter { network ->
+                    val capabilities = connectivity.getNetworkCapabilities(network) ?: return@filter false
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                }
+                .flatMap { network ->
+                    connectivity.getLinkProperties(network)?.linkAddresses.orEmpty().asSequence()
+                }
+                .map { it.address }
                 .filterIsInstance<Inet4Address>()
                 .filter(::isPrivateLanAddress)
                 .toList()
         }.getOrDefault(emptyList())
-        return addresses.groupBy { address ->
+        if (preferred.isNotEmpty()) return subnetsFor(preferred)
+
+        val fallback = runCatching {
+            Collections.list(NetworkInterface.getNetworkInterfaces()).asSequence()
+                .filter { network -> runCatching { network.isUp && !network.isLoopback }.getOrDefault(false) }
+                .flatMap { network -> Collections.list(network.inetAddresses).asSequence() }
+                .filterIsInstance<Inet4Address>()
+                .filter { it.isSiteLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                .toList()
+        }.getOrDefault(emptyList())
+        return subnetsFor(fallback)
+    }
+
+    private fun subnetsFor(addresses: List<Inet4Address>): List<LocalSubnet> =
+        addresses.groupBy { address ->
             val bytes = address.address
             Triple(unsigned(bytes[0]), unsigned(bytes[1]), unsigned(bytes[2]))
         }.entries.take(MAX_SUBNETS).map { (prefix, members) ->
             LocalSubnet(prefix.first, prefix.second, prefix.third, members.map { unsigned(it.address[3]) }.toSet())
         }
-    }
 
     private fun isPrivateLanAddress(address: Inet4Address): Boolean {
         if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isMulticastAddress) return false

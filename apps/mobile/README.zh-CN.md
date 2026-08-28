@@ -16,6 +16,8 @@ DeepSeek Harness 是这个轻量、社区维护的 Android WebView 薄壳的显�
 
 首次配对完后，App 使用 Android Keystore 加密保存可随时撤销的长期设备 token，日常 Web 会话仍然是短期的。电脑的局域网 IP 变化后，App 会扫描默认端口，用稳定的 DSH 安装标识找回同一台电脑，换取新的短期 Web 会话，并自动更新保存的地址。发现过程不会暴露设备 token 或 Session 凭据。
 
+App 会在配对前读取独立的版本元数据，明确区分“App 过旧”“插件过旧”和协议不兼容；旧插件没有该端点时仍按原流程连接。已配对连接会在后台快速恢复，连接选择页可立即操作；仅对短暂断网或服务不可用进行有限次数的自动重试。
+
 自动发现会同时监听 DNS-SD/mDNS 与周期性 UDP 公告，也保留端口 `3443` 的主动 UDP 查询和私有 Wi-Fi、热点 `/24` 网段探测兜底。结果按稳定安装标识合并并更新地址。首页提供“扫码配对”（对准电脑屏幕上的二维码即可免密钥配对）、局域网扫描、结果列表和手动地址输入（如子网、非默认端口或发现被防火墙拦截时，可输入 `https://IP:端口` 直接连接）。点击一台 DSH 后才输入它的密钥。手机浏览器首次使用时，可直接打开电脑端“复制配对链接”得到的链接（配对码自动填入），也可以打开 HTTPS 地址中的 `/mobile-access/pair`，输入生成密钥最后一个点号后的 43 位配对码。
 
 ## 为什么使用 App
@@ -46,7 +48,7 @@ DeepSeek Harness 是这个轻量、社区维护的 Android WebView 薄壳的显�
 
 认证后的页面可以通过 `dshMobile` 扩展调用 Android Bridge。Bridge 只注入到已配对的 HTTPS Origin 和顶层 WebView，不暴露 Cookie、设备令牌、配对密钥、CA 私钥或任意 Android API。
 
-可用能力包括 `files.pick`、`camera.capture`、`share`、`clipboard.read`、`clipboard.write`、`notification.show`。文件和拍照结果会转换为页面里的浏览器 `File`。文件选择、拍照等交互同一时间只允许一个；取消、旋转、WebView 销毁或 60 秒超时都会结束对应请求。手机浏览器使用对应 Web API，不支持时返回 `unsupported`。
+可用能力包括 `files.pick`、`camera.capture`、`share`、`clipboard.read`、`clipboard.write`。文件和拍照结果会转换为页面里的浏览器 `File`。文件选择、拍照等交互同一时间只允许一个；取消、旋转、WebView 销毁或 60 秒超时都会结束对应请求。手机浏览器使用对应 Web API，不支持时返回 `unsupported`。
 
 电脑端扩展是另一层：`host.mjs` 作为 DSH 主机上的可信 Node.js 代码运行，`mobile.js` 通过限定到自身扩展的 Action 和 Route 调用它。App Bridge 不能编辑或上传扩展源文件。
 

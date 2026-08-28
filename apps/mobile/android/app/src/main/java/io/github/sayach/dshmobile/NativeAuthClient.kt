@@ -1,14 +1,18 @@
 package io.github.sayach.dshmobile
 
 import org.json.JSONObject
+import org.json.JSONException
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLException
 import javax.net.ssl.X509TrustManager
 
 internal data class NativeSession(
@@ -19,6 +23,55 @@ internal data class NativeSession(
     val sessionToken: String,
     val csrfToken: String,
 )
+
+internal enum class NativeAuthFailureKind {
+    PAIRING_EXPIRED,
+    DEVICE_LIMIT,
+    RATE_LIMITED,
+    TIMEOUT,
+    TLS,
+    NETWORK,
+    SERVER_UNAVAILABLE,
+    INVALID_RESPONSE,
+}
+
+internal class NativeAuthFailure(
+    val kind: NativeAuthFailureKind,
+    cause: Throwable? = null,
+) : IOException(kind.name, cause)
+
+internal fun nativeAuthFailureForStatus(status: Int): NativeAuthFailureKind = when (status) {
+    HttpURLConnection.HTTP_UNAUTHORIZED, HttpURLConnection.HTTP_FORBIDDEN -> NativeAuthFailureKind.PAIRING_EXPIRED
+    HttpURLConnection.HTTP_CONFLICT -> NativeAuthFailureKind.DEVICE_LIMIT
+    429 -> NativeAuthFailureKind.RATE_LIMITED
+    in 500..599 -> NativeAuthFailureKind.SERVER_UNAVAILABLE
+    else -> NativeAuthFailureKind.INVALID_RESPONSE
+}
+
+internal data class NativeAuthTimeouts(
+    val bootstrapConnectMs: Int,
+    val bootstrapReadMs: Int,
+    val authConnectMs: Int,
+    val authReadMs: Int,
+)
+
+/** Keeps LAN failures fast while allowing mobile networks and remote relays enough time to respond. */
+internal fun nativeAuthTimeouts(host: String): NativeAuthTimeouts =
+    if (RemoteHostPolicy.isSupported(host)) {
+        NativeAuthTimeouts(
+            bootstrapConnectMs = 3_000,
+            bootstrapReadMs = 5_000,
+            authConnectMs = 10_000,
+            authReadMs = 30_000,
+        )
+    } else {
+        NativeAuthTimeouts(
+            bootstrapConnectMs = 500,
+            bootstrapReadMs = 800,
+            authConnectMs = 3_000,
+            authReadMs = 5_000,
+        )
+    }
 
 /** Uses platform TLS validation for native pairing and renewal. */
 internal object NativeAuthClient {
@@ -37,14 +90,27 @@ internal object NativeAuthClient {
     )
 
     /** Fetches the public CA without credentials; the caller must fingerprint-bind it before use. */
-    fun fetchPairingCa(origin: GatewayOrigin): ByteArray = bootstrapGet(origin, "/mobile-access/ca.cer", 16 * 1024)
+    fun fetchPairingCa(origin: GatewayOrigin): ByteArray = requireNotNull(
+        bootstrapGet(origin, "/mobile-access/ca.cer", 16 * 1024),
+    )
 
     /** Compatibility discovery probe. Its metadata remains untrusted until pairing-key verification. */
     fun fetchDiscovery(origin: GatewayOrigin): JSONObject = JSONObject(
-        bootstrapGet(origin, "/mobile-access/discovery", 8 * 1024).toString(Charsets.UTF_8),
+        requireNotNull(bootstrapGet(origin, "/mobile-access/discovery", 8 * 1024)).toString(Charsets.UTF_8),
     )
 
-    private fun bootstrapGet(origin: GatewayOrigin, path: String, maxBytes: Int): ByteArray {
+    /** Reads optional compatibility metadata. A 404 identifies a compatible legacy gateway. */
+    fun fetchMetadata(origin: GatewayOrigin): GatewayMetadata? {
+        val bytes = bootstrapGet(origin, "/mobile-access/metadata", 8 * 1024, allowMissing = true) ?: return null
+        return parseGatewayMetadata(JSONObject(bytes.toString(Charsets.UTF_8)))
+    }
+
+    private fun bootstrapGet(
+        origin: GatewayOrigin,
+        path: String,
+        maxBytes: Int,
+        allowMissing: Boolean = false,
+    ): ByteArray? {
         val trustManager = object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
@@ -54,11 +120,13 @@ internal object NativeAuthClient {
             init(null, arrayOf(trustManager), SecureRandom())
         }
         val connection = URL(origin.serialized + path).openConnection() as HttpsURLConnection
+        val timeouts = nativeAuthTimeouts(origin.host)
         try {
             connection.sslSocketFactory = context.socketFactory
-            connection.connectTimeout = 500
-            connection.readTimeout = 800
+            connection.connectTimeout = timeouts.bootstrapConnectMs
+            connection.readTimeout = timeouts.bootstrapReadMs
             connection.instanceFollowRedirects = false
+            if (allowMissing && connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
             if (connection.responseCode != HttpURLConnection.HTTP_OK) error("Bootstrap request failed (${connection.responseCode})")
             val length = connection.contentLengthLong
             if (length > maxBytes) error("Bootstrap response is too large")
@@ -72,18 +140,21 @@ internal object NativeAuthClient {
 
     private fun post(origin: GatewayOrigin, path: String, body: JSONObject, caCertificate: ByteArray?): NativeSession {
         val connection = URL(origin.serialized + path).openConnection() as HttpsURLConnection
+        val timeouts = nativeAuthTimeouts(origin.host)
         try {
             if (caCertificate != null) connection.sslSocketFactory = PinnedTls.socketFactory(caCertificate)
             connection.requestMethod = "POST"
-            connection.connectTimeout = 3_000
-            connection.readTimeout = 5_000
+            connection.connectTimeout = timeouts.authConnectMs
+            connection.readTimeout = timeouts.authReadMs
             connection.instanceFollowRedirects = false
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Origin", origin.serialized)
             connection.setRequestProperty("Sec-Fetch-Site", "same-origin")
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
-            if (connection.responseCode !in 200..299) error("Authentication failed (${connection.responseCode})")
+            if (connection.responseCode !in 200..299) {
+                throw NativeAuthFailure(nativeAuthFailureForStatus(connection.responseCode))
+            }
             val response = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             return NativeSession(
                 instanceId = response.getString("instanceId"),
@@ -93,10 +164,30 @@ internal object NativeAuthClient {
                 sessionToken = response.getString("sessionToken"),
                 csrfToken = response.getString("csrfToken"),
             )
+        } catch (failure: NativeAuthFailure) {
+            throw failure
+        } catch (failure: SocketTimeoutException) {
+            throw NativeAuthFailure(NativeAuthFailureKind.TIMEOUT, failure)
+        } catch (failure: SSLException) {
+            throw NativeAuthFailure(NativeAuthFailureKind.TLS, failure)
+        } catch (failure: JSONException) {
+            throw NativeAuthFailure(NativeAuthFailureKind.INVALID_RESPONSE, failure)
+        } catch (failure: IOException) {
+            throw NativeAuthFailure(NativeAuthFailureKind.NETWORK, failure)
         } finally {
             connection.disconnect()
         }
     }
+
+}
+
+internal fun parseGatewayMetadata(body: JSONObject): GatewayMetadata? {
+    val version = body.optInt("version", -1)
+    val pluginVersion = body.optString("pluginVersion")
+    val minimumApp = body.optString("minimumAndroidAppVersion")
+    val protocol = body.optInt("discoveryProtocol", -1)
+    if (version < 1 || pluginVersion.length !in 1..64 || minimumApp.length !in 1..64 || protocol < 1) return null
+    return GatewayMetadata(version, pluginVersion, minimumApp, protocol)
 }
 
 /** Reads no more than [limit] bytes using APIs available on every supported Android version. */

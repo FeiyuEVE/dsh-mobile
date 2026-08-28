@@ -2,6 +2,8 @@ package io.github.sayach.dshmobile
 
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Handler
+import android.os.Looper
 import android.webkit.SafeBrowsingResponse
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
@@ -14,7 +16,21 @@ import android.webkit.WebViewClient
 internal enum class LoadFailure {
     TLS,
     NETWORK,
+    AUTH_EXPIRED,
+    RATE_LIMITED,
+    SERVICE_UNAVAILABLE,
 }
+
+internal fun loadFailureForHttpStatus(status: Int): LoadFailure = when (status) {
+    401, 403 -> LoadFailure.AUTH_EXPIRED
+    429 -> LoadFailure.RATE_LIMITED
+    502, 503, 504 -> LoadFailure.SERVICE_UNAVAILABLE
+    else -> LoadFailure.NETWORK
+}
+
+/** Main-frame budget after native authentication has already completed. */
+internal fun webViewLoadTimeoutMs(host: String): Long =
+    if (RemoteHostPolicy.isSupported(host)) 30_000L else 15_000L
 
 /** Enforces exact-origin navigation and optionally accepts the LAN pairing CA. */
 internal class SecureWebViewClient(
@@ -25,6 +41,14 @@ internal class SecureWebViewClient(
     private val onFailure: (LoadFailure) -> Unit,
     private val onLoaded: () -> Unit,
 ) : WebViewClient() {
+    private val handler = Handler(Looper.getMainLooper())
+    private var timeout: Runnable? = null
+    private var loadingUrl: String? = null
+
+    fun dispose() {
+        clearTimeout()
+    }
+
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (!request.isForMainFrame) return false
         val candidate = request.url.toString()
@@ -39,13 +63,19 @@ internal class SecureWebViewClient(
 
     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         if (url != "about:blank" && !GatewayUrlPolicy.isSameOrigin(origin, url)) {
+            clearTimeout()
             view.stopLoading()
             onBlocked()
+            return
         }
+        if (GatewayUrlPolicy.isSameOrigin(origin, url)) armTimeout(view, url)
     }
 
     override fun onPageFinished(view: WebView, url: String) {
-        if (GatewayUrlPolicy.isSameOrigin(origin, url)) onLoaded()
+        if (GatewayUrlPolicy.isSameOrigin(origin, url)) {
+            if (loadingUrl == url) clearTimeout()
+            onLoaded()
+        }
     }
 
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
@@ -55,6 +85,7 @@ internal class SecureWebViewClient(
         if (pinned) {
             handler.proceed()
         } else {
+            clearTimeout()
             handler.cancel()
             view.stopLoading()
             onFailure(LoadFailure.TLS)
@@ -62,7 +93,10 @@ internal class SecureWebViewClient(
     }
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-        if (request.isForMainFrame) onFailure(LoadFailure.NETWORK)
+        if (request.isForMainFrame) {
+            clearTimeout()
+            onFailure(LoadFailure.NETWORK)
+        }
     }
 
     override fun onReceivedHttpError(
@@ -71,7 +105,8 @@ internal class SecureWebViewClient(
         errorResponse: WebResourceResponse,
     ) {
         if (request.isForMainFrame && errorResponse.statusCode >= 400) {
-            onFailure(LoadFailure.NETWORK)
+            clearTimeout()
+            onFailure(loadFailureForHttpStatus(errorResponse.statusCode))
         }
     }
 
@@ -81,7 +116,28 @@ internal class SecureWebViewClient(
         threatType: Int,
         callback: SafeBrowsingResponse,
     ) {
+        clearTimeout()
         callback.backToSafety(true)
         onFailure(LoadFailure.NETWORK)
+    }
+
+    private fun armTimeout(view: WebView, url: String) {
+        clearTimeout()
+        loadingUrl = url
+        val task = Runnable {
+            if (loadingUrl != url) return@Runnable
+            loadingUrl = null
+            timeout = null
+            view.stopLoading()
+            onFailure(LoadFailure.NETWORK)
+        }
+        timeout = task
+        handler.postDelayed(task, webViewLoadTimeoutMs(origin.host))
+    }
+
+    private fun clearTimeout() {
+        timeout?.let(handler::removeCallbacks)
+        timeout = null
+        loadingUrl = null
     }
 }

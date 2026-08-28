@@ -48,6 +48,11 @@ import {
   setSecurityHeaders,
   WS_PATHS,
 } from './http-security.js'
+import {
+  DSH_MOBILE_VERSION,
+  MINIMUM_ANDROID_APP_VERSION,
+  MOBILE_METADATA_VERSION,
+} from './version.js'
 import { addressAllowed, isLoopbackAddress, type ParsedCidr, RequestTrustPolicy } from './network.js'
 import type { DeviceStore } from './storage.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
@@ -87,6 +92,8 @@ const DISCOVERY_INTERVAL_MS = 3_000
 const MDNS_SERVICE_TYPE = 'dsh-mobile'
 const MOBILE_LAYOUT_MODULE = '@deepseek-ai/dsh-client-ui-layout'
 const MOBILE_LAYOUT_PATH = `${AUTH_PREFIX}/mobile-layout.js`
+const CUSTOM_STYLE_FALLBACK = '/* Add mobile overrides in the DSH home mobile-access/mobile.css file. */\n'
+const CUSTOM_SCRIPT_FALLBACK = 'window.dshMobile?.register(() => undefined)\n'
 const MOBILE_CLIENT_MODULE = 'dsh-mobile'
 const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
 const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
@@ -95,6 +102,7 @@ const MOBILE_LAYOUT_DEPENDENCIES = Object.freeze([
   RUNTIME_MODULE,
   '@deepseek-ai/dsh-client-ui-theme',
 ])
+const MOBILE_CSRF_FETCH_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const method=String(init?.method??source?.method??'GET').toUpperCase();if(method==='GET'||method==='HEAD')return nativeFetch(input,init);const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;if(raw===undefined||new URL(raw,location.href).origin!==location.origin)return nativeFetch(input,init);const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}return nativeFetch(input,{...init,headers})};})();`
 const PAIR_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -182,7 +190,7 @@ export function rewriteMobileIndex(html: string): string {
   layout[0].url = MOBILE_LAYOUT_PATH
   layout[0].rev = 'dsh-mobile-layout-v1'
   orderAuthenticatedSettings(entries)
-  const replacement = `window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
+  const replacement = `${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)
 }
 
@@ -470,6 +478,18 @@ function shouldCompressResponse(request: IncomingMessage, response: IncomingMess
     && response.headers['content-encoding'] === undefined
     && acceptsGzip(request.headers['accept-encoding'])
     && isCompressibleContentType(response.headers['content-type'])
+}
+
+function revisionedStaticCacheControl(request: IncomingMessage): string | undefined {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return undefined
+  let target: URL
+  try { target = new URL(request.url ?? '/', 'https://dsh-mobile.invalid') } catch { return undefined }
+  const revision = target.searchParams.get('rev')
+  const hasRevision = revision !== null && /^[a-z0-9_-]{4,128}$/iu.test(revision)
+  const hashedAsset = /^\/assets\/.*-[a-z0-9_-]{8,}\.[a-z0-9]+$/iu.test(target.pathname)
+  if (!(target.pathname.startsWith('/plugins/') && hasRevision)
+    && !(target.pathname.startsWith('/assets/') && (hasRevision || hashedAsset))) return undefined
+  return 'private, max-age=31536000, immutable'
 }
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {
@@ -957,6 +977,15 @@ export class MobileAccessGateway {
       sendJson(response, 200, { ok: true }, this.tlsEnabled)
       return
     }
+    if (target.search === '' && request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/metadata`) {
+      sendJson(response, 200, {
+        version: MOBILE_METADATA_VERSION,
+        pluginVersion: DSH_MOBILE_VERSION,
+        minimumAndroidAppVersion: MINIMUM_ANDROID_APP_VERSION,
+        discoveryProtocol: DISCOVERY_PROTOCOL,
+      }, this.tlsEnabled)
+      return
+    }
     if (target.search === '' && request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/discovery`) {
       sendJson(response, 200, {
         deviceName: discoveryDeviceName(),
@@ -1031,13 +1060,13 @@ export class MobileAccessGateway {
         ? {
             file: this.config.customCssFile,
             contentType: 'text/css; charset=utf-8',
-            fallback: '/* Add mobile overrides in the DSH home mobile-access/mobile.css file. */\n',
+            fallback: CUSTOM_STYLE_FALLBACK,
           }
         : target.decodedPathname === `${AUTH_PREFIX}/custom.js`
           ? {
               file: this.config.customScriptFile,
               contentType: 'text/javascript; charset=utf-8',
-              fallback: 'window.dshMobile?.register(() => undefined)\n',
+              fallback: CUSTOM_SCRIPT_FALLBACK,
             }
           : target.decodedPathname === MOBILE_LAYOUT_PATH
             ? {
@@ -1054,12 +1083,6 @@ export class MobileAccessGateway {
 
     if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST'
       && requestedExtension?.kind !== 'route') {
-      throw new HttpError(405, 'method_not_allowed')
-    }
-    if (request.method === 'POST'
-      && target.decodedPathname !== '/api'
-      && !target.decodedPathname.startsWith('/api/')
-      && requestedExtension?.kind !== 'action' && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
     }
     let authorization: SessionAuthorization
@@ -1085,6 +1108,7 @@ export class MobileAccessGateway {
       }
       throw error
     }
+    if (isMutation) this.requireCsrf(request, authorization)
     const extension = requestedExtension
     if (extension !== undefined) {
       await this.handleExtensionRequest(extension, target, request, response, authorization)
@@ -1175,13 +1199,31 @@ export class MobileAccessGateway {
   ): Promise<void> {
     const extensions = this.extensions
     if (extensions === undefined) throw new HttpError(404, 'not_found')
-    if (request.method !== 'GET' && request.method !== 'HEAD') this.requireCsrf(request, authorization)
     if (targetInfo.kind === 'manifest') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
       const operation = this.allocateRequest(authorization, response, {})
       try {
         operation.signal.throwIfAborted()
-        const body = Buffer.from(JSON.stringify({ protocol: 1, extensions: extensions.manifest() }))
+        const customRevision = async (file: string, fallback: string): Promise<string> => {
+          let source: Buffer
+          try {
+            source = await readFile(file, { signal: operation.signal })
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+            source = Buffer.from(fallback)
+          }
+          if (source.byteLength > 256 * 1024) throw new HttpError(413, 'payload_too_large')
+          return createHash('sha256').update(source).digest('hex')
+        }
+        const [scriptRevision, styleRevision] = await Promise.all([
+          customRevision(this.config.customScriptFile, CUSTOM_SCRIPT_FALLBACK),
+          customRevision(this.config.customCssFile, CUSTOM_STYLE_FALLBACK),
+        ])
+        const body = Buffer.from(JSON.stringify({
+          protocol: 1,
+          extensions: extensions.manifest(),
+          legacy: { scriptRevision, styleRevision },
+        }))
         // The ETag must cover extension content, not just the manifest body, so
         // editing mobile.js/css alone invalidates the client's cached manifest.
         const etag = createHash('sha256').update(body).update(extensions.contentDigest()).digest('hex')
@@ -1422,6 +1464,8 @@ export class MobileAccessGateway {
       const proxied = await upstreamResponse
       setSecurityHeaders(response, this.tlsEnabled)
       const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
+      const cacheControl = revisionedStaticCacheControl(request)
+      if (cacheControl !== undefined) headers['cache-control'] = cacheControl
       const compressed = shouldCompressResponse(request, proxied)
       if (compressed) {
         delete headers['accept-ranges']

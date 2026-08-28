@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&amp;color=CB3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/dm/dsh-mobile?label=downloads&amp;color=2563EB" alt="monthly npm downloads"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
@@ -16,13 +17,15 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.2.2 is a DeepSeek Harness community plugin for the DeepSeek Harness 0.1.1 series (verified with 0.1.1-rc.2); the native app supports Android only.
+> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin for the DeepSeek Harness 0.1.1 series (verified with 0.1.1-rc.2); the native app supports Android only.
 >
-> **0.2.2 update**: pairing scans now select the LAN or remote path automatically, with clearer QR, network, firewall, certificate, and pairing errors for faster connection troubleshooting.
+> **0.3.0 update**: one-click diagnostics, version guidance, and faster connection recovery; sanitized reports help isolate network, firewall, and provider failures.
 >
-> Upgrading the app from 0.1.3 or earlier requires one uninstall and re-pair; older app builds can still use the 0.2.2 LAN path.
+> Upgrading from app 0.1.3 or earlier still requires one uninstall and re-pair; app 0.2.2 remains compatible with the 0.3.0 plugin.
+>
+> The project is evolving quickly. Update the Android app and desktop plugin together for full compatibility and the latest fixes.
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.2.2/dsh-mobile-android-v0.2.2.apk"><strong>Download Android app 0.2.2</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.2.2">Release notes and checksums</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.0/dsh-mobile-android-v0.3.0.apk"><strong>Download Android app 0.3.0</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.0">Release notes and checksums</a></p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel or cpolar remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
 
@@ -36,6 +39,8 @@ It also lets you customize the phone from a DSH conversation: `/mobile <what you
 - **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
 - **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones.
 - **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
+- **One-click connection diagnostics**: check versions, gateway, network interface, firewall, and the remote path, then copy a report without credentials or complete addresses.
+- **Faster reconnection**: trusted connections race during restore and revisioned assets are reused.
 - **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
 
 A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.
@@ -176,6 +181,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
 | `0.2.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |

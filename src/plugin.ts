@@ -10,6 +10,7 @@ import { copyFile, lstat, readFile, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parseControlFile, parseGatewayConfig, type PluginConfig, type ResolvedGatewayConfig } from './config.js'
 import { assertSupportedDshVersion } from './compatibility.js'
+import { collectConnectionDiagnostics } from './diagnostics.js'
 import { MOBILE_CUSTOMIZATION_GUIDE } from './mobile-guide.js'
 import {
   FollowingMobileAccessRuntime,
@@ -212,7 +213,8 @@ function remoteControlPayload(
 
 /** Mount the resident control route and its optional authenticated LAN gateway. */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
-  assertSupportedDshVersion(installedDshVersion())
+  const dshVersion = installedDshVersion()
+  assertSupportedDshVersion(dshVersion)
   const loaded = await loadSetup(config)
   const mobileAccess: MobileAccessService = createMobileAccessService(ctx)
   const template = loopbackTemplate(loaded)
@@ -364,6 +366,32 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     origin: lanGateway?.address().origin,
     ...(lanGateway === undefined ? {} : { extensions: lanGateway.extensionStatus() }),
   })
+  const diagnosticsPayload = async (): Promise<Record<string, unknown>> => {
+    let interfaceName: string | undefined
+    let networkError: string | undefined
+    if (loaded.kind === 'managed') {
+      try { interfaceName = selectLanNetwork(undefined, loaded.setup.networkInterface).name }
+      catch { networkError = 'network_interface_unavailable' }
+    }
+    const remote = remoteController().status()
+    return collectConnectionDiagnostics({
+      dshVersion,
+      lan: {
+        running: lanController.isRunning(),
+        ...(lanGateway === undefined ? {} : { origin: lanGateway.address().origin, port: lanGateway.address().port }),
+        ...(loaded.kind === 'managed' ? { configuredInterface: loaded.setup.networkInterface, port: loaded.setup.listenPort } : {}),
+        ...(interfaceName === undefined ? {} : { interfaceName }),
+        ...(networkError === undefined ? {} : { networkError }),
+      },
+      remote: {
+        provider: remoteProvider,
+        running: remote.enabled,
+        state: remote.state,
+        ...(remote.origin === undefined ? {} : { origin: remote.origin }),
+        ...(remote.errorCode === undefined ? {} : { errorCode: remote.errorCode }),
+      },
+    }) as unknown as Record<string, unknown>
+  }
 
   const adminRoute: WebRoute = {
     kind: 'prefix',
@@ -377,6 +405,10 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           || target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/lan/control`
         if (request.method === 'GET' && lanControl) {
           sendJson(response, 200, lanPayload(), false)
+          return
+        }
+        if (request.method === 'GET' && target.decodedPathname === `${LOCAL_ADMIN_PREFIX}/diagnostics`) {
+          sendJson(response, 200, await diagnosticsPayload(), false)
           return
         }
         if (request.method === 'POST' && lanControl) {

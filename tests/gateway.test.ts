@@ -12,6 +12,7 @@ import { parseGatewayConfig } from '../src/config.js'
 import { MobileAccessGateway } from '../src/gateway.js'
 import { CSRF_HEADER, DEVICE_COOKIE, SESSION_COOKIE } from '../src/http-security.js'
 import { MemoryDeviceStore } from '../src/storage.js'
+import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from '../src/version.js'
 import { createTestTlsChain } from './tls-fixtures.js'
 
 interface HttpResult {
@@ -195,10 +196,11 @@ async function upstream(): Promise<{
       response.end(body)
       return
     }
-    if (incoming.url === '/plugins/compressible.js') {
+    if (incoming.url?.startsWith('/plugins/compressible.js') === true) {
       response.writeHead(200, {
         'content-type': 'text/javascript; charset=utf-8',
         'content-length': Buffer.byteLength(COMPRESSIBLE_SCRIPT),
+        'cache-control': 'no-store',
         etag: '"compressible-script"',
       })
       response.end(COMPRESSIBLE_SCRIPT)
@@ -581,6 +583,22 @@ describe('HTTP gateway', () => {
     expect(certificate.rawBody).toEqual(root.raw)
   })
 
+  it('publishes version compatibility separately from the stable discovery protocol', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const metadata = await request(instance.address().port, '/mobile-access/metadata', {
+      headers: { host: new URL(instance.address().origin).host },
+    })
+
+    expect(metadata.status).toBe(200)
+    expect(JSON.parse(metadata.body)).toEqual({
+      version: 1,
+      pluginVersion: DSH_MOBILE_VERSION,
+      minimumAndroidAppVersion: MINIMUM_ANDROID_APP_VERSION,
+      discoveryProtocol: 1,
+    })
+  })
+
   it('pairs only from the exact origin, hides local admin, and preserves authenticated remote authority', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
@@ -625,6 +643,13 @@ describe('HTTP gateway', () => {
     })
     expect(rejectedPost.status).toBe(403)
 
+    const rejectedPluginPost = await request(instance.address().port, '/dsh-market/update', {
+      method: 'POST',
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${session}`, 'content-type': 'application/json' },
+      body: '{"name":"dshmarket"}',
+    })
+    expect(rejectedPluginPost.status).toBe(403)
+
     const proxied = await request(instance.address().port, '/api/run?value=1', {
       method: 'POST',
       headers: {
@@ -652,6 +677,23 @@ describe('HTTP gateway', () => {
     expect(observed.headers['x-forwarded-for']).toBeUndefined()
     expect(observed.body).toBe('{"task":"test"}')
 
+    const pluginPost = await request(instance.address().port, '/dsh-market/update', {
+      method: 'POST',
+      headers: {
+        ...base,
+        cookie: `${SESSION_COOKIE}=${session}`,
+        'content-type': 'application/json',
+        [CSRF_HEADER]: body.csrfToken,
+      },
+      body: '{"name":"dshmarket"}',
+    })
+    expect(pluginPost.status).toBe(200)
+    expect(inner.observations.at(-1)).toMatchObject({
+      method: 'POST',
+      url: '/dsh-market/update',
+      body: '{"name":"dshmarket"}',
+    })
+
     const staticAsset = await request(instance.address().port, '/assets/app.js', {
       headers: {
         ...base,
@@ -661,8 +703,8 @@ describe('HTTP gateway', () => {
       },
     })
     expect(staticAsset.status).toBe(200)
-    expect(inner.observations).toHaveLength(2)
-    const staticObservation = inner.observations[1]!
+    expect(inner.observations).toHaveLength(3)
+    const staticObservation = inner.observations.at(-1)!
     expect(staticObservation.headers.host).toBe(`127.0.0.1:${String(inner.port)}`)
     expect(staticObservation.headers.origin).toBe(`http://127.0.0.1:${String(inner.port)}`)
     expect(staticObservation.headers.cookie).toBeUndefined()
@@ -727,7 +769,15 @@ describe('HTTP gateway', () => {
     })
     expect(identity.status).toBe(200)
     expect(identity.headers['content-encoding']).toBeUndefined()
+    expect(identity.headers['cache-control']).toBe('no-store')
     expect(identity.body).toBe(COMPRESSIBLE_SCRIPT)
+
+    const revisioned = await request(instance.address().port, '/plugins/compressible.js?rev=content_1234', {
+      headers: { ...headers, 'accept-encoding': 'gzip' },
+    })
+    expect(revisioned.status).toBe(200)
+    expect(revisioned.headers['cache-control']).toBe('private, max-age=31536000, immutable')
+    expect(gunzipSync(revisioned.rawBody).toString('utf8')).toBe(COMPRESSIBLE_SCRIPT)
   })
 
   it('uses mobile-sized pages and compresses session history', async () => {

@@ -6,7 +6,7 @@ interface ClientContext {
   get(name: 'connection'): MobileConnectionHandle
   slots: {
     inject(key: string, callback: () => (() => void)): () => void
-    register(options: { name: string; id: string }, component: (props: { wide: boolean }) => unknown): () => void
+    register<Props>(options: { name: string; id: string; order?: number; label?: string }, component: (props: Props) => unknown): () => void
   }
 }
 
@@ -99,11 +99,38 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
   return node
 }
 
-async function requestJson(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', ...init?.headers } })
-  const body = await response.json() as Record<string, unknown>
-  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${String(response.status)}`)
-  return body
+const CONTROL_REQUEST_TIMEOUT_MS = 15_000
+const LONG_CONTROL_REQUEST_TIMEOUT_MS = 130_000
+
+async function requestJson(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = CONTROL_REQUEST_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
+  const controller = new AbortController()
+  const upstreamSignal = init?.signal
+  const abortFromUpstream = (): void => { controller.abort(upstreamSignal?.reason) }
+  if (upstreamSignal?.aborted === true) abortFromUpstream()
+  else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
+  const timer = window.setTimeout(() => { controller.abort() }, timeoutMs)
+  try {
+    const response = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', ...init?.headers },
+    })
+    const body = await response.json() as Record<string, unknown>
+    if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${String(response.status)}`)
+    return body
+  } catch (error) {
+    if (controller.signal.aborted && upstreamSignal?.aborted !== true) {
+      throw new Error('操作超时，请确认 DSH 仍在运行后重试。')
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream)
+  }
 }
 
 function officialFunnelSetupUrl(value: unknown): string {
@@ -123,7 +150,10 @@ function installControl(): { remove: () => void; toggle: () => void } {
   panel.setAttribute('aria-label', '移动访问')
   const header = element('header', 'dsh-mobile-control__header')
   const title = element('h2'); title.textContent = '移动访问'
+  const headerActions = element('div', 'dsh-mobile-control__header-actions')
+  const diagnosticsEntry = element('button', 'dsh-mobile-control__diagnostic-entry'); diagnosticsEntry.type = 'button'; diagnosticsEntry.textContent = '诊断'; diagnosticsEntry.setAttribute('aria-label', '打开连接诊断'); diagnosticsEntry.setAttribute('aria-pressed', 'false')
   const close = element('button', 'dsh-mobile-control__close'); close.type = 'button'; close.textContent = '×'; close.setAttribute('aria-label', '收起移动访问')
+  headerActions.append(diagnosticsEntry, close)
   const appDownload = element('a', 'dsh-mobile-control__app-download'); appDownload.href = 'https://github.com/saya-ch/dsh-mobile/releases/latest'; appDownload.target = '_blank'; appDownload.rel = 'noopener noreferrer'; appDownload.textContent = '下载 Android App'; appDownload.setAttribute('aria-label', '前往 GitHub Releases 下载最新版 Android App')
   const switcher = element('div', 'dsh-mobile-control__switcher')
   const lanTab = element('button', 'dsh-mobile-control__tab is-active'); lanTab.type = 'button'; lanTab.textContent = '局域网'
@@ -170,7 +200,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const cpolarChoiceBadge = element('span', 'dsh-mobile-control__provider-badge is-cpolar'); cpolarChoiceBadge.textContent = '国内网络优先'
   const cpolarChoiceDescription = element('span', 'dsh-mobile-control__provider-description'); cpolarChoiceDescription.textContent = '按需安装官方组件，适合国内网络环境。'
   cpolarChoiceTop.append(cpolarChoiceName, cpolarChoiceBadge); cpolarChoice.append(cpolarChoiceTop, cpolarChoiceDescription)
-  providerChoices.append(tailscaleChoice, cpolarChoice); providerSection.append(providerHeading, providerInfo, providerChoices)
+  providerChoices.append(cpolarChoice, tailscaleChoice); providerSection.append(providerHeading, providerInfo, providerChoices)
   const cpolarSetup = element('section', 'dsh-mobile-control__cpolar-setup'); cpolarSetup.hidden = true
   const cpolarSetupTitle = element('h3', 'dsh-mobile-control__section-title'); cpolarSetupTitle.textContent = '准备 cpolar'
   const cpolarComponentStatus = element('p', 'dsh-mobile-control__component-status'); cpolarComponentStatus.textContent = '正在检查组件…'
@@ -228,10 +258,33 @@ function installControl(): { remove: () => void; toggle: () => void } {
   const remoteReset = element('button', 'dsh-mobile-control__manage'); remoteReset.type = 'button'; remoteReset.textContent = '退出并清除远程登录'
   remoteManageRow.append(remoteDevices, remoteReset)
   const remoteDevicePanel = element('div', 'dsh-mobile-control__devices'); remoteDevicePanel.hidden = true
-  header.append(title, close); actions.append(toggle, pair, linkPair)
+  const diagnosticsView = element('div', 'dsh-mobile-control__view is-diagnostics'); diagnosticsView.hidden = true
+  const diagnosticsIntro = element('p', 'dsh-mobile-control__intro'); diagnosticsIntro.textContent = '检查版本、网关、网卡、防火墙和远程通道。报告自动脱敏，不读取对话或凭据。'
+  const diagnosticsSummary = element('section', 'dsh-mobile-control__diagnostic-summary is-idle'); diagnosticsSummary.setAttribute('aria-live', 'polite')
+  const diagnosticsSummaryMain = element('div', 'dsh-mobile-control__diagnostic-summary-main')
+  const diagnosticsSummaryIcon = element('span', 'dsh-mobile-control__diagnostic-summary-icon'); diagnosticsSummaryIcon.setAttribute('aria-hidden', 'true')
+  const diagnosticsSummaryBody = element('div', 'dsh-mobile-control__diagnostic-summary-body')
+  const diagnosticsSummaryTitle = element('strong'); diagnosticsSummaryTitle.textContent = '尚未检查'
+  const diagnosticsSummaryText = element('span'); diagnosticsSummaryText.textContent = '点击下方按钮开始。'
+  const diagnosticsSummaryMeta = element('span', 'dsh-mobile-control__diagnostic-summary-meta'); diagnosticsSummaryMeta.textContent = '等待运行 · 仅收集连接状态'
+  diagnosticsSummaryBody.append(diagnosticsSummaryTitle, diagnosticsSummaryText)
+  diagnosticsSummaryMain.append(diagnosticsSummaryIcon, diagnosticsSummaryBody)
+  diagnosticsSummary.append(diagnosticsSummaryMain, diagnosticsSummaryMeta)
+  const diagnosticsToolbar = element('div', 'dsh-mobile-control__diagnostic-toolbar')
+  const diagnosticsRun = element('button', 'dsh-mobile-control__primary dsh-mobile-control__diagnostic-run'); diagnosticsRun.type = 'button'; diagnosticsRun.textContent = '开始检查'
+  const diagnosticsCopy = element('button', 'dsh-mobile-control__secondary dsh-mobile-control__diagnostic-copy'); diagnosticsCopy.type = 'button'; diagnosticsCopy.textContent = '复制脱敏报告'; diagnosticsCopy.disabled = true; diagnosticsCopy.hidden = true
+  diagnosticsToolbar.append(diagnosticsRun, diagnosticsCopy)
+  const diagnosticsFeedback = element('p', 'dsh-mobile-control__diagnostic-feedback'); diagnosticsFeedback.hidden = true; diagnosticsFeedback.setAttribute('role', 'status'); diagnosticsFeedback.setAttribute('aria-live', 'polite')
+  const diagnosticsChecks = element('div', 'dsh-mobile-control__diagnostic-checks'); diagnosticsChecks.hidden = true
+  const diagnosticsDetails = element('details', 'dsh-mobile-control__details dsh-mobile-control__diagnostic-details'); diagnosticsDetails.hidden = true
+  const diagnosticsDetailsSummary = element('summary'); diagnosticsDetailsSummary.textContent = '高级诊断详情'
+  const diagnosticsReport = element('pre', 'dsh-mobile-control__diagnostic-report')
+  diagnosticsDetails.append(diagnosticsDetailsSummary, diagnosticsReport)
+  header.append(title, headerActions); actions.append(toggle, pair, linkPair)
   lanView.append(access, qrBox, status, extensionStatus, actions, manageRow, devicePanel)
   remoteView.append(remoteIntro, providerSection, cpolarSetup, tailscaleInfo, remoteAccess, remoteQr, remoteStatus, remoteGuide, remoteActions, remoteManageRow, remoteDevicePanel)
-  panel.append(header, appDownload, switcher, lanView, remoteView); root.append(panel); document.body.append(root)
+  diagnosticsView.append(diagnosticsIntro, diagnosticsSummary, diagnosticsToolbar, diagnosticsFeedback, diagnosticsChecks, diagnosticsDetails)
+  panel.append(header, appDownload, switcher, lanView, remoteView, diagnosticsView); root.append(panel); document.body.append(root)
   let running = false
   let origin = ''
   let remoteRunning = false
@@ -247,6 +300,9 @@ function installControl(): { remove: () => void; toggle: () => void } {
   let cpolarConfigured = false
   let providerInfoPinned = false
   let providerInfoHovered = false
+  let previousAccessView: 'lan' | 'remote' = 'lan'
+  let diagnosticsBusy = false
+  let copiedDiagnosticReport = ''
   const syncProviderInfo = (): void => {
     const open = providerInfoPinned || providerInfoHovered || providerInfo.contains(document.activeElement)
     providerInfoPopover.hidden = !open
@@ -264,17 +320,24 @@ function installControl(): { remove: () => void; toggle: () => void } {
     providerInfoPopover.hidden = true
     providerInfoButton.setAttribute('aria-expanded', 'false')
   })
-  const selectView = (remote: boolean): void => {
-    lanView.hidden = remote
-    remoteView.hidden = !remote
-    lanTab.classList.toggle('is-active', !remote)
-    remoteTab.classList.toggle('is-active', remote)
-    lanTab.setAttribute('aria-pressed', String(!remote))
-    remoteTab.setAttribute('aria-pressed', String(remote))
-    title.textContent = remote ? '远程访问' : '局域网访问'
+  const selectView = (view: 'lan' | 'remote' | 'diagnostics'): void => {
+    if (view !== 'diagnostics') previousAccessView = view
+    lanView.hidden = view !== 'lan'
+    remoteView.hidden = view !== 'remote'
+    diagnosticsView.hidden = view !== 'diagnostics'
+    lanTab.classList.toggle('is-active', view === 'lan')
+    remoteTab.classList.toggle('is-active', view === 'remote')
+    lanTab.setAttribute('aria-pressed', String(view === 'lan'))
+    remoteTab.setAttribute('aria-pressed', String(view === 'remote'))
+    diagnosticsEntry.setAttribute('aria-pressed', String(view === 'diagnostics'))
+    diagnosticsEntry.textContent = view === 'diagnostics' ? '返回' : '诊断'
+    diagnosticsEntry.setAttribute('aria-label', view === 'diagnostics' ? '返回移动访问' : '打开连接诊断')
+    appDownload.hidden = view === 'diagnostics'
+    switcher.hidden = view === 'diagnostics'
+    title.textContent = view === 'lan' ? '局域网访问' : view === 'remote' ? '远程访问' : '连接诊断'
   }
-  lanTab.addEventListener('click', () => { selectView(false) })
-  remoteTab.addEventListener('click', () => { selectView(true); loadRemote() })
+  lanTab.addEventListener('click', () => { selectView('lan') })
+  remoteTab.addEventListener('click', () => { selectView('remote'); loadRemote() })
   const setOpen = (open: boolean): void => {
     panel.hidden = !open
     for (const trigger of document.querySelectorAll('.dsh-mobile-control__trigger')) trigger.setAttribute('aria-expanded', String(open))
@@ -445,6 +508,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
       funnel_permission_required: '登录已完成。请继续授权 Funnel，完成后会自动建立远程连接。',
       funnel_https_required: '登录已完成。请继续授权 Funnel，官方页面会同时启用 HTTPS。',
       funnel_start_failed: '登录已完成。请继续完成 Tailscale Funnel 的首次授权。',
+      funnel_start_timeout: 'Tailscale 组件启动超时，请检查网络后重新连接。',
       tailscale_dns_missing: 'Tailscale 暂未提供远程地址。请重新连接并确认已完成登录。',
       gateway_start_failed: '远程网关启动失败。请重新连接，局域网访问不受影响。',
       control_channel_failed: '远程组件连接中断。请重新连接。',
@@ -477,8 +541,13 @@ function installControl(): { remove: () => void; toggle: () => void } {
     if (!remoteReady) remoteQr.hidden = true
     if (!needsFunnelSetup) remoteSetupPending = false
   }
+  let remoteLoadInFlight = false
   const loadRemote = (): void => {
-    void requestJson('/api/mobile-access/remote/control').then(renderRemote, error => { remoteStatus.textContent = String(error) })
+    if (remoteLoadInFlight) return
+    remoteLoadInFlight = true
+    void requestJson('/api/mobile-access/remote/control')
+      .then(renderRemote, error => { remoteStatus.textContent = String(error) })
+      .finally(() => { remoteLoadInFlight = false })
   }
   const chooseRemoteProvider = (provider: 'tailscale' | 'cpolar'): void => {
     if (remoteProviderBusy || provider === remoteProvider) return
@@ -501,7 +570,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     cpolarInstall.disabled = true
     cpolarInstall.textContent = '正在下载并校验…'
     remoteStatus.textContent = '正在安装 cpolar 官方组件。完成前请保持 DSH 运行。'
-    void requestJson('/api/mobile-access/remote/cpolar/component/install', { method: 'POST', body: JSON.stringify({ confirm: true }) })
+    void requestJson('/api/mobile-access/remote/cpolar/component/install', { method: 'POST', body: JSON.stringify({ confirm: true }) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
       .then(renderRemote, error => { remoteStatus.textContent = `组件安装失败：${String(error)}` })
       .finally(() => { remoteProviderBusy = false; loadRemote() })
   })
@@ -517,7 +586,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     cpolarConfigure.disabled = true
     cpolarConfigure.setAttribute('aria-busy', 'true')
     cpolarConfigure.textContent = '正在保存…'
-    void requestJson('/api/mobile-access/remote/cpolar/configure', { method: 'POST', body: JSON.stringify({ authtoken }) })
+    void requestJson('/api/mobile-access/remote/cpolar/configure', { method: 'POST', body: JSON.stringify({ authtoken }) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
       .then(() => {
         cpolarToken.value = ''
         remoteStatus.textContent = '账号配置已保存，正在建立 cpolar 远程通道…'
@@ -532,7 +601,7 @@ function installControl(): { remove: () => void; toggle: () => void } {
     remoteProviderBusy = true
     cpolarPurge.disabled = true
     remoteStatus.textContent = '正在关闭通道并清理 DSH Mobile 管理的 cpolar 文件…'
-    void requestJson('/api/mobile-access/remote/cpolar/component/purge', { method: 'POST', body: JSON.stringify({ confirm: true }) })
+    void requestJson('/api/mobile-access/remote/cpolar/component/purge', { method: 'POST', body: JSON.stringify({ confirm: true }) }, LONG_CONTROL_REQUEST_TIMEOUT_MS)
       .then(renderRemote, error => { remoteStatus.textContent = `清理失败：${String(error)}` })
       .finally(() => { remoteProviderBusy = false; cpolarPurge.disabled = false; loadRemote() })
   })
@@ -623,6 +692,100 @@ function installControl(): { remove: () => void; toggle: () => void } {
     void requestJson('/api/mobile-access/remote/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) })
       .then(renderRemote, error => { remoteStatus.textContent = String(error) })
   })
+  const renderDiagnostics = (data: Record<string, unknown>): void => {
+    const overall = data.overall === 'error' ? 'error' : data.overall === 'attention' ? 'attention' : 'ok'
+    diagnosticsSummary.className = `dsh-mobile-control__diagnostic-summary is-${overall}`
+    diagnosticsSummaryTitle.textContent = overall === 'ok' ? '检查完成' : overall === 'attention' ? '有项目需要留意' : '发现连接问题'
+    diagnosticsSummaryText.textContent = typeof data.summary === 'string' ? data.summary : '检查已完成。'
+    const entries = Array.isArray(data.checks) ? data.checks as Record<string, unknown>[] : []
+    diagnosticsChecks.replaceChildren()
+    const statusLabels: Record<string, string> = { ok: '正常', warning: '注意', error: '问题', info: '说明' }
+    const statusOf = (entry: Record<string, unknown>): 'ok' | 'warning' | 'error' | 'info' => entry.status === 'ok' || entry.status === 'warning' || entry.status === 'error' ? entry.status : 'info'
+    const appendGroup = (label: string, groupEntries: Record<string, unknown>[]): void => {
+      if (groupEntries.length === 0) return
+      const group = element('section', 'dsh-mobile-control__diagnostic-group')
+      const groupHeader = element('header', 'dsh-mobile-control__diagnostic-group-header')
+      const groupTitle = element('h3'); groupTitle.textContent = label
+      const groupCount = element('span'); groupCount.textContent = `${String(groupEntries.length)} 项`
+      const list = element('div', 'dsh-mobile-control__diagnostic-list'); list.setAttribute('role', 'list')
+      groupHeader.append(groupTitle, groupCount)
+      for (const entry of groupEntries) {
+        const state = statusOf(entry)
+        const row = element('section', `dsh-mobile-control__diagnostic-check is-${state}`); row.setAttribute('role', 'listitem')
+        const marker = element('span', 'dsh-mobile-control__diagnostic-marker'); marker.setAttribute('aria-hidden', 'true')
+        const rowBody = element('div', 'dsh-mobile-control__diagnostic-check-body')
+        const rowHeader = element('div', 'dsh-mobile-control__diagnostic-check-header')
+        const rowTitle = element('strong'); rowTitle.textContent = typeof entry.label === 'string' ? entry.label : '检查项'
+        const badge = element('span', 'dsh-mobile-control__diagnostic-badge'); badge.textContent = statusLabels[state]!
+        const detail = element('p'); detail.textContent = typeof entry.detail === 'string' ? entry.detail : ''
+        rowHeader.append(rowTitle, badge); rowBody.append(rowHeader, detail)
+        if (typeof entry.action === 'string' && entry.action !== '') {
+          const action = element('p', 'dsh-mobile-control__diagnostic-action')
+          const actionLabel = element('span'); actionLabel.textContent = '建议'
+          action.append(actionLabel, document.createTextNode(entry.action)); rowBody.append(action)
+        }
+        row.append(marker, rowBody); list.append(row)
+      }
+      group.append(groupHeader, list); diagnosticsChecks.append(group)
+    }
+    const issues = entries.filter(entry => statusOf(entry) === 'error' || statusOf(entry) === 'warning')
+    const otherChecks = entries.filter(entry => statusOf(entry) !== 'error' && statusOf(entry) !== 'warning')
+    appendGroup('需要处理', issues)
+    appendGroup(issues.length === 0 ? '检查详情' : '其他检查', otherChecks)
+    diagnosticsSummaryMeta.textContent = issues.length === 0
+      ? `${String(entries.length)} 项检查 · 未发现阻断问题`
+      : `${String(entries.length)} 项检查 · ${String(issues.length)} 项需要处理`
+    diagnosticsChecks.hidden = entries.length === 0
+    copiedDiagnosticReport = typeof data.report === 'string' ? data.report : ''
+    diagnosticsReport.textContent = copiedDiagnosticReport
+    diagnosticsDetails.hidden = copiedDiagnosticReport === ''
+    diagnosticsCopy.disabled = copiedDiagnosticReport === ''
+    diagnosticsCopy.hidden = copiedDiagnosticReport === ''
+    diagnosticsToolbar.classList.toggle('has-report', copiedDiagnosticReport !== '')
+  }
+  const loadDiagnostics = (): void => {
+    if (diagnosticsBusy) return
+    diagnosticsBusy = true
+    diagnosticsRun.disabled = true
+    diagnosticsRun.setAttribute('aria-busy', 'true')
+    diagnosticsRun.textContent = '正在检查…'
+    diagnosticsSummary.className = 'dsh-mobile-control__diagnostic-summary is-running'
+    diagnosticsSummaryTitle.textContent = '正在检查连接'
+    diagnosticsSummaryText.textContent = '通常几秒内完成。远程通道会执行一次真实可达性测试。'
+    diagnosticsSummaryMeta.textContent = '正在运行 · 请保持 DSH 在线'
+    diagnosticsFeedback.hidden = true
+    diagnosticsChecks.classList.add('is-refreshing')
+    diagnosticsChecks.setAttribute('aria-busy', 'true')
+    void requestJson('/api/mobile-access/diagnostics').then(renderDiagnostics, error => {
+      diagnosticsSummary.className = 'dsh-mobile-control__diagnostic-summary is-error'
+      diagnosticsSummaryTitle.textContent = '检查未完成'
+      diagnosticsSummaryText.textContent = `无法读取诊断结果：${String(error)}`
+      diagnosticsSummaryMeta.textContent = '诊断服务暂不可用 · 请稍后重试'
+    }).finally(() => {
+      diagnosticsBusy = false
+      diagnosticsRun.disabled = false
+      diagnosticsRun.setAttribute('aria-busy', 'false')
+      diagnosticsRun.textContent = '重新检查'
+      diagnosticsChecks.classList.remove('is-refreshing')
+      diagnosticsChecks.setAttribute('aria-busy', 'false')
+    })
+  }
+  diagnosticsEntry.addEventListener('click', () => {
+    if (!diagnosticsView.hidden) { selectView(previousAccessView); return }
+    selectView('diagnostics'); loadDiagnostics()
+  })
+  diagnosticsRun.addEventListener('click', loadDiagnostics)
+  diagnosticsCopy.addEventListener('click', () => {
+    if (copiedDiagnosticReport === '') return
+    void navigator.clipboard.writeText(copiedDiagnosticReport).then(() => {
+      diagnosticsFeedback.textContent = '脱敏报告已复制，可直接粘贴到 Issue。'
+      diagnosticsFeedback.hidden = false
+    }, () => {
+      diagnosticsDetails.open = true
+      diagnosticsFeedback.textContent = '浏览器未允许复制，已展开详情，请手动复制。'
+      diagnosticsFeedback.hidden = false
+    })
+  })
   pair.addEventListener('click', () => { pair.disabled = true; openPairing('key') })
   linkPair.addEventListener('click', () => { linkPair.disabled = true; openPairing('link') })
   close.addEventListener('click', () => { setOpen(false) })
@@ -666,6 +829,9 @@ function installCustomAssets(): () => void {
   const styleNodes = new Map<string, HTMLStyleElement>()
   const styleEtags = new Map<string, string>()
   const scriptDigests = new Map<string, string>()
+  const manifestExtensionIds = new Set<string>()
+  const managedDefinitionIds = new Set<string>()
+  const activationQueues = new Map<string, Promise<boolean>>()
   let manifestEtag = ''
   let expectedDefinitionId: string | undefined
   const SURFACE_HOST_STYLES: Readonly<Record<string, string>> = {
@@ -742,7 +908,7 @@ function installCustomAssets(): () => void {
       signal: controller.signal, document, window,
     }
   }
-  const activateDefinition = async (definition: MobileClientDefinition): Promise<void> => {
+  const activateDefinitionNow = async (definition: MobileClientDefinition): Promise<boolean> => {
     const previousActive = active.get(definition.id)
     const controller = new AbortController()
     const surfaces = new Map<string, { readonly dispose: () => void; readonly container: HTMLElement }>()
@@ -750,136 +916,244 @@ function installCustomAssets(): () => void {
     try {
       const cleanup = await definition.activate(makeApi(definition.id, controller))
       const current = active.get(definition.id)
-      if (current === undefined || current.controller !== controller) { if (typeof cleanup === 'function') cleanup(); return }
+      if (current === undefined || current.controller !== controller) { if (typeof cleanup === 'function') cleanup(); return false }
       const oldDispose = current.dispose
       active.set(definition.id, { ...current, dispose: () => { if (typeof cleanup === 'function') cleanup(); oldDispose() } })
       previousActive?.dispose()
+      return true
     } catch {
-      active.get(definition.id)?.dispose(); active.delete(definition.id); if (previousActive !== undefined) active.set(definition.id, previousActive)
+      const current = active.get(definition.id)
+      if (current?.controller === controller) {
+        current.dispose(); active.delete(definition.id); if (previousActive !== undefined) active.set(definition.id, previousActive)
+      }
+      return false
     }
+  }
+  const activateDefinition = (definition: MobileClientDefinition): Promise<boolean> => {
+    const previous = activationQueues.get(definition.id) ?? Promise.resolve(true)
+    const task = previous.then(
+      () => definitions.get(definition.id) === definition ? activateDefinitionNow(definition) : false,
+      () => definitions.get(definition.id) === definition ? activateDefinitionNow(definition) : false,
+    )
+    activationQueues.set(definition.id, task)
+    void task.finally(() => { if (activationQueues.get(definition.id) === task) activationQueues.delete(definition.id) })
+    return task
   }
   const define = (definition: MobileClientDefinition): void => {
     if (definition.apiVersion !== 1 || !/^[a-z][a-z0-9-]{0,63}$/u.test(definition.id) || typeof definition.activate !== 'function') return
     if (expectedDefinitionId !== undefined && definition.id !== expectedDefinitionId) return
     definitions.set(definition.id, definition)
-    if (started) void activateDefinition(definition)
+    if (started && expectedDefinitionId === undefined) void activateDefinition(definition)
   }
   let started = false
   window.dshMobile = Object.freeze({ register: mount => { legacyMount = mount }, define })
   for (const definition of queuedDefinitions.splice(0)) define(definition)
   let legacyJsEtag = ''
   let legacyJsModified = ''
-  const refreshLegacy = async (): Promise<void> => {
+  const refreshLegacy = async (signal?: AbortSignal): Promise<boolean> => {
+    const previousMount = legacyMount
+    let pendingRoot: HTMLElement | undefined
     try {
       const headers: Record<string, string> = {}
       if (legacyJsEtag !== '') headers['if-none-match'] = legacyJsEtag
       if (legacyJsModified !== '') headers['if-modified-since'] = legacyJsModified
-      const response = await fetch('/mobile-access/custom.js', { credentials: 'same-origin', cache: 'no-store', headers })
-      if (response.status === 304) return
-      if (!response.ok) return
+      const response = await fetch('/mobile-access/custom.js', { credentials: 'same-origin', cache: 'no-store', headers, ...(signal === undefined ? {} : { signal }) })
+      if (response.status === 304) return true
+      if (!response.ok) return false
       legacyJsEtag = response.headers.get('etag') ?? ''
       legacyJsModified = response.headers.get('last-modified') ?? ''
-      const next = await response.text(); if (next === legacySource) return; legacySource = next; legacyMount = undefined
+      const next = await response.text(); if (next === legacySource) return true; legacyMount = undefined
       const script = element('script'); script.textContent = `${next}\n//# sourceURL=dsh-mobile-custom.js`; document.head.append(script); script.remove()
       const mount = legacyMount as MobileExtensionMount | undefined
-      if (mount === undefined) return
-      const nextRoot = element('div'); nextRoot.dataset.dshMobileExtension = 'true'; document.body.append(nextRoot)
+      if (mount === undefined) { legacySource = next; return true }
+      const nextRoot = element('div'); pendingRoot = nextRoot; nextRoot.dataset.dshMobileExtension = 'true'; document.body.append(nextRoot)
       const nextDispose = mount({ document, request: mobileRequest, root: nextRoot, window })
-      legacyDispose?.(); legacyRoot?.remove(); legacyRoot = nextRoot; legacyDispose = typeof nextDispose === 'function' ? nextDispose : undefined
-    } catch { /* Preserve the last good customization during reconnects. */ }
+      legacyDispose?.(); legacyRoot?.remove(); legacyRoot = nextRoot; pendingRoot = undefined; legacyDispose = typeof nextDispose === 'function' ? nextDispose : undefined; legacySource = next
+      return true
+    } catch { pendingRoot?.remove(); legacyMount = previousMount; return false }
   }
-  const refreshExtensions = async (): Promise<void> => {
+  let legacyScriptRevision = ''
+  let legacyStyleRevision = ''
+  const refreshExtensions = async (signal?: AbortSignal): Promise<boolean> => {
     try {
       const headers: Record<string, string> = {}
       if (manifestEtag !== '') headers['if-none-match'] = manifestEtag
-      const response = await fetch('/mobile-access/extensions/manifest', { credentials: 'same-origin', cache: 'no-store', headers })
-      if (response.status === 304) return
-      if (!response.ok) return
-      manifestEtag = response.headers.get('etag') ?? ''
-      const payload = await response.json() as { extensions?: unknown }
+      const response = await fetch('/mobile-access/extensions/manifest', { credentials: 'same-origin', cache: 'no-store', headers, ...(signal === undefined ? {} : { signal }) })
+      if (response.status === 404) {
+        const results = await Promise.all([refreshLegacy(signal), refreshCssLegacy(legacyStyle, signal)])
+        return results.every(Boolean)
+      }
+      if (response.status === 304) return true
+      if (!response.ok) return false
+      const nextManifestEtag = response.headers.get('etag') ?? ''
+      const payload = await response.json() as { extensions?: unknown; legacy?: { scriptRevision?: unknown; styleRevision?: unknown } }
+      const scriptRevision = typeof payload.legacy?.scriptRevision === 'string' ? payload.legacy.scriptRevision : ''
+      const styleRevision = typeof payload.legacy?.styleRevision === 'string' ? payload.legacy.styleRevision : ''
+      let refreshComplete = true
+      if (scriptRevision === '' || scriptRevision !== legacyScriptRevision) {
+        if (await refreshLegacy(signal)) legacyScriptRevision = scriptRevision
+        else refreshComplete = false
+      }
+      if (styleRevision === '' || styleRevision !== legacyStyleRevision) {
+        if (await refreshCssLegacy(legacyStyle, signal)) legacyStyleRevision = styleRevision
+        else refreshComplete = false
+      }
       const entries = Array.isArray(payload.extensions) ? payload.extensions as Record<string, unknown>[] : []
       const seen = new Set<string>()
       for (const entry of entries) {
         if (typeof entry.id !== 'string') continue
         seen.add(entry.id)
-        const cssUrl = typeof entry.styleUrl === 'string' ? entry.styleUrl : undefined
-        if (cssUrl !== undefined) {
-          const cssHeaders: Record<string, string> = {}
-          const storedEtag = styleEtags.get(entry.id)
-          if (storedEtag !== undefined) cssHeaders['if-none-match'] = storedEtag
-          const cssResponse = await fetch(cssUrl, { credentials: 'same-origin', cache: 'no-store', headers: cssHeaders })
-          if (cssResponse.status === 304) { /* unchanged */ }
-          else if (cssResponse.ok) {
-            const nextEtag = cssResponse.headers.get('etag'); if (nextEtag !== null && nextEtag !== '') styleEtags.set(entry.id, nextEtag)
-            const css = await cssResponse.text(); const oldStyle = styleNodes.get(entry.id)
-            if (oldStyle?.textContent !== css) {
-              const node = element('style'); node.dataset.dshMobileExtensionStyle = entry.id; node.textContent = css; document.head.append(node); styleNodes.set(entry.id, node); oldStyle?.remove()
+        try {
+          let pendingCss: string | undefined
+          let pendingStyleEtag: string | undefined
+          const cssUrl = typeof entry.styleUrl === 'string' ? entry.styleUrl : undefined
+          if (cssUrl !== undefined) {
+            const cssHeaders: Record<string, string> = {}
+            const storedEtag = styleEtags.get(entry.id)
+            if (storedEtag !== undefined) cssHeaders['if-none-match'] = storedEtag
+            const cssResponse = await fetch(cssUrl, { credentials: 'same-origin', cache: 'no-store', headers: cssHeaders, ...(signal === undefined ? {} : { signal }) })
+            if (cssResponse.status !== 304) {
+              if (!cssResponse.ok) throw new Error('mobile extension style failed to load')
+              pendingStyleEtag = cssResponse.headers.get('etag') ?? undefined
+              pendingCss = await cssResponse.text()
             }
-          } else continue
-        }
-        const scriptUrl = typeof entry.scriptUrl === 'string' ? entry.scriptUrl : undefined
-        if (scriptUrl !== undefined) {
-          const scriptHeaders: Record<string, string> = {}
-          const storedDigest = scriptDigests.get(entry.id)
-          if (storedDigest !== undefined) scriptHeaders['if-none-match'] = storedDigest
-          const scriptResponse = await fetch(scriptUrl, { credentials: 'same-origin', cache: 'no-store', headers: scriptHeaders })
-          if (scriptResponse.status === 304) { /* unchanged */ }
-          else if (scriptResponse.ok) {
-            const source = await scriptResponse.text(); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source)); const key = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
-            if (scriptDigests.get(entry.id) !== key) {
-              scriptDigests.set(entry.id, key)
-              expectedDefinitionId = entry.id
-              try { const script = element('script'); script.textContent = `${source}\n//# sourceURL=dsh-mobile-extension-${entry.id}.js`; document.head.append(script); script.remove() }
-              finally { expectedDefinitionId = undefined }
+          }
+
+          const scriptUrl = typeof entry.scriptUrl === 'string' ? entry.scriptUrl : undefined
+          if (scriptUrl !== undefined) {
+            const scriptHeaders: Record<string, string> = {}
+            const storedDigest = scriptDigests.get(entry.id)
+            if (storedDigest !== undefined) scriptHeaders['if-none-match'] = storedDigest
+            const scriptResponse = await fetch(scriptUrl, { credentials: 'same-origin', cache: 'no-store', headers: scriptHeaders, ...(signal === undefined ? {} : { signal }) })
+            if (scriptResponse.status !== 304) {
+              if (!scriptResponse.ok) throw new Error('mobile extension script failed to load')
+              const source = await scriptResponse.text()
+              const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))
+              const key = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
+              if (scriptDigests.get(entry.id) !== key) {
+                const previousDefinition = definitions.get(entry.id)
+                try {
+                  expectedDefinitionId = entry.id
+                  try {
+                    const script = element('script'); script.textContent = `${source}\n//# sourceURL=dsh-mobile-extension-${entry.id}.js`; document.head.append(script); script.remove()
+                  } finally { expectedDefinitionId = undefined }
+                  const nextDefinition = definitions.get(entry.id)
+                  if (nextDefinition === undefined || nextDefinition === previousDefinition) throw new Error('mobile extension did not define its manifest id')
+                  if (!await activateDefinition(nextDefinition)) throw new Error('mobile extension activation failed')
+                  managedDefinitionIds.add(entry.id)
+                  scriptDigests.set(entry.id, key)
+                } catch (error) {
+                  if (previousDefinition === undefined) definitions.delete(entry.id)
+                  else definitions.set(entry.id, previousDefinition)
+                  throw error
+                }
+              }
             }
-          } else continue
+            const definition = definitions.get(entry.id)
+            if (definition !== undefined && !active.has(entry.id) && !await activateDefinition(definition)) throw new Error('mobile extension activation failed')
+          }
+
+          if (pendingCss !== undefined) {
+            const oldStyle = styleNodes.get(entry.id)
+            if (oldStyle?.textContent !== pendingCss) {
+              const node = element('style'); node.dataset.dshMobileExtensionStyle = entry.id; node.textContent = pendingCss; document.head.append(node); styleNodes.set(entry.id, node); oldStyle?.remove()
+            }
+            if (pendingStyleEtag !== undefined && pendingStyleEtag !== '') styleEtags.set(entry.id, pendingStyleEtag)
+          }
+        } catch {
+          refreshComplete = false
         }
-        const definition = definitions.get(entry.id); if (definition !== undefined && !active.has(entry.id)) await activateDefinition(definition)
       }
-      for (const [id, current] of active) if (!seen.has(id) && !definitions.has(id) && id !== 'legacy-custom') { current.dispose(); active.delete(id); styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id) }
-    } catch { /* A temporary reconnect failure must not tear down the last good UI. */ }
+      for (const id of manifestExtensionIds) {
+        if (seen.has(id)) continue
+        active.get(id)?.dispose(); active.delete(id)
+        styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id)
+        if (managedDefinitionIds.delete(id)) definitions.delete(id)
+      }
+      manifestExtensionIds.clear(); for (const id of seen) manifestExtensionIds.add(id)
+      manifestEtag = refreshComplete ? nextManifestEtag : ''
+      return refreshComplete
+    } catch { return false }
   }
   started = true
   for (const definition of definitions.values()) void activateDefinition(definition)
-  void refreshLegacy(); void refreshExtensions(); void refreshCssLegacy(legacyStyle)
-  const timer = window.setInterval(() => { void refreshLegacy(); void refreshExtensions(); void refreshCssLegacy(legacyStyle) }, 3_000)
-  return () => { clearInterval(timer); started = false; legacyDispose?.(); legacyRoot?.remove(); legacyStyle.remove(); for (const current of active.values()) current.dispose(); for (const node of styleNodes.values()) node.remove(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
+  const remoteOrigin = window.location.hostname.endsWith('.ts.net') || window.location.hostname.includes('.cpolar.')
+  const refreshIntervalMs = remoteOrigin ? 15_000 : 3_000
+  const refreshTimeoutMs = remoteOrigin ? 20_000 : 8_000
+  let stopped = false
+  let refreshTimer: number | undefined
+  let refreshFailures = 0
+  let refreshController: AbortController | undefined
+  const scheduleRefresh = (delayMs: number): void => {
+    if (stopped || document.visibilityState === 'hidden' || !navigator.onLine) return
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+    refreshTimer = window.setTimeout(runRefresh, delayMs)
+  }
+  const runRefresh = (): void => {
+    if (stopped || refreshController !== undefined) return
+    refreshController = new AbortController()
+    const controller = refreshController
+    const timeout = window.setTimeout(() => { controller.abort() }, refreshTimeoutMs)
+    void refreshExtensions(controller.signal).then(success => {
+      refreshFailures = success ? 0 : refreshFailures + 1
+    }).finally(() => {
+      clearTimeout(timeout)
+      if (refreshController === controller) refreshController = undefined
+      const backoff = Math.min(60_000, refreshIntervalMs * (2 ** Math.min(refreshFailures, 3)))
+      scheduleRefresh(backoff)
+    })
+  }
+  const resumeRefresh = (): void => {
+    if (document.visibilityState !== 'hidden' && navigator.onLine) scheduleRefresh(0)
+  }
+  document.addEventListener('visibilitychange', resumeRefresh)
+  window.addEventListener('online', resumeRefresh)
+  scheduleRefresh(0)
+  return () => { stopped = true; if (refreshTimer !== undefined) clearTimeout(refreshTimer); refreshController?.abort(); document.removeEventListener('visibilitychange', resumeRefresh); window.removeEventListener('online', resumeRefresh); started = false; legacyDispose?.(); legacyRoot?.remove(); legacyStyle.remove(); for (const current of active.values()) current.dispose(); for (const node of styleNodes.values()) node.remove(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
 }
 
 let cssEtag = ''
 let cssModified = ''
-async function refreshCssLegacy(style: HTMLStyleElement): Promise<void> {
+async function refreshCssLegacy(style: HTMLStyleElement, signal?: AbortSignal): Promise<boolean> {
   try {
     const headers: Record<string, string> = {}
     if (cssEtag !== '') headers['if-none-match'] = cssEtag
     if (cssModified !== '') headers['if-modified-since'] = cssModified
-    const response = await fetch('/mobile-access/custom.css', { credentials: 'same-origin', cache: 'no-store', headers })
-    if (response.status === 304) return
+    const response = await fetch('/mobile-access/custom.css', { credentials: 'same-origin', cache: 'no-store', headers, ...(signal === undefined ? {} : { signal }) })
+    if (response.status === 304) return true
     if (response.ok) {
       cssEtag = response.headers.get('etag') ?? ''
       cssModified = response.headers.get('last-modified') ?? ''
       style.textContent = await response.text()
+      return true
     }
-  } catch { /* Preserve the last good style during reconnects. */ }
+    return false
+  } catch { return false }
 }
 
 const CONTROL_STYLES = `
 .dsh-mobile-control{position:fixed;z-index:1000;left:16px;bottom:112px;font:14px/1.45 system-ui;color:var(--dsw-alias-label-primary,#16181d)}
 .dsh-mobile-control__panel{box-sizing:border-box;width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 140px);overflow-y:auto;padding:16px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:18px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 18px 50px rgb(15 23 42 / 18%)}
-.dsh-mobile-control__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.dsh-mobile-control__panel h2{margin:0;font-size:17px;line-height:24px}.dsh-mobile-control__close{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;font-size:24px;line-height:1;cursor:pointer}.dsh-mobile-control__close:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
-.dsh-mobile-control__app-download{display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;min-height:38px;margin:0 0 10px;padding:8px 11px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#f7f8fa);color:var(--dsw-alias-label-primary,#16181d);font:600 12px/1.3 system-ui;text-decoration:none}.dsh-mobile-control__app-download::after{color:#2563eb;font-size:14px;content:"↗"}.dsh-mobile-control__app-download:hover{border-color:#9fb9e8;background:#f5f8ff;color:#1d4ed8}
-.dsh-mobile-control__switcher{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:0 0 14px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f3f5f8)}.dsh-mobile-control__tab{min-height:36px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary,#606873);font:600 13px/1 system-ui;cursor:pointer}.dsh-mobile-control__tab.is-active{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);box-shadow:0 1px 3px rgb(15 23 42 / 10%)}.dsh-mobile-control__view[hidden]{display:none}.dsh-mobile-control__intro{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px;line-height:1.55}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions button[hidden]{display:none}
+.dsh-mobile-control__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.dsh-mobile-control__panel h2{margin:0;font-size:17px;line-height:24px}.dsh-mobile-control__header-actions{display:flex;align-items:center;gap:2px}.dsh-mobile-control__diagnostic-entry,.dsh-mobile-control__close{display:inline-flex;align-items:center;justify-content:center;min-width:44px;height:44px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer}.dsh-mobile-control__diagnostic-entry{padding:0 9px;color:#2563eb;font:650 12px/1 system-ui}.dsh-mobile-control__close{font-size:24px;line-height:1}.dsh-mobile-control__diagnostic-entry:hover,.dsh-mobile-control__close:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}
+.dsh-mobile-control__app-download{display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;min-height:38px;margin:0 0 10px;padding:8px 11px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:11px;background:var(--dsw-alias-bg-layer-1,#f7f8fa);color:var(--dsw-alias-label-primary,#16181d);font:600 12px/1.3 system-ui;text-decoration:none}.dsh-mobile-control__app-download[hidden]{display:none}.dsh-mobile-control__app-download::after{color:#2563eb;font-size:14px;content:"↗"}.dsh-mobile-control__app-download:hover{border-color:#9fb9e8;background:#f5f8ff;color:#1d4ed8}
+.dsh-mobile-control__switcher{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin:0 0 14px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#f3f5f8)}.dsh-mobile-control__switcher[hidden]{display:none}.dsh-mobile-control__tab{min-height:36px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary,#606873);font:600 13px/1 system-ui;cursor:pointer}.dsh-mobile-control__tab.is-active{background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#16181d);box-shadow:0 1px 3px rgb(15 23 42 / 10%)}.dsh-mobile-control__view[hidden]{display:none}.dsh-mobile-control__intro{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px;line-height:1.55}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions button[hidden]{display:none}
 .dsh-mobile-control__provider-section{position:relative;margin:0 0 12px}.dsh-mobile-control__section-title{margin:0 0 8px;color:var(--dsw-alias-label-primary,#16181d);font:650 13px/1.4 system-ui}.dsh-mobile-control__provider-section>.dsh-mobile-control__section-title{padding-right:42px}.dsh-mobile-control__provider-choices{display:grid;gap:8px}.dsh-mobile-control__provider{display:flex;flex-direction:column;gap:5px;min-height:68px;padding:11px 12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:#fff;color:inherit;text-align:left;cursor:pointer;transition:border-color 160ms ease,background-color 160ms ease,box-shadow 160ms ease}.dsh-mobile-control__provider:hover{border-color:#9fb9e8;background:#f8fbff}.dsh-mobile-control__provider.is-selected{border-color:#2563eb;background:#f5f8ff;box-shadow:0 0 0 1px #2563eb inset}.dsh-mobile-control__provider:disabled{cursor:wait;opacity:.62}.dsh-mobile-control__provider-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-mobile-control__provider-top strong{font-size:13px}.dsh-mobile-control__provider-badge{flex:none;padding:3px 7px;border-radius:999px;background:#e8f0ff;color:#1d4ed8;font:650 10px/1.2 system-ui}.dsh-mobile-control__provider-badge.is-cpolar{background:#eaf8f2;color:#087454}.dsh-mobile-control__provider-description{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.45}.dsh-mobile-control__provider-info{position:absolute;z-index:5;top:-13px;right:-8px}.dsh-mobile-control__provider-info-button{display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:#475569;cursor:pointer;touch-action:manipulation}.dsh-mobile-control__provider-info-button:hover{background:#f1f5f9;color:#1d4ed8}.dsh-mobile-control__provider-info-glyph{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:18px;height:18px;border:1.5px solid currentColor;border-radius:50%;font:700 12px/1 system-ui}.dsh-mobile-control__provider-info-popover{position:absolute;z-index:6;top:38px;right:4px;box-sizing:border-box;width:min(292px,calc(100vw - 72px));padding:10px 12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 10px 28px rgb(15 23 42 / 16%)}.dsh-mobile-control__provider-info-popover[hidden]{display:none}.dsh-mobile-control__provider-info-popover strong,.dsh-mobile-control__provider-info-popover span{display:block}.dsh-mobile-control__provider-info-popover strong{margin-bottom:3px;font-size:12px}.dsh-mobile-control__provider-info-popover span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}
 .dsh-mobile-control__cpolar-setup{margin:0 0 12px;padding:12px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:#fff}.dsh-mobile-control__cpolar-setup[hidden],.dsh-mobile-control__cpolar-account[hidden],.dsh-mobile-control__details[hidden],.dsh-mobile-control__view.is-remote .dsh-mobile-control__actions[hidden],.dsh-mobile-control__danger[hidden]{display:none}.dsh-mobile-control__component-status,.dsh-mobile-control__component-note{margin:0 0 10px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.55}.dsh-mobile-control__cpolar-setup>.dsh-mobile-control__primary{width:100%;min-height:44px;padding:9px 12px;border-radius:10px;font:600 12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__cpolar-account{margin-top:10px}.dsh-mobile-control__link-row{display:flex;flex-wrap:wrap;gap:6px 12px;margin:0 0 10px}.dsh-mobile-control__text-link{color:#2563eb;font-size:11px;text-decoration:none}.dsh-mobile-control__text-link:hover{text-decoration:underline}.dsh-mobile-control__token-label{display:flex;flex-direction:column;gap:5px;margin:0 0 8px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px}.dsh-mobile-control__token{box-sizing:border-box;width:100%;min-height:44px;padding:9px 10px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:#fff;color:inherit;font:16px/1.4 system-ui}.dsh-mobile-control__cpolar-connect{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-height:44px;padding:10px 14px;border-radius:12px;font:650 13px/1.2 system-ui;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,opacity 160ms ease}.dsh-mobile-control__cpolar-connect:hover:not(:disabled){border-color:#1d4ed8;background:#1d4ed8}.dsh-mobile-control__cpolar-connect:active:not(:disabled){border-color:#1e40af;background:#1e40af}.dsh-mobile-control__cpolar-connect:disabled{cursor:wait;opacity:.55}.dsh-mobile-control__details{margin:10px 0 0;border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb);padding-top:9px}.dsh-mobile-control__details>summary{min-height:30px;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:30px;cursor:pointer}.dsh-mobile-control__details-body{display:flex;flex-wrap:wrap;align-items:center;gap:7px 12px;padding:4px 0}.dsh-mobile-control__details-body p{flex:1 0 100%;margin:0;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__storage{display:block;flex:1 0 100%;max-width:100%;overflow:hidden;padding:7px 8px;border-radius:8px;background:#f3f5f8;color:#475569;font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__danger{flex:1 0 100%;min-height:38px;margin-top:3px;padding:7px 10px;border:1px solid #dc2626;border-radius:9px;background:transparent;color:#b91c1c;font:12px/1.3 system-ui;cursor:pointer}
 .dsh-mobile-control__access{display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 12px}.dsh-mobile-control__access[hidden]{display:none}.dsh-mobile-control__access-label{flex:none;color:var(--dsw-alias-label-secondary,#606873);white-space:nowrap}.dsh-mobile-control__access-label::after{content:"："}.dsh-mobile-control__access-link{min-width:0;overflow:hidden;color:#2563eb;text-decoration:none;text-overflow:ellipsis;white-space:nowrap}.dsh-mobile-control__access-link:hover{text-decoration:underline}.dsh-mobile-control__qr{display:flex;justify-content:center;margin:0 0 12px}.dsh-mobile-control__qr[hidden]{display:none}.dsh-mobile-control__qr img{border-radius:12px;background:#fff;padding:8px}
 .dsh-mobile-control__status{margin:0 0 14px;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#606873)}.dsh-mobile-control__status::before{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%;background:#98a1ad;content:""}.dsh-mobile-control__status.is-running::before{background:#16a36a}.dsh-mobile-control__status.is-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;word-break:break-all}
 .dsh-mobile-control__guide{margin:0 0 14px;padding:12px;border:1px solid #bfdbfe;border-radius:12px;background:#eff6ff}.dsh-mobile-control__guide[hidden]{display:none}.dsh-mobile-control__guide-title{margin:0;color:#172554;font:650 13px/1.45 system-ui}.dsh-mobile-control__guide-summary,.dsh-mobile-control__guide-note{margin:4px 0 0;color:#475569;font-size:12px;line-height:1.5}.dsh-mobile-control__guide-steps{margin:8px 0 0;padding-left:20px;color:#1e293b;font-size:12px;line-height:1.6}.dsh-mobile-control__guide-note{color:#64748b}.dsh-mobile-control__guide-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.dsh-mobile-control__guide-actions button{min-width:0;min-height:44px;padding:8px;border-radius:10px;font:12px/1.25 system-ui;cursor:pointer}.dsh-mobile-control__guide-actions button:disabled{cursor:not-allowed;opacity:.45}
 .dsh-mobile-control__extensions{margin:0 0 12px;color:var(--dsw-alias-label-secondary,#606873);font-size:12px}
+.dsh-mobile-control__view.is-diagnostics{--dsh-diagnostic-ok:#087454;--dsh-diagnostic-warning:#a35b00;--dsh-diagnostic-error:#c62828;--dsh-diagnostic-info:#526071}.dsh-mobile-control__diagnostic-summary{box-sizing:border-box;margin:0;padding:13px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:16px;background:var(--dsw-alias-bg-layer-1,#f8fafc)}.dsh-mobile-control__diagnostic-summary-main{display:grid;grid-template-columns:36px minmax(0,1fr);align-items:center;gap:11px}.dsh-mobile-control__diagnostic-summary-icon{position:relative;display:block;width:36px;height:36px;border-radius:50%;background:#e8edf3;color:var(--dsh-diagnostic-info)}.dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-summary-icon::after{position:absolute;content:""}.dsh-mobile-control__diagnostic-summary-body{display:flex;min-width:0;flex-direction:column;gap:2px}.dsh-mobile-control__diagnostic-summary-body strong{font-size:13px;line-height:1.35}.dsh-mobile-control__diagnostic-summary-body span{color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5}.dsh-mobile-control__diagnostic-summary-meta{display:block;margin-top:11px;padding-top:9px;border-top:1px solid var(--dsw-alias-border-subtle,#dbe1e8);color:var(--dsw-alias-label-secondary,#606873);font-size:10px;line-height:1.45}.dsh-mobile-control__diagnostic-summary.is-ok .dsh-mobile-control__diagnostic-summary-icon{background:#e6f7f0;color:var(--dsh-diagnostic-ok)}.dsh-mobile-control__diagnostic-summary.is-ok .dsh-mobile-control__diagnostic-summary-icon::before{top:10px;left:10px;width:13px;height:7px;border-bottom:2px solid currentColor;border-left:2px solid currentColor;transform:rotate(-45deg)}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon{background:#fff4dc;color:var(--dsh-diagnostic-warning)}.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon{background:#fdecec;color:var(--dsh-diagnostic-error)}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon::before{top:8px;left:17px;width:2px;height:13px;border-radius:2px;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-attention .dsh-mobile-control__diagnostic-summary-icon::after,.dsh-mobile-control__diagnostic-summary.is-error .dsh-mobile-control__diagnostic-summary-icon::after{bottom:8px;left:17px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon{background:#e8f0ff;color:#2563eb}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon::before{inset:9px;border:2px solid rgb(37 99 235 / 24%);border-top-color:currentColor;border-radius:50%;animation:dsh-diagnostic-spin .8s linear infinite}
+.dsh-mobile-control__diagnostic-summary.is-idle .dsh-mobile-control__diagnostic-summary-icon::before{top:8px;left:17px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-summary.is-idle .dsh-mobile-control__diagnostic-summary-icon::after{top:13px;left:17px;width:2px;height:11px;border-radius:2px;background:currentColor}
+.dsh-mobile-control__diagnostic-toolbar{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.dsh-mobile-control__diagnostic-toolbar.has-report{grid-template-columns:1fr 1fr}.dsh-mobile-control__diagnostic-run,.dsh-mobile-control__diagnostic-copy{box-sizing:border-box;width:100%;min-height:44px;padding:9px 10px;border-radius:11px;font:650 12px/1.3 system-ui;cursor:pointer;touch-action:manipulation}.dsh-mobile-control__diagnostic-copy[hidden]{display:none}.dsh-mobile-control__diagnostic-run:disabled{cursor:wait;opacity:.58}.dsh-mobile-control__diagnostic-feedback{margin:8px 0 0;padding:8px 10px;border-radius:9px;background:#eff6ff;color:#1d4ed8;font-size:11px;line-height:1.45}.dsh-mobile-control__diagnostic-feedback[hidden]{display:none}
+.dsh-mobile-control__diagnostic-checks{display:grid;gap:12px;margin-top:12px;animation:dsh-diagnostic-reveal 160ms ease-out both}.dsh-mobile-control__diagnostic-checks[hidden]{display:none}.dsh-mobile-control__diagnostic-group{overflow:hidden;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:13px;background:var(--dsw-alias-bg-layer-2,#fff)}.dsh-mobile-control__diagnostic-group-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 11px;border-bottom:1px solid var(--dsw-alias-border-subtle,#e1e5eb);background:var(--dsw-alias-bg-layer-1,#f8fafc)}.dsh-mobile-control__diagnostic-group-header h3{margin:0;font:650 11px/1.4 system-ui}.dsh-mobile-control__diagnostic-group-header span{color:var(--dsw-alias-label-secondary,#606873);font-size:10px}.dsh-mobile-control__diagnostic-list{display:flex;flex-direction:column}.dsh-mobile-control__diagnostic-check{display:grid;grid-template-columns:26px minmax(0,1fr);gap:9px;padding:11px;background:var(--dsw-alias-bg-layer-2,#fff)}.dsh-mobile-control__diagnostic-check + .dsh-mobile-control__diagnostic-check{border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}.dsh-mobile-control__diagnostic-marker{position:relative;width:26px;height:26px;border-radius:50%;background:#edf1f5;color:var(--dsh-diagnostic-info)}.dsh-mobile-control__diagnostic-marker::before,.dsh-mobile-control__diagnostic-marker::after{position:absolute;content:""}.dsh-mobile-control__diagnostic-check.is-ok .dsh-mobile-control__diagnostic-marker{background:#e6f7f0;color:var(--dsh-diagnostic-ok)}.dsh-mobile-control__diagnostic-check.is-ok .dsh-mobile-control__diagnostic-marker::before{top:7px;left:7px;width:9px;height:5px;border-bottom:1.8px solid currentColor;border-left:1.8px solid currentColor;transform:rotate(-45deg)}.dsh-mobile-control__diagnostic-check.is-warning .dsh-mobile-control__diagnostic-marker{background:#fff4dc;color:var(--dsh-diagnostic-warning)}.dsh-mobile-control__diagnostic-check.is-error .dsh-mobile-control__diagnostic-marker{background:#fdecec;color:var(--dsh-diagnostic-error)}.dsh-mobile-control__diagnostic-check.is-warning .dsh-mobile-control__diagnostic-marker::before,.dsh-mobile-control__diagnostic-check.is-error .dsh-mobile-control__diagnostic-marker::before{top:6px;left:12px;width:2px;height:9px;border-radius:2px;background:currentColor}.dsh-mobile-control__diagnostic-check.is-warning .dsh-mobile-control__diagnostic-marker::after,.dsh-mobile-control__diagnostic-check.is-error .dsh-mobile-control__diagnostic-marker::after{bottom:6px;left:12px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-check.is-info .dsh-mobile-control__diagnostic-marker::before{top:6px;left:12px;width:2px;height:2px;border-radius:50%;background:currentColor}.dsh-mobile-control__diagnostic-check.is-info .dsh-mobile-control__diagnostic-marker::after{top:10px;left:12px;width:2px;height:9px;border-radius:2px;background:currentColor}.dsh-mobile-control__diagnostic-check-body{min-width:0}.dsh-mobile-control__diagnostic-check-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.dsh-mobile-control__diagnostic-check-header strong{min-width:0;font-size:12px;line-height:1.4}.dsh-mobile-control__diagnostic-badge{flex:none;padding:2px 6px;border-radius:999px;background:#edf1f5;color:var(--dsh-diagnostic-info);font:650 10px/1.3 system-ui}.dsh-mobile-control__diagnostic-check.is-ok .dsh-mobile-control__diagnostic-badge{background:#e6f7f0;color:var(--dsh-diagnostic-ok)}.dsh-mobile-control__diagnostic-check.is-warning .dsh-mobile-control__diagnostic-badge{background:#fff4dc;color:var(--dsh-diagnostic-warning)}.dsh-mobile-control__diagnostic-check.is-error .dsh-mobile-control__diagnostic-badge{background:#fdecec;color:var(--dsh-diagnostic-error)}.dsh-mobile-control__diagnostic-check p{margin:4px 0 0;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;line-height:1.5;overflow-wrap:anywhere}.dsh-mobile-control__diagnostic-check .dsh-mobile-control__diagnostic-action{margin-top:7px;padding:7px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-1,#f8fafc);color:var(--dsw-alias-label-primary,#16181d)}.dsh-mobile-control__diagnostic-action span{display:inline-block;margin-right:6px;color:#2563eb;font-weight:700}.dsh-mobile-control__diagnostic-details{margin-top:12px}.dsh-mobile-control__diagnostic-details[hidden]{display:none}.dsh-mobile-control__diagnostic-details>summary{box-sizing:border-box;min-height:44px;line-height:44px}.dsh-mobile-control__diagnostic-report{box-sizing:border-box;max-height:220px;margin:4px 0 0;overflow:auto;padding:10px;border:1px solid var(--dsw-alias-border-subtle,#dbe1e8);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#f3f5f8);color:var(--dsw-alias-label-secondary,#606873);font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.dsh-mobile-control__diagnostic-checks{transition:opacity 150ms ease}.dsh-mobile-control__diagnostic-checks.is-refreshing{opacity:.52}
+@keyframes dsh-diagnostic-spin{to{transform:rotate(360deg)}}@keyframes dsh-diagnostic-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 .dsh-mobile-control__actions{display:flex;flex-wrap:nowrap;gap:6px}.dsh-mobile-control__actions button{flex:1 1 0;min-width:0;min-height:40px;padding:8px 4px;border-radius:10px;font:12px/1.2 system-ui;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsh-mobile-control__secondary{border:1px solid var(--dsw-alias-border-normal,#cfd5dd);background:transparent;color:inherit}.dsh-mobile-control__primary{border:1px solid #2563eb;background:#2563eb;color:#fff}.dsh-mobile-control__actions button:disabled{cursor:not-allowed;opacity:.45}
 .dsh-mobile-control button:focus-visible,.dsh-mobile-control a:focus-visible,.dsh-mobile-control input:focus-visible,.dsh-mobile-control summary:focus-visible{outline:3px solid rgb(37 99 235 / 28%);outline-offset:2px}
 .dsh-mobile-control__trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px;padding:6px 2px 6px 10px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,#16181d);font:14px/22px system-ui;cursor:pointer}.dsh-mobile-control__trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f1f3f6)}.dsh-mobile-control__trigger.is-rail{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%}.dsh-mobile-control__trigger-icon{position:relative;box-sizing:border-box;flex:none;width:14px;height:19px;border:1.7px solid currentColor;border-radius:3px}.dsh-mobile-control__trigger-icon::after{position:absolute;right:4px;bottom:2px;width:4px;height:1.5px;border-radius:2px;background:currentColor;content:""}.dsh-mobile-control__trigger-label{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .dsh-mobile-control__manage-row{display:flex;justify-content:space-between;gap:8px;margin-top:10px}.dsh-mobile-control__manage{flex:1 1 0;min-width:0;min-height:34px;padding:6px 8px;border:1px solid var(--dsw-alias-border-normal,#cfd5dd);border-radius:10px;background:transparent;color:inherit;font:12px/1.3 system-ui;cursor:pointer}.dsh-mobile-control__devices{margin-top:10px;border:1px solid var(--dsw-alias-border-subtle,#e1e5eb);border-radius:10px;padding:8px;max-height:220px;overflow-y:auto}.dsh-mobile-control__device-empty{color:var(--dsw-alias-label-secondary,#606873);font-size:12px;margin:0}.dsh-mobile-control__device{display:flex;align-items:center;gap:8px;padding:6px 2px}.dsh-mobile-control__device + .dsh-mobile-control__device{border-top:1px solid var(--dsw-alias-border-subtle,#e1e5eb)}.dsh-mobile-control__device-label{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.dsh-mobile-control__device-meta{flex:none;color:var(--dsw-alias-label-secondary,#606873);font-size:11px;white-space:nowrap}.dsh-mobile-control__device-revoke{flex:none;min-height:28px;padding:4px 8px;border:1px solid #dc2626;border-radius:8px;background:transparent;color:#dc2626;font:12px/1.2 system-ui;cursor:pointer}
-@media (prefers-reduced-motion:reduce){.dsh-mobile-control__provider,.dsh-mobile-control__cpolar-connect{transition:none}}
+@media (prefers-reduced-motion:reduce){.dsh-mobile-control__provider,.dsh-mobile-control__cpolar-connect{transition:none}.dsh-mobile-control__diagnostic-summary.is-running .dsh-mobile-control__diagnostic-summary-icon::before,.dsh-mobile-control__diagnostic-checks{animation:none}}
 `
 
 /** Mount the desktop control or mobile feature enhancements. */
@@ -901,7 +1175,7 @@ export function apply(ctx: ClientContext): void {
       return () => { removeCustom(); removeSurface(); style.remove() }
     }
     const control = installControl()
-    const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
+    const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register<{ wide: boolean }>({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
       'aria-expanded': false,
       'aria-label': '移动访问',
       className: `dsh-mobile-control__trigger${wide ? '' : ' is-rail'}`,

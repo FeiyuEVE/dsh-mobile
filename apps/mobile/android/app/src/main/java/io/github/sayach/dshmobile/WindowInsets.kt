@@ -48,6 +48,25 @@ internal fun applySafeAreaInsets(root: View) {
     root.requestApplyInsets()
 }
 
+/** Returns the native top safe area reserved above the WebView. */
+@Suppress("DEPRECATION")
+internal fun resolveTopSafeInset(insets: WindowInsets): Int {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        return topSafeInset(
+            insets.getInsets(WindowInsets.Type.statusBars()).top,
+            insets.getInsets(WindowInsets.Type.displayCutout()).top,
+        )
+    }
+    return topSafeInset(
+        insets.systemWindowInsetTop,
+        insets.displayCutout?.safeInsetTop ?: 0,
+    )
+}
+
+/** Removes the already-reserved top safe area before dispatching insets to the WebView. */
+internal fun insetsBelowTopSafeArea(insets: WindowInsets, top: Int): WindowInsets =
+    if (top > 0) insets.inset(0, top, 0, 0) else insets
+
 @Suppress("DEPRECATION")
 private fun resolveSafeArea(insets: WindowInsets): SafeAreaEdges {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

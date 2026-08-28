@@ -6,6 +6,7 @@ import type { MobileAccessControlStore } from './control.js'
 import type { MobileAccessGateway } from './gateway.js'
 
 const MAX_PROTOCOL_LINE_BYTES = 16 * 1024
+const FUNNEL_START_TIMEOUT_MS = 45_000
 
 /** Product-facing states for the independent Tailscale Funnel transport. */
 export type FunnelState = 'off' | 'unavailable' | 'starting' | 'needs-login' | 'connecting' | 'ready' | 'error'
@@ -120,6 +121,7 @@ export class FunnelController {
   private buffer = ''
   private latest: FunnelStatus = publicStatus({ enabled: false, state: 'off' })
   private queue: Promise<void> = Promise.resolve()
+  private startTimer: NodeJS.Timeout | undefined
 
   constructor(private readonly options: FunnelControllerOptions) {
     if (!isAbsolute(options.executable) || !isAbsolute(options.stateDirectory)) {
@@ -228,6 +230,11 @@ export class FunnelController {
       windowsHide: true,
     })
     this.child = child
+    this.clearStartTimer()
+    this.startTimer = setTimeout(() => {
+      void this.enqueue(() => this.failGeneration(generation, 'funnel_start_timeout'))
+    }, FUNNEL_START_TIMEOUT_MS)
+    this.startTimer.unref()
     child.stderr.resume()
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', chunk => { this.consume(generation, String(chunk)) })
@@ -266,6 +273,7 @@ export class FunnelController {
 
   private async handleEvent(generation: number, event: FunnelEvent): Promise<void> {
     if (generation !== this.generation || !this.enabled) return
+    this.clearStartTimer()
     if (event.type === 'login') {
       this.publish({ enabled: true, state: 'needs-login', loginUrl: event.url! })
       return
@@ -322,6 +330,7 @@ export class FunnelController {
   }
 
   private async stopProcessAndGateway(): Promise<void> {
+    this.clearStartTimer()
     const child = this.child
     this.child = undefined
     child?.stdin.end()
@@ -346,6 +355,12 @@ export class FunnelController {
     const gateway = this.gatewayValue
     this.gatewayValue = undefined
     await gateway?.close()
+  }
+
+  private clearStartTimer(): void {
+    if (this.startTimer === undefined) return
+    clearTimeout(this.startTimer)
+    this.startTimer = undefined
   }
 }
 

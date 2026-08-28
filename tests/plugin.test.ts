@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Config, parseGatewayConfig } from '../src/config.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
 import { apply, inject, remoteGatewayConfig } from '../src/plugin.js'
+import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from '../src/version.js'
 
 const contexts: Context[] = []
 const temporaryDirectories: string[] = []
@@ -169,6 +170,15 @@ describe('stock DSH lifecycle', () => {
           component: { installed: false, configured: false },
         },
       },
+    })
+    const diagnostics = await invoke(mounted.route, 'GET', '/api/mobile-access/diagnostics')
+    expect(diagnostics.status).toBe(200)
+    expect(JSON.parse(diagnostics.body)).toMatchObject({
+      version: 1,
+      overall: expect.stringMatching(/^(?:ok|attention|error)$/),
+      versions: { plugin: DSH_MOBILE_VERSION, minimumAndroidApp: MINIMUM_ANDROID_APP_VERSION },
+      checks: expect.any(Array),
+      report: expect.stringContaining('DSH Mobile 诊断报告'),
     })
   })
 

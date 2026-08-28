@@ -6,6 +6,12 @@ import org.junit.Test
 /** Verifies safe-area union and repeat-dispatch behavior without an Android device. */
 class SafeAreaPaddingTest {
     @Test
+    fun reservesTheLargerStatusBarOrCutoutTopEdge() {
+        assertEquals(96, topSafeInset(statusBarTop = 72, displayCutoutTop = 96))
+        assertEquals(72, topSafeInset(statusBarTop = 72, displayCutoutTop = 0))
+    }
+
+    @Test
     fun unionsSystemBarsCutoutAndImePerEdge() {
         val systemBars = SafeAreaEdges(left = 0, top = 72, right = 24, bottom = 48)
         val displayCutout = SafeAreaEdges(left = 36, top = 96, right = 0, bottom = 0)

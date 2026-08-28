@@ -24,6 +24,9 @@ describe('dedicated mobile layout boot', () => {
     ]))
 
     expect(output).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
+    expect(output).toContain('window.fetch=(input,init)=>')
+    expect(output).toContain('x-dsh-mobile-csrf')
+    expect(output.indexOf('window.fetch=(input,init)=>')).toBeLessThan(output.indexOf('window.__DSH_BOOT__'))
     expect(output).toContain('"url":"/mobile-access/mobile-layout.js"')
     expect(output).toContain('"inject":["@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-theme"]')
     expect(output).toContain('"url":"/conversation.js"')

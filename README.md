@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/v/dsh-mobile?label=npm&color=CB3837" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-mobile"><img src="https://img.shields.io/npm/dm/dsh-mobile?label=downloads&color=2563EB" alt="npm 月下载量"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml"><img src="https://github.com/saya-ch/dsh-mobile/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/saya-ch/dsh-mobile/releases"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white" alt="Android 10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-0F172A" alt="Apache-2.0"></a>
@@ -23,13 +24,15 @@
   <a href="README.en.md">English</a>
 </p>
 
-> DSH Mobile 0.2.2 是 DeepSeek Harness 社区插件，适配 DeepSeek Harness 0.1.1 系列（已验证 0.1.1-rc.2）；原生 App 仅支持 Android。
+> DSH Mobile 0.3.0 是 DeepSeek Harness 社区插件，适配 DeepSeek Harness 0.1.1 系列（已验证 0.1.1-rc.2）；原生 App 仅支持 Android。
 >
-> **0.2.2 更新**：扫码后自动识别局域网或远程连接，并细化二维码、网络、防火墙、证书与配对错误提示，便于快速排查连接问题。
+> **0.3.0 更新**：新增一键连接诊断、版本提示与更快的连接恢复；脱敏报告可直接用于排查网络、防火墙与服务状态。
 >
-> 从 0.1.3 或更早 App 升级时需卸载旧版并重新配对一次；旧版 App 仍可使用 0.2.2 的局域网功能。
+> 从 0.1.3 或更早 App 升级时仍需卸载旧版并重新配对一次；0.2.2 App 可继续连接 0.3.0 插件。
+>
+> 项目仍在快速迭代，建议同步更新 Android App 与电脑端插件，以获得完整兼容性和最新修复。
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.2.2/dsh-mobile-android-v0.2.2.apk"><strong>下载 Android App 0.2.2</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.2.2">版本说明与校验文件</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.0/dsh-mobile-android-v0.3.0.apk"><strong>下载 Android App 0.3.0</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.0">版本说明与校验文件</a></p>
 
 DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App 通过局域网，或可选的 Tailscale Funnel、cpolar 远程通道连接电脑，继续使用同一份会话、工作区、消息和工具。局域网与远程访问分别启停、分别管理设备，且都不修改 DeepSeek Harness 源码。
 
@@ -43,6 +46,8 @@ DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App
 - **用对话定制手机端**：直接在 DSH 对话里改手机页面的布局、交互和功能，几秒内刷新。
 - **专属触屏布局**：会话抽屉、工具详情、设置、提问卡片和输入栏都按手机重新组织。
 - **自动发现、无需重新配对**：切换 Wi-Fi、热点或 IP 后通常自动恢复。
+- **一键连接诊断**：检查版本、网关、网卡、防火墙和远程通道，并生成不含凭据与完整地址的脱敏报告。
+- **更快恢复连接**：远程重开会并行恢复可信连接并复用版本化资源。
 - **三种配对方式**：扫码、配对链接、密钥。
 
 配对设备被视为完全信任，可以操作电脑上的 DSH；建议只在可信的家庭、办公局域网或可信 VPN 中使用。
@@ -186,6 +191,7 @@ flowchart LR
 
 | DSH Mobile | 已验证的 DeepSeek Harness                              |
 | ------------ | -------------------------------------------------------- |
+| `0.3.0`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 | `0.2.2`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 | `0.2.1`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |
 | `0.2.0`    | `0.1.0-rc.5`、`0.1.0-rc.6`、`0.1.0-rc.7`、`0.1.1-rc.2` |

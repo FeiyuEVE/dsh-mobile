@@ -46,6 +46,75 @@ class ConnectionRestorePolicyTest {
         assertTrue(targets.isEmpty())
     }
 
+    @Test
+    fun retriesOnlyFailuresThatCanRecoverWithoutUserInput() {
+        val transientKinds = listOf(
+            NativeAuthFailureKind.TIMEOUT,
+            NativeAuthFailureKind.NETWORK,
+            NativeAuthFailureKind.SERVER_UNAVAILABLE,
+        )
+
+        transientKinds.forEach { kind ->
+            assertEquals(
+                RestoreFailureDisposition.RETRY_TRANSIENT,
+                ConnectionRestorePolicy.failureDisposition(NativeAuthFailure(kind), instanceMismatch = false),
+            )
+        }
+    }
+
+    @Test
+    fun stopsAutomaticRecoveryForPermanentFailuresAndIdentityChanges() {
+        val permanentKinds = NativeAuthFailureKind.entries - setOf(
+            NativeAuthFailureKind.TIMEOUT,
+            NativeAuthFailureKind.NETWORK,
+            NativeAuthFailureKind.SERVER_UNAVAILABLE,
+        )
+
+        permanentKinds.forEach { kind ->
+            assertEquals(
+                RestoreFailureDisposition.REQUIRE_USER_ACTION,
+                ConnectionRestorePolicy.failureDisposition(NativeAuthFailure(kind), instanceMismatch = false),
+            )
+        }
+        assertEquals(
+            RestoreFailureDisposition.REQUIRE_USER_ACTION,
+            ConnectionRestorePolicy.failureDisposition(null, instanceMismatch = false),
+        )
+        assertEquals(
+            RestoreFailureDisposition.REQUIRE_USER_ACTION,
+            ConnectionRestorePolicy.failureDisposition(
+                NativeAuthFailure(NativeAuthFailureKind.NETWORK),
+                instanceMismatch = true,
+            ),
+        )
+    }
+
+    @Test
+    fun reusesRemoteDeviceTrustWhenAProviderChangesItsPublicAddress() {
+        assertTrue(ConnectionRestorePolicy.shouldRenewBeforePairing(
+            AccessMode.REMOTE,
+            remoteCredential,
+            remoteCredential.instanceId,
+            now,
+        ))
+        assertEquals(
+            false,
+            ConnectionRestorePolicy.shouldRenewBeforePairing(
+                AccessMode.LAN,
+                remoteCredential,
+                remoteCredential.instanceId,
+                now,
+            ),
+        )
+        assertTrue(ConnectionRestorePolicy.mayPairAfterRenewFailure(
+            NativeAuthFailure(NativeAuthFailureKind.PAIRING_EXPIRED),
+        ))
+        assertEquals(
+            false,
+            ConnectionRestorePolicy.mayPairAfterRenewFailure(NativeAuthFailure(NativeAuthFailureKind.TIMEOUT)),
+        )
+    }
+
     private fun targets(preferredMode: AccessMode?): List<ConnectionRestoreTarget> =
         ConnectionRestorePolicy.targets(
             preferredMode = preferredMode,

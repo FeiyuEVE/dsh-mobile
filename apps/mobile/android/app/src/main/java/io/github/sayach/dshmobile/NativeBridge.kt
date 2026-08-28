@@ -7,11 +7,10 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
-import android.view.Gravity
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import android.widget.Toast
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -25,7 +24,7 @@ import java.util.concurrent.Executors
  * the bridge is injected only into the trusted HTTPS gateway origin that the
  * WebView loads, and the page-side adapter exposes a Promise-style API.
  */
-class NativeBridge(
+internal class NativeBridge(
     private val activity: Activity,
     private val webView: WebView,
     private val origin: String,
@@ -40,6 +39,9 @@ class NativeBridge(
 
     /** Directional page-scroll observer set by the shell; reports "up" or "down". */
     var onScrollDirection: ((direction: String) -> Unit)? = null
+
+    /** Opaque DSH base background reported after theme resolution. */
+    var onPageBackgroundColor: ((color: Int) -> Unit)? = null
 
     /** Inject the Java object and install the page-side Promise adapter. */
     @SuppressLint("AddJavascriptInterface")
@@ -60,6 +62,7 @@ class NativeBridge(
     fun dispose() {
         installed = false
         activityRequestId = null
+        onPageBackgroundColor = null
         pending.clear()
         ioExecutor.shutdownNow()
     }
@@ -126,13 +129,6 @@ class NativeBridge(
                     manager.setPrimaryClip(ClipData.newPlainText("DSH Mobile", input.optString("text", "")))
                     successJson(requestId, JSONObject().put("ok", true))
                 }
-                "notification.show" -> {
-                    Toast.makeText(activity, input.optString("message", ""), Toast.LENGTH_SHORT).apply {
-                        setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, 80)
-                        show()
-                    }
-                    successJson(requestId, JSONObject().put("ok", true))
-                }
                 else -> errorJson("unsupported", "native capability is unavailable", requestId)
             }
         } catch (_: Exception) {
@@ -142,7 +138,7 @@ class NativeBridge(
 
     @JavascriptInterface
     fun capabilities(): String {
-        return """["files.pick","camera.capture","share","clipboard.read","clipboard.write","notification.show"]"""
+        return """["files.pick","camera.capture","share","clipboard.read","clipboard.write"]"""
     }
 
     /** Scroll direction reported by the injected page adapter, on the UI thread. */
@@ -151,6 +147,15 @@ class NativeBridge(
         if (!installed || webView.url?.startsWith(origin) != true) return
         if (direction != "up" && direction != "down") return
         activity.runOnUiThread { onScrollDirection?.invoke(direction) }
+    }
+
+    /** Synchronize the native status-bar strip with the authenticated page theme. */
+    @JavascriptInterface
+    fun updatePageBackground(red: Int, green: Int, blue: Int) {
+        if (!installed || webView.url?.startsWith(origin) != true) return
+        if (red !in 0..255 || green !in 0..255 || blue !in 0..255) return
+        val color = Color.rgb(red, green, blue)
+        activity.runOnUiThread { onPageBackgroundColor?.invoke(color) }
     }
 
     private fun startPending(requestId: String, action: String, launch: () -> Unit): String {
@@ -242,6 +247,66 @@ class NativeBridge(
               if (raw) handleReply(raw);
             })
           };
+
+          const previousChromeSync = window.__DSH_MOBILE_CHROME_SYNC__;
+          if (previousChromeSync && typeof previousChromeSync.dispose === 'function') previousChromeSync.dispose();
+          let chromeFrame = 0;
+          let lastChromeColor = '';
+          const parseChromeColor = value => {
+            if (!value || !document.documentElement) return null;
+            const probe = document.createElement('span');
+            probe.style.position = 'fixed';
+            probe.style.visibility = 'hidden';
+            probe.style.pointerEvents = 'none';
+            probe.style.color = value.trim();
+            document.documentElement.appendChild(probe);
+            const resolved = getComputedStyle(probe).color;
+            probe.remove();
+            const match = resolved.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)(?:\D+(\d+(?:\.\d+)?))?\s*\)$/i);
+            if (!match || (match[4] !== undefined && Number(match[4]) === 0)) return null;
+            return [Number(match[1]), Number(match[2]), Number(match[3])].map(channel => Math.max(0, Math.min(255, Math.round(channel))));
+          };
+          const resolveChromeColor = () => {
+            const rootStyle = getComputedStyle(document.documentElement);
+            const candidates = [
+              rootStyle.getPropertyValue('--dsw-alias-bg-base'),
+              document.body ? getComputedStyle(document.body).backgroundColor : '',
+              rootStyle.backgroundColor,
+              'rgb(255, 255, 255)'
+            ];
+            for (const candidate of candidates) {
+              const color = parseChromeColor(candidate);
+              if (color) return color;
+            }
+            return [255, 255, 255];
+          };
+          const syncChromeColor = () => {
+            chromeFrame = 0;
+            const color = resolveChromeColor();
+            const key = color.join(',');
+            if (key === lastChromeColor) return;
+            lastChromeColor = key;
+            try { bridge.updatePageBackground(color[0], color[1], color[2]); } catch (_) {}
+          };
+          const scheduleChromeSync = () => {
+            if (chromeFrame) return;
+            chromeFrame = requestAnimationFrame(syncChromeColor);
+          };
+          const chromeObserver = new MutationObserver(scheduleChromeSync);
+          chromeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+          if (document.body) chromeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+          const colorScheme = matchMedia('(prefers-color-scheme: dark)');
+          if (typeof colorScheme.addEventListener === 'function') colorScheme.addEventListener('change', scheduleChromeSync);
+          else if (typeof colorScheme.addListener === 'function') colorScheme.addListener(scheduleChromeSync);
+          window.__DSH_MOBILE_CHROME_SYNC__ = {
+            dispose: () => {
+              chromeObserver.disconnect();
+              if (chromeFrame) cancelAnimationFrame(chromeFrame);
+              if (typeof colorScheme.removeEventListener === 'function') colorScheme.removeEventListener('change', scheduleChromeSync);
+              else if (typeof colorScheme.removeListener === 'function') colorScheme.removeListener(scheduleChromeSync);
+            }
+          };
+          scheduleChromeSync();
 
           // Throttled directional scroll feed so the shell can hide its toolbar.
           // capture:true also observes scrolling inside nested containers; when the

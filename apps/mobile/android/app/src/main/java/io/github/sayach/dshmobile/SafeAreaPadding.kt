@@ -23,6 +23,10 @@ internal data class SafeAreaEdges(
     )
 }
 
+/** Returns the top edge occupied by either the status bar or a display cutout. */
+internal fun topSafeInset(statusBarTop: Int, displayCutoutTop: Int): Int =
+    max(statusBarTop, displayCutoutTop)
+
 /** Immutable content padding captured before system insets are installed. */
 internal data class ContentPadding(
     val left: Int,

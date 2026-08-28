@@ -15,13 +15,14 @@ import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.TextUtils
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
@@ -48,6 +49,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 /** Native Android shell for one authenticated DSH HTTPS origin. */
@@ -64,7 +66,10 @@ class MainActivity : Activity() {
     private val lanCredentialStore by lazy { DeviceCredentialStore(this, "lan") }
     private val remoteCredentialStore by lazy { DeviceCredentialStore(this, "remote") }
     private val ioExecutor = Executors.newSingleThreadExecutor()
+    private val restoreExecutor = Executors.newFixedThreadPool(3)
+    private val recoveryHandler = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
+    private var secureWebViewClient: SecureWebViewClient? = null
     private var nativeBridge: NativeBridge? = null
     private var gatewayOrigin: GatewayOrigin? = null
     private var accessMode = AccessMode.LAN
@@ -74,8 +79,15 @@ class MainActivity : Activity() {
     private var failureDialog: AlertDialog? = null
     private var retryUrl: String? = null
     private var pendingScan: (() -> Unit)? = null
+    private var nearbyPermissionLimited = false
     private var showingSetup = false
-    private var restoringTrustedSession = false
+    @Volatile
+    private var restoreGeneration = 0
+    @Volatile
+    private var pairingGeneration = 0
+    private var connectionCenterStatus: TextView? = null
+    private var recoveryAttempt = 0
+    private var recoveryScheduled = false
     private val warnedTailscaleOrigins = mutableSetOf<String>()
     // The floating toolbar starts hidden so the page's own header stays clear;
     // scrolling back up brings it in, scrolling down slides it away.
@@ -84,6 +96,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureEdgeToEdgeWindow(window)
+        applyStatusBarIconContrast(window, getColor(R.color.app_background))
+        nearbyPermissionLimited = preferences.getBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
@@ -134,12 +148,16 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        cancelAutomaticRecovery()
+        invalidateRestoreAttempts()
+        invalidatePairingAttempts()
         failureDialog?.dismiss()
         uploadCallback?.onReceiveValue(null)
         uploadCallback = null
         retryUrl = null
         destroyWebView()
         ioExecutor.shutdownNow()
+        restoreExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -154,12 +172,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun credentialStore(): DeviceCredentialStore = when (accessMode) {
+    private fun credentialStore(mode: AccessMode = accessMode): DeviceCredentialStore = when (mode) {
         AccessMode.LAN -> lanCredentialStore
         AccessMode.REMOTE -> remoteCredentialStore
     }
 
-    private fun originPreference(): String = when (accessMode) {
+    private fun originPreference(mode: AccessMode = accessMode): String = when (mode) {
         AccessMode.LAN -> PREFERENCE_LAN_ORIGIN
         AccessMode.REMOTE -> PREFERENCE_REMOTE_ORIGIN
     }
@@ -177,49 +195,84 @@ class MainActivity : Activity() {
             showConnectionCenter()
             return
         }
-        showRestoringTrust()
-        restoreColdStartTarget(targets, 0)
-    }
-
-    private fun restoreColdStartTarget(targets: List<ConnectionRestoreTarget>, index: Int) {
-        val target = targets.getOrNull(index)
-        if (target == null) {
-            showConnectionCenter()
-            return
+        showConnectionCenter()
+        connectionCenterStatus?.apply {
+            setText(R.string.background_restore_running)
+            visibility = View.VISIBLE
         }
-        accessMode = target.mode
-        restoreTrustedDevice(target.origin, target.credential) {
-            restoreColdStartTarget(targets, index + 1)
+        val generation = beginRestoreAttempt()
+        val claimed = AtomicBoolean(false)
+        val remaining = AtomicInteger(targets.size)
+        targets.forEach { target ->
+            restoreTrustedDevice(
+                preferredOrigin = target.origin,
+                credential = target.credential,
+                mode = target.mode,
+                generation = generation,
+                claimSuccess = { claimed.compareAndSet(false, true) },
+            ) {
+                if (remaining.decrementAndGet() == 0 && !claimed.get() && generation == restoreGeneration) {
+                    connectionCenterStatus?.apply {
+                        setText(R.string.background_restore_failed)
+                        visibility = View.VISIBLE
+                    }
+                }
+            }
         }
     }
 
     private fun showConnectionCenter() {
+        invalidateRestoreAttempts()
+        invalidatePairingAttempts()
         showingSetup = true
         setupBackAction = null
         gatewayOrigin = null
         retryUrl = null
         destroyWebView()
+        cancelAutomaticRecovery()
         failureDialog?.dismiss()
 
         val card = createSetupCard(surface = false)
         card.addView(textView(R.string.connection_center_title, 30f, Typeface.BOLD))
         card.addView(spacer(8))
         card.addView(textView(R.string.connection_center_description, 16f, Typeface.NORMAL, R.color.app_secondary))
+        val restoreStatus = textView(
+            R.string.background_restore_running,
+            14f,
+            Typeface.NORMAL,
+            R.color.app_secondary,
+        ).apply {
+            visibility = View.GONE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            setPadding(0, dp(12), 0, 0)
+        }
+        connectionCenterStatus = restoreStatus
+        card.addView(restoreStatus)
         card.addView(spacer(24))
         card.addView(accessChoice(
             R.string.lan_access_title,
             R.string.lan_access_description,
             lanCredentialStore.load()?.expiresAt?.let { it > System.currentTimeMillis() } == true,
-        ) { openAccessMode(AccessMode.LAN) })
+            action = { openAccessMode(AccessMode.LAN) },
+            configure = { openAccessMode(AccessMode.LAN, restoreSaved = false) },
+        ))
         card.addView(spacer(12))
         card.addView(accessChoice(
             R.string.remote_access_title,
             R.string.remote_access_description,
             remoteCredentialStore.load()?.expiresAt?.let { it > System.currentTimeMillis() } == true,
-        ) { openAccessMode(AccessMode.REMOTE) })
+            action = { openAccessMode(AccessMode.REMOTE) },
+            configure = { openAccessMode(AccessMode.REMOTE, restoreSaved = false) },
+        ))
     }
 
-    private fun accessChoice(titleResource: Int, descriptionResource: Int, trusted: Boolean, action: () -> Unit): View =
+    private fun accessChoice(
+        titleResource: Int,
+        descriptionResource: Int,
+        trusted: Boolean,
+        action: () -> Unit,
+        configure: () -> Unit,
+    ): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(18), dp(20), dp(18))
@@ -232,16 +285,32 @@ class MainActivity : Activity() {
             addView(textView(descriptionResource, 14f, Typeface.NORMAL, R.color.app_secondary))
             if (trusted) {
                 addView(spacer(10))
-                addView(textView(R.string.paired_device_ready, 13f, Typeface.BOLD, R.color.app_accent))
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(
+                        textView(R.string.paired_device_ready, 13f, Typeface.BOLD, R.color.app_accent),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+                    )
+                    addView(textView(R.string.reconfigure_connection, 13f, Typeface.BOLD, R.color.app_accent).apply {
+                        isClickable = true
+                        isFocusable = true
+                        setPadding(dp(12), dp(6), 0, dp(6))
+                        setOnClickListener { configure() }
+                    })
+                })
             }
             setOnClickListener { action() }
         }
 
-    private fun openAccessMode(mode: AccessMode) {
+    private fun openAccessMode(mode: AccessMode, restoreSaved: Boolean = true) {
+        cancelAutomaticRecovery()
+        invalidateRestoreAttempts()
+        connectionCenterStatus = null
         accessMode = mode
         val origin = GatewayOrigin.parse(preferences.getString(originPreference(), "").orEmpty())
         val credential = credentialStore().load()
-        if (origin != null && credential != null && credential.expiresAt > System.currentTimeMillis()) {
+        if (restoreSaved && origin != null && credential != null && credential.expiresAt > System.currentTimeMillis()) {
             showRestoringTrust()
             restoreTrustedDevice(origin, credential) {
                 if (mode == AccessMode.LAN) showSetup() else showRemoteSetup()
@@ -254,6 +323,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSetup() {
+        invalidatePairingAttempts()
         accessMode = AccessMode.LAN
         showingSetup = true
         setupBackAction = ::showConnectionCenter
@@ -319,6 +389,7 @@ class MainActivity : Activity() {
     }
 
     private fun showRemoteSetup() {
+        invalidatePairingAttempts()
         accessMode = AccessMode.REMOTE
         showingSetup = true
         setupBackAction = ::showConnectionCenter
@@ -399,6 +470,7 @@ class MainActivity : Activity() {
         showingSetup = false
         setupBackAction = null
         destroyWebView()
+        applyStatusBarIconContrast(window, getColor(R.color.app_background))
         val root = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.app_background))
         }
@@ -419,6 +491,7 @@ class MainActivity : Activity() {
     }
 
     private fun showPairing(harness: DiscoveredHarness, prefilledInput: String = "", autoConnect: Boolean = false) {
+        invalidatePairingAttempts()
         showingSetup = true
         setupBackAction = if (accessMode == AccessMode.LAN) ::showSetup else ::showRemoteSetup
         val card = createSetupCard()
@@ -474,6 +547,7 @@ class MainActivity : Activity() {
     }
 
     private fun createSetupCard(surface: Boolean = true): LinearLayout {
+        applyStatusBarIconContrast(window, getColor(R.color.app_background))
         val root = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.app_background))
         }
@@ -594,8 +668,22 @@ class MainActivity : Activity() {
         status.setTextColor(getColor(R.color.app_secondary))
         status.setText(R.string.pairing_in_progress)
         status.visibility = View.VISIBLE
+        val mode = accessMode
+        val store = credentialStore(mode)
+        val generation = beginPairingAttempt()
         ioExecutor.execute {
-            val trust: Pair<ByteArray?, String?>? = if (accessMode == AccessMode.REMOTE) {
+            if (generation != pairingGeneration) return@execute
+            val compatibility = runCatching { NativeAuthClient.fetchMetadata(origin) }
+                .getOrNull()
+                ?.let { VersionCompatibility.evaluate(BuildConfig.VERSION_NAME, it) }
+            if (compatibility != null) {
+                runOnUiThread {
+                    if (generation == pairingGeneration) showCompatibilityIssue(compatibility, status, button)
+                }
+                return@execute
+            }
+            if (generation != pairingGeneration) return@execute
+            val trust: Pair<ByteArray?, String?>? = if (mode == AccessMode.REMOTE) {
                 null to key.instanceId
             } else {
                 val rawCa = runCatching { NativeAuthClient.fetchPairingCa(origin) }.getOrNull()
@@ -603,6 +691,7 @@ class MainActivity : Activity() {
             }
             if (trust == null) {
                 runOnUiThread {
+                    if (generation != pairingGeneration) return@runOnUiThread
                     status.setTextColor(getColor(R.color.app_error))
                     status.setText(R.string.pairing_tls_failed)
                     button.isEnabled = true
@@ -610,8 +699,52 @@ class MainActivity : Activity() {
                 return@execute
             }
             val (certificate, expectedInstanceId) = trust
+            val existingCredential = store.load().takeIf {
+                ConnectionRestorePolicy.shouldRenewBeforePairing(
+                    mode = mode,
+                    credential = it,
+                    instanceId = key.instanceId,
+                    now = System.currentTimeMillis(),
+                )
+            }
+            if (existingCredential != null) {
+                val renewal = runCatching {
+                    NativeAuthClient.renew(origin, existingCredential.deviceToken, existingCredential.caCertificate)
+                }
+                val renewed = renewal.getOrNull()
+                if (renewed != null) {
+                    runOnUiThread {
+                        if (generation != pairingGeneration) return@runOnUiThread
+                        if (renewed.instanceId != existingCredential.instanceId) {
+                            status.setTextColor(getColor(R.color.app_error))
+                            status.setText(R.string.pairing_failed)
+                            button.isEnabled = true
+                        } else {
+                            installNativeSession(
+                                origin = origin,
+                                session = renewed,
+                                isCurrent = { generation == pairingGeneration && accessMode == mode },
+                            ) { showBrowser(origin, existingCredential.caCertificate) }
+                        }
+                    }
+                    return@execute
+                }
+                val renewalFailure = renewal.exceptionOrNull() ?: NativeAuthFailure(NativeAuthFailureKind.INVALID_RESPONSE)
+                if (!ConnectionRestorePolicy.mayPairAfterRenewFailure(renewalFailure)) {
+                    runOnUiThread {
+                        if (generation != pairingGeneration) return@runOnUiThread
+                        status.setTextColor(getColor(R.color.app_error))
+                        status.setText(pairingFailureMessage(renewalFailure, origin))
+                        button.isEnabled = true
+                    }
+                    return@execute
+                }
+                store.clear()
+            }
+            if (generation != pairingGeneration) return@execute
             runCatching { NativeAuthClient.pair(origin, key.token, certificate) }
                 .onSuccess { session -> runOnUiThread {
+                    if (generation != pairingGeneration) return@runOnUiThread
                     val deviceToken = session.deviceToken
                     val expiresAt = session.deviceExpiresAt
                     if (deviceToken == null || expiresAt == null
@@ -620,23 +753,65 @@ class MainActivity : Activity() {
                         status.setText(R.string.pairing_failed)
                         button.isEnabled = true
                     } else {
-                        credentialStore().save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
-                        installNativeSession(origin, session) { showBrowser(origin, certificate) }
+                        store.save(DeviceCredential(session.instanceId, deviceToken, expiresAt, certificate))
+                        installNativeSession(
+                            origin = origin,
+                            session = session,
+                            isCurrent = { generation == pairingGeneration && accessMode == mode },
+                        ) { showBrowser(origin, certificate) }
                     }
                 } }
-                .onFailure { runOnUiThread {
+                .onFailure { error -> runOnUiThread {
+                    if (generation != pairingGeneration) return@runOnUiThread
                     status.setTextColor(getColor(R.color.app_error))
-                    status.setText(R.string.pairing_failed)
+                    status.setText(pairingFailureMessage(error, origin))
                     button.isEnabled = true
                 } }
         }
     }
 
+    private fun showCompatibilityIssue(issue: CompatibilityIssue, status: TextView, button: Button) {
+        button.isEnabled = true
+        status.setTextColor(getColor(R.color.app_error))
+        val required = issue.requiredVersion.orEmpty()
+        val (title, message) = when (issue.kind) {
+            CompatibilityIssueKind.APP_TOO_OLD -> R.string.app_update_required_title to getString(R.string.app_update_required_message, required)
+            CompatibilityIssueKind.PLUGIN_TOO_OLD -> R.string.plugin_update_required_title to getString(R.string.plugin_update_required_message, required)
+            CompatibilityIssueKind.PROTOCOL_UNSUPPORTED -> R.string.connection_version_mismatch_title to getString(R.string.connection_version_mismatch_message)
+        }
+        status.text = message
+        status.visibility = View.VISIBLE
+        val dialog = AlertDialog.Builder(this).setTitle(title).setMessage(message)
+        if (issue.kind == CompatibilityIssueKind.APP_TOO_OLD) {
+            dialog.setPositiveButton(R.string.download_update) { _, _ -> openExternal(Uri.parse(APP_RELEASES_URL)) }
+                .setNegativeButton(R.string.cancel, null)
+        } else {
+            dialog.setPositiveButton(android.R.string.ok, null)
+        }
+        dialog.show()
+    }
+
+    private fun pairingFailureMessage(error: Throwable, origin: GatewayOrigin): Int = when ((error as? NativeAuthFailure)?.kind) {
+        NativeAuthFailureKind.PAIRING_EXPIRED -> R.string.pairing_expired
+        NativeAuthFailureKind.DEVICE_LIMIT -> R.string.pairing_device_limit
+        NativeAuthFailureKind.RATE_LIMITED -> R.string.pairing_rate_limited
+        NativeAuthFailureKind.TIMEOUT -> if (RemoteHostPolicy.needsTailscaleVpnNotice(origin.host)) R.string.pairing_tailscale_unreachable else R.string.pairing_timeout
+        NativeAuthFailureKind.TLS -> if (RemoteHostPolicy.needsTailscaleVpnNotice(origin.host)) R.string.pairing_tailscale_unreachable else R.string.pairing_tls_failed
+        NativeAuthFailureKind.NETWORK -> if (RemoteHostPolicy.needsTailscaleVpnNotice(origin.host)) R.string.pairing_tailscale_unreachable else R.string.pairing_network_failed
+        NativeAuthFailureKind.SERVER_UNAVAILABLE -> R.string.pairing_server_unavailable
+        NativeAuthFailureKind.INVALID_RESPONSE, null -> R.string.pairing_failed
+    }
+
     private var scanCanceled = AtomicBoolean(false)
 
     private fun scanForHarnesses(status: TextView, button: Button, results: LinearLayout) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-            && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+        val nearbyGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+            || checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+        if (nearbyGranted && nearbyPermissionLimited) {
+            nearbyPermissionLimited = false
+            preferences.edit().remove(PREFERENCE_NEARBY_PERMISSION_LIMITED).apply()
+        }
+        if (NearbyDiscoveryPermissionPolicy.shouldRequest(Build.VERSION.SDK_INT, nearbyGranted, nearbyPermissionLimited)) {
             pendingScan = { scanForHarnesses(status, button, results) }
             requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES), NEARBY_WIFI_REQUEST)
             return
@@ -645,7 +820,7 @@ class MainActivity : Activity() {
         scanCanceled.set(false)
         results.removeAllViews()
         status.setTextColor(getColor(R.color.app_secondary))
-        status.setText(R.string.scanning_lan)
+        status.setText(if (nearbyPermissionLimited) R.string.scanning_lan_limited else R.string.scanning_lan)
         status.visibility = View.VISIBLE
 
         val cancelButton = Button(this).apply {
@@ -718,7 +893,12 @@ class MainActivity : Activity() {
             NEARBY_WIFI_REQUEST -> {
                 val retry = pendingScan
                 pendingScan = null
-                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) retry?.invoke()
+                nearbyPermissionLimited = grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED
+                preferences.edit().apply {
+                    if (nearbyPermissionLimited) putBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, true)
+                    else remove(PREFERENCE_NEARBY_PERMISSION_LIMITED)
+                }.apply()
+                retry?.invoke()
             }
             SCAN_CAMERA_REQUEST -> {
                 if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startScanActivity()
@@ -754,10 +934,18 @@ class MainActivity : Activity() {
         toastError(R.string.scan_result_invalid)
     }
 
-    private fun installNativeSession(origin: GatewayOrigin, session: NativeSession, complete: () -> Unit) {
+    private fun installNativeSession(
+        origin: GatewayOrigin,
+        session: NativeSession,
+        isCurrent: () -> Boolean = { true },
+        complete: () -> Unit,
+    ) {
+        if (!isCurrent()) return
         val cookies = CookieManager.getInstance()
         cookies.setCookie(origin.serialized, "dsh_ma_session=${session.sessionToken}; Path=/; Secure; HttpOnly; SameSite=Strict") {
+            if (!isCurrent()) return@setCookie
             cookies.setCookie(origin.serialized, "dsh_ma_csrf=${session.csrfToken}; Path=/; Secure; SameSite=Strict") {
+                if (!isCurrent()) return@setCookie
                 cookies.flush()
                 complete()
             }
@@ -765,59 +953,134 @@ class MainActivity : Activity() {
     }
 
     private fun recoverAutomatically() {
-        val credential = credentialStore().load() ?: return
+        val mode = accessMode
+        val credential = credentialStore(mode).load() ?: return
         if (credential.expiresAt <= System.currentTimeMillis()) {
-            credentialStore().clear()
+            credentialStore(mode).clear()
             return
         }
         val preferred = gatewayOrigin
-            ?: GatewayOrigin.parse(preferences.getString(originPreference(), "").orEmpty())
+            ?: GatewayOrigin.parse(preferences.getString(originPreference(mode), "").orEmpty())
             ?: return
-        restoreTrustedDevice(preferred, credential) {}
+        val generation = beginRestoreAttempt()
+        restoreTrustedDevice(preferred, credential, mode, generation) { disposition ->
+            if (disposition == RestoreFailureDisposition.RETRY_TRANSIENT) {
+                scheduleAutomaticRecovery()
+            } else {
+                cancelAutomaticRecovery()
+            }
+        }
+    }
+
+    private fun scheduleAutomaticRecovery() {
+        if (recoveryScheduled || recoveryAttempt >= RECOVERY_DELAYS_MS.size || credentialStore().load() == null) return
+        val delay = RECOVERY_DELAYS_MS[recoveryAttempt++]
+        recoveryScheduled = true
+        recoveryHandler.postDelayed({
+            recoveryScheduled = false
+            if (!isFinishing && !isDestroyed) recoverAutomatically()
+        }, delay)
+    }
+
+    private fun cancelAutomaticRecovery() {
+        recoveryHandler.removeCallbacksAndMessages(null)
+        recoveryAttempt = 0
+        recoveryScheduled = false
+    }
+
+    private fun beginRestoreAttempt(): Int {
+        restoreGeneration += 1
+        return restoreGeneration
+    }
+
+    private fun invalidateRestoreAttempts() {
+        restoreGeneration += 1
+        connectionCenterStatus?.visibility = View.GONE
+    }
+
+    private fun beginPairingAttempt(): Int {
+        pairingGeneration += 1
+        return pairingGeneration
+    }
+
+    private fun invalidatePairingAttempts() {
+        pairingGeneration += 1
     }
 
     private fun restoreTrustedDevice(
         preferredOrigin: GatewayOrigin,
         credential: DeviceCredential,
-        onFailure: () -> Unit,
+        mode: AccessMode = accessMode,
+        generation: Int = beginRestoreAttempt(),
+        claimSuccess: () -> Boolean = { true },
+        onFailure: (RestoreFailureDisposition) -> Unit,
     ) {
-        if (restoringTrustedSession) return
-        if (!isOriginAllowedForAccessMode(preferredOrigin)) {
-            preferences.edit().remove(originPreference()).apply()
-            credentialStore().clear()
-            onFailure()
+        if (!RemoteHostPolicy.isAllowed(mode, preferredOrigin.host)) {
+            preferences.edit().remove(originPreference(mode)).apply()
+            credentialStore(mode).clear()
+            if (generation == restoreGeneration) onFailure(RestoreFailureDisposition.REQUIRE_USER_ACTION)
             return
         }
-        warnIfTailscale(preferredOrigin)
-        restoringTrustedSession = true
-        ioExecutor.execute {
-            var selectedOrigin = preferredOrigin
-            var session = runCatching {
-                NativeAuthClient.renew(selectedOrigin, credential.deviceToken, credential.caCertificate)
-            }.getOrNull()
-            if (session?.instanceId != credential.instanceId) session = null
-            if (session == null && accessMode == AccessMode.LAN) {
-                val found = runCatching { LanDiscovery.scan(this) }.getOrDefault(emptyList())
-                    .singleOrNull { it.instanceId == credential.instanceId }
-                if (found != null) {
-                    selectedOrigin = found.origin
-                    session = runCatching {
-                        NativeAuthClient.renew(selectedOrigin, credential.deviceToken, credential.caCertificate)
-                    }.getOrNull()?.takeIf { it.instanceId == credential.instanceId }
+        try {
+            restoreExecutor.execute {
+                var selectedOrigin = preferredOrigin
+                var lastFailure: Throwable? = null
+                var instanceMismatch = false
+
+                fun renew(origin: GatewayOrigin): NativeSession? {
+                    lastFailure = null
+                    instanceMismatch = false
+                    return try {
+                        NativeAuthClient.renew(origin, credential.deviceToken, credential.caCertificate).also { session ->
+                            if (session.instanceId != credential.instanceId) instanceMismatch = true
+                        }.takeUnless { instanceMismatch }
+                    } catch (failure: Exception) {
+                        lastFailure = failure
+                        null
+                    }
                 }
-            }
-            val renewed = session
-            runOnUiThread {
-                restoringTrustedSession = false
-                if (renewed == null) {
-                    onFailure()
-                } else {
-                    failureDialog?.dismiss()
-                    installNativeSession(selectedOrigin, renewed) {
-                        showBrowser(selectedOrigin, credential.caCertificate)
+
+                var session = renew(selectedOrigin)
+                var disposition = ConnectionRestorePolicy.failureDisposition(lastFailure, instanceMismatch)
+                if (generation != restoreGeneration) return@execute
+                if (session == null && mode == AccessMode.LAN && disposition == RestoreFailureDisposition.RETRY_TRANSIENT) {
+                    val found = runCatching { LanDiscovery.scan(this) }.getOrDefault(emptyList())
+                        .singleOrNull { it.instanceId == credential.instanceId }
+                    if (generation != restoreGeneration) return@execute
+                    if (found != null) {
+                        selectedOrigin = found.origin
+                        session = renew(selectedOrigin)
+                        disposition = ConnectionRestorePolicy.failureDisposition(lastFailure, instanceMismatch)
+                    }
+                }
+
+                val renewed = session
+                val finalDisposition = disposition
+                val credentialRevoked = (lastFailure as? NativeAuthFailure)?.kind == NativeAuthFailureKind.PAIRING_EXPIRED
+                runOnUiThread {
+                    if (generation != restoreGeneration) return@runOnUiThread
+                    if (renewed == null) {
+                        if (credentialRevoked) credentialStore(mode).clear()
+                        onFailure(finalDisposition)
+                    } else {
+                        if (!claimSuccess()) return@runOnUiThread
+                        accessMode = mode
+                        warnIfTailscale(selectedOrigin)
+                        cancelAutomaticRecovery()
+                        failureDialog?.dismiss()
+                        installNativeSession(
+                            origin = selectedOrigin,
+                            session = renewed,
+                            isCurrent = { generation == restoreGeneration },
+                        ) {
+                            showBrowser(selectedOrigin, credential.caCertificate)
+                        }
                     }
                 }
             }
+        } catch (_: RejectedExecutionException) {
+            // Activity teardown owns executor shutdown; no UI result is needed afterwards.
+            if (generation == restoreGeneration) onFailure(RestoreFailureDisposition.RETRY_TRANSIENT)
         }
     }
 
@@ -833,19 +1096,25 @@ class MainActivity : Activity() {
             showConnectionCenter()
             return
         }
+        destroyWebView()
         showingSetup = false
         setupBackAction = null
         gatewayOrigin = origin
+        cancelAutomaticRecovery()
         preferences.edit()
             .putString(originPreference(), origin.serialized)
             .putString(PREFERENCE_LAST_ACCESS_MODE, accessMode.name)
             .apply()
 
-        // The toolbar floats above a full-screen WebView so the page can use the
-        // whole screen while it scrolls; the mobile layout owns its safe-area
-        // insets itself (viewport-fit=cover + env(safe-area-inset-top)).
+        // Android owns the status-bar strip. The WebView begins below it, so
+        // every DSH page and third-party overlay shares the same safe viewport.
         val root = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.app_background))
+        }
+        val initialChromeColor = preferences.getInt(PREFERENCE_WEB_CHROME_COLOR, getColor(R.color.app_background))
+        applyStatusBarIconContrast(window, initialChromeColor)
+        val statusBarBackdrop = View(this).apply {
+            setBackgroundColor(initialChromeColor)
         }
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -894,7 +1163,7 @@ class MainActivity : Activity() {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(browser, false)
         }
-        browser.webViewClient = SecureWebViewClient(
+        val secureClient = SecureWebViewClient(
             origin = origin,
             caCertificate = caCertificate,
             openExternal = ::openExternal,
@@ -908,6 +1177,8 @@ class MainActivity : Activity() {
                 }
             },
         )
+        secureWebViewClient = secureClient
+        browser.webViewClient = secureClient
         browser.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 loading.progress = newProgress
@@ -925,37 +1196,50 @@ class MainActivity : Activity() {
             }
         }
         nativeBridge?.dispose()
-        nativeBridge = NativeBridge(this, browser, origin.serialized).also { it.install() }
+        nativeBridge = NativeBridge(this, browser, origin.serialized).also { bridge ->
+            bridge.onPageBackgroundColor = { color ->
+                statusBarBackdrop.setBackgroundColor(color)
+                applyStatusBarIconContrast(window, color)
+                preferences.edit().putInt(PREFERENCE_WEB_CHROME_COLOR, color).apply()
+            }
+            bridge.install()
+        }
         nativeBridge?.onScrollDirection = { direction -> animateToolbar(direction, bar, loading) }
         browser.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             requestDownload(origin, caCertificate, url, userAgent, contentDisposition, mimeType)
         }
         root.addView(browser, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(statusBarBackdrop, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.TOP))
         root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.TOP))
         root.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP))
         setContentView(root)
 
-        // Keep the toolbar clear of the status bar; the loading bar sits below it.
+        // Reserve the top safe area natively, then remove that already-owned
+        // inset before the WebView computes its CSS safe-area environment.
         root.setOnApplyWindowInsetsListener { _, insets ->
-            val top = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                insets.getInsets(WindowInsets.Type.statusBars()).top
-            } else {
-                @Suppress("DEPRECATION")
-                insets.systemWindowInsetTop
+            val top = resolveTopSafeInset(insets)
+            browser.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ).apply {
+                topMargin = top
             }
-            bar.setPadding(dp(16), top, dp(4), 0)
-            bar.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48) + top, Gravity.TOP)
+            statusBarBackdrop.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                top,
+                Gravity.TOP,
+            )
+            bar.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), Gravity.TOP).apply {
+                topMargin = top
+            }
             loading.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP).apply {
                 topMargin = dp(48) + top
             }
-            bar.translationY = if (toolbarHidden) -(dp(48) + top).toFloat() else 0f
+            bar.translationY = if (toolbarHidden) -dp(48).toFloat() else 0f
             bar.alpha = if (toolbarHidden) 0f else 1f
             loading.translationY = bar.translationY
             loading.alpha = bar.alpha
-            // Pass the insets through instead of consuming them: the full-screen
-            // WebView computes env(safe-area-inset-top/bottom) from them, which
-            // keeps the page's own header clear of the status bar.
-            insets
+            insetsBelowTopSafeArea(insets, top)
         }
         root.requestApplyInsets()
 
@@ -1168,23 +1452,32 @@ class MainActivity : Activity() {
 
     private fun showLoadFailure(failure: LoadFailure) {
         if (isFinishing || failureDialog?.isShowing == true) return
-        if (failure == LoadFailure.NETWORK && credentialStore().load() != null) recoverAutomatically()
-        val title = if (failure == LoadFailure.TLS) {
-            R.string.secure_connection_failed
-        } else {
-            R.string.page_load_failed
+        if ((failure == LoadFailure.NETWORK || failure == LoadFailure.AUTH_EXPIRED || failure == LoadFailure.SERVICE_UNAVAILABLE)
+            && credentialStore().load() != null) {
+            scheduleAutomaticRecovery()
         }
-        val message = if (failure == LoadFailure.TLS) {
-            R.string.secure_connection_failed_message
-        } else {
-            R.string.page_load_failed_message
+        val (title, message) = when (failure) {
+            LoadFailure.TLS -> R.string.secure_connection_failed to R.string.secure_connection_failed_message
+            LoadFailure.AUTH_EXPIRED -> R.string.session_expired to R.string.session_expired_message
+            LoadFailure.RATE_LIMITED -> R.string.remote_rate_limited to R.string.remote_rate_limited_message
+            LoadFailure.SERVICE_UNAVAILABLE -> R.string.dsh_unavailable to R.string.dsh_unavailable_message
+            LoadFailure.NETWORK -> if (accessMode == AccessMode.REMOTE) {
+                R.string.remote_unreachable to R.string.remote_unreachable_message
+            } else {
+                R.string.page_load_failed to R.string.page_load_failed_message
+            }
         }
         failureDialog = AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(message)
             .setPositiveButton(R.string.retry) { _, _ ->
-                val target = retryUrl ?: gatewayOrigin?.serialized
-                if (target != null) webView?.loadUrl(target)
+                if ((failure == LoadFailure.NETWORK || failure == LoadFailure.AUTH_EXPIRED || failure == LoadFailure.SERVICE_UNAVAILABLE)
+                    && credentialStore().load() != null) {
+                    recoverAutomatically()
+                } else {
+                    val target = retryUrl ?: gatewayOrigin?.serialized
+                    if (target != null) webView?.loadUrl(target)
+                }
             }
             .setNegativeButton(R.string.edit_connection) { _, _ ->
                 showConnectionCenter()
@@ -1197,6 +1490,8 @@ class MainActivity : Activity() {
     }
 
     private fun destroyWebView() {
+        secureWebViewClient?.dispose()
+        secureWebViewClient = null
         nativeBridge?.dispose()
         nativeBridge = null
         webView?.apply {
@@ -1333,6 +1628,8 @@ class MainActivity : Activity() {
         const val PREFERENCE_LAN_ORIGIN = "gateway_origin"
         const val PREFERENCE_REMOTE_ORIGIN = "remote_gateway_origin"
         const val PREFERENCE_LAST_ACCESS_MODE = "last_access_mode"
+        const val PREFERENCE_NEARBY_PERMISSION_LIMITED = "nearby_permission_limited"
+        const val PREFERENCE_WEB_CHROME_COLOR = "web_chrome_color"
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val STATE_ACCESS_MODE = "access_mode"
         const val FILE_CHOOSER_REQUEST = 4101
@@ -1343,6 +1640,8 @@ class MainActivity : Activity() {
         const val MENU_EDIT_CONNECTION = 1
         const val MENU_CLEAR_DATA = 2
         const val MENU_SHARE = 3
+        const val APP_RELEASES_URL = "https://github.com/saya-ch/dsh-mobile/releases/latest"
+        val RECOVERY_DELAYS_MS = longArrayOf(0L, 1_000L, 3_000L, 8_000L)
         val MIME_TYPE = Regex("^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+*-]+$")
         val UNSAFE_FILENAME = Regex("[\\\\/:*?\"<>|\\p{Cc}]")
     }

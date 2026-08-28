@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { createServer, request as requestHttp } from 'node:http'
 import type { AddressInfo, Server } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -86,9 +86,17 @@ describe('gateway extension namespace', () => {
     const headers = { host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', cookie: session, 'content-type': 'application/json' }
     const manifest = await request(gateway.address().port, '/mobile-access/extensions/manifest', { headers })
     expect(manifest.status).toBe(200)
-    expect(JSON.parse(manifest.body)).toMatchObject({ protocol: 1, extensions: [{ id: 'hello' }] })
+    expect(JSON.parse(manifest.body)).toMatchObject({
+      protocol: 1,
+      extensions: [{ id: 'hello' }],
+      legacy: { scriptRevision: expect.any(String), styleRevision: expect.any(String) },
+    })
     expect(manifest.headers.etag).toBeTruthy()
     const notModified = await request(gateway.address().port, '/mobile-access/extensions/manifest', { headers: { ...headers, 'if-none-match': String(manifest.headers.etag) } })
     expect(notModified.status).toBe(304)
+    await writeFile(join(directory, 'mobile.js'), 'window.dshMobile?.register(() => undefined)\n// changed\n')
+    const customized = await request(gateway.address().port, '/mobile-access/extensions/manifest', { headers: { ...headers, 'if-none-match': String(manifest.headers.etag) } })
+    expect(customized.status).toBe(200)
+    expect(JSON.parse(customized.body)).not.toMatchObject({ legacy: JSON.parse(manifest.body).legacy })
   })
 })
