@@ -30,7 +30,8 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-header] [class*="_headerUtilities"] { gap:2px !important; }
   [data-dsh-mobile-header] [class*="_sessionLogButton"] { width:40px; min-width:40px; padding:0 !important; overflow:hidden; color:transparent; font-size:0 !important; }
   [data-dsh-mobile-header] [class*="_sessionLogButton"] > * { display:none !important; }
-  [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { color:var(--dsw-text, #171a21); content:"日志"; font-size:11px; font-weight:600; }
+  [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { color:var(--dsw-text, #171a21); content:"Log"; font-size:11px; font-weight:600; }
+  html[data-dsh-mobile-language="zh"] [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { content:"日志"; }
   [data-dsh-mobile-header] [class*="_tabs"] { box-sizing:border-box !important; width:max-content !important; max-width:calc(100% - 58px) !important; min-height:28px !important; height:28px !important; margin-top:0 !important; padding-left:6px !important; padding-right:6px !important; overflow-x:auto; scrollbar-width:none; }
   [data-dsh-mobile-header] [class*="_tab"] { padding-bottom:5px !important; }
   [data-dsh-mobile-header] [class*="_tabs"]::-webkit-scrollbar { display:none; }
@@ -125,8 +126,13 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [role="dialog"][aria-label*="Context"] [class*="_rows"] > [class*="_row"] { display:flex !important; align-items:center !important; justify-content:space-between !important; width:100% !important; min-width:0 !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [role="dialog"][aria-label*="上下文"] :is(dt,dd),
   [data-dsh-mobile-center] [role="dialog"][aria-label*="Context"] :is(dt,dd) { white-space:nowrap !important; word-break:keep-all !important; }
-  .dsh-mobile-branch-toast { position:fixed; z-index:300; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
-  .dsh-mobile-branch-toast[data-visible="true"] { opacity:1; transform:translate(-50%,0); }
+  .dsh-mobile-branch-toast,.dsh-mobile-media-toast { position:fixed; z-index:330; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
+  .dsh-mobile-branch-toast[data-visible="true"],.dsh-mobile-media-toast[data-visible="true"] { opacity:1; transform:translate(-50%,0); }
+  .dsh-mobile-media-button { box-sizing:border-box; display:grid; place-items:center; width:36px; min-width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:999px; background:transparent; color:inherit; font-size:20px; line-height:1; }
+  .dsh-mobile-media-button:disabled { opacity:.38; }
+  .dsh-mobile-media-menu { position:fixed; z-index:325; right:12px; bottom:max(92px,calc(env(safe-area-inset-bottom) + 84px)); left:12px; box-sizing:border-box; display:grid; gap:8px; max-width:420px; margin:0 auto; padding:12px; border:1px solid var(--dsw-alias-border-subtle,rgb(148 163 184 / 28%)); border-radius:18px; background:var(--dsw-bg,#171a21); box-shadow:0 16px 48px rgb(0 0 0 / 28%); }
+  .dsh-mobile-media-menu[hidden] { display:none; }
+  .dsh-mobile-media-menu button { box-sizing:border-box; width:100%; min-height:48px; padding:10px 14px; border:1px solid var(--dsw-alias-border-subtle,rgb(148 163 184 / 24%)); border-radius:14px; background:var(--dsw-alias-interactive-bg-hover,rgb(148 163 184 / 12%)); color:inherit; font:inherit; text-align:left; }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
   /* The desktop composer intentionally wraps whole toolbar groups. On a phone,
      dynamic model and status labels made that row alternate between one and
@@ -166,14 +172,98 @@ function firstByClassSuffix(root: ParentNode, suffix: string): HTMLElement | und
 
 const AUTO_HISTORY_THRESHOLD_PX = 64
 
+export type NativeMobileLanguage = 'it' | 'en' | 'zh'
+
+interface FileDropTarget { dispatchEvent(event: Event): boolean }
+
+function controlledFileDragEvent(type: 'dragover' | 'drop', files: readonly File[], initialDropEffect: DataTransfer['dropEffect']): DragEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent
+  const dataTransfer = {
+    dropEffect: initialDropEffect,
+    effectAllowed: 'copy',
+    files: Object.freeze([...files]),
+    types: Object.freeze(['Files']),
+  } as unknown as DataTransfer
+  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+  return event
+}
+
+/** Ask the official document dragover listener whether the current composer accepts files. */
+export function preflightComposerImageDrop(target: FileDropTarget, files: readonly File[]): boolean {
+  if (files.length === 0) return false
+  const event = controlledFileDragEvent('dragover', files, 'none')
+  target.dispatchEvent(event)
+  return event.dataTransfer?.dropEffect === 'copy'
+}
+
+/** Dispatch a real drop only after a fresh official-listener preflight; the result is not an attachment ACK. */
+export function dispatchComposerImageDrop(target: FileDropTarget, files: readonly File[]): boolean {
+  if (!preflightComposerImageDrop(target, files)) return false
+  target.dispatchEvent(controlledFileDragEvent('drop', files, 'copy'))
+  return true
+}
+
+/** Apply the resolved locale independently from the document's possibly different lang attribute. */
+export function applyNativeMobileLanguageMarker(root: Pick<HTMLElement, 'dataset'>, language: NativeMobileLanguage): () => void {
+  const previous = root.dataset.dshMobileLanguage
+  root.dataset.dshMobileLanguage = language
+  return () => {
+    if (root.dataset.dshMobileLanguage !== language) return
+    if (previous === undefined) delete root.dataset.dshMobileLanguage
+    else root.dataset.dshMobileLanguage = previous
+  }
+}
+
+/** Resolve the supported language used by native-mobile controls. */
+export function resolveNativeMobileLanguage(
+  preference: string,
+  documentLanguage: string,
+  browserLanguages: readonly string[],
+): NativeMobileLanguage {
+  return [preference, documentLanguage, ...browserLanguages]
+    .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
+    .find((value): value is NativeMobileLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
+}
+
 /** Whether a user-driven scroll moved upward into the automatic history-loading zone. */
 export function shouldAutoLoadEarlier(previousTop: number, currentTop: number): boolean {
   return currentTop <= AUTO_HISTORY_THRESHOLD_PX && currentTop < previousTop - 0.5
 }
 
+interface ComposerMediaOrigin {
+  readonly generation: number
+  readonly href: string
+  readonly composer: object | null
+  readonly sessionRoot: object | null
+  readonly sessionId: string | null
+}
+
+/** Check that an asynchronous picker result still belongs to its originating session and composer. */
+export function isComposerMediaOriginCurrent(
+  origin: ComposerMediaOrigin,
+  current: ComposerMediaOrigin & { readonly disposed: boolean; readonly composerConnected: boolean },
+): boolean {
+  return !current.disposed
+    && origin.generation === current.generation
+    && origin.href === current.href
+    && origin.composer !== null
+    && current.composerConnected
+    && origin.composer === current.composer
+    && origin.sessionRoot !== null
+    && origin.sessionRoot === current.sessionRoot
+    && origin.sessionId !== null
+    && origin.sessionId === current.sessionId
+}
+
 /** Add mobile semantics without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
+  let localePreference = ''
+  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
+  const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
+  const language = resolveNativeMobileLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const restoreLanguageMarker = applyNativeMobileLanguageMarker(document.documentElement, language)
+  const label = (italian: string, english: string, chinese: string): string => language === 'it' ? italian : language === 'zh' ? chinese : english
   const setInputMode = (mode: 'keyboard' | 'touch'): void => {
     document.documentElement.dataset.dshMobileInput = mode
   }
@@ -188,19 +278,239 @@ export function installNativeMobileSurface(): () => void {
   const backdrop = document.createElement('button')
   backdrop.type = 'button'
   backdrop.className = 'dsh-native-mobile-backdrop'
+  backdrop.lang = language
   backdrop.hidden = true
-  backdrop.setAttribute('aria-label', '关闭工作区导航')
+  backdrop.setAttribute('aria-label', label('Chiudi navigazione area di lavoro', 'Close workspace navigation', '关闭工作区导航'))
   document.body.append(backdrop)
   const branchToast = document.createElement('div')
   branchToast.className = 'dsh-mobile-branch-toast'
+  branchToast.lang = language
   branchToast.setAttribute('role', 'status')
   branchToast.setAttribute('aria-live', 'polite')
   document.body.append(branchToast)
+  const mediaToast = document.createElement('div')
+  mediaToast.className = 'dsh-mobile-media-toast'
+  mediaToast.lang = language
+  mediaToast.setAttribute('role', 'status')
+  mediaToast.setAttribute('aria-live', 'polite')
+  document.body.append(mediaToast)
+  const mediaButton = document.createElement('button')
+  mediaButton.type = 'button'
+  mediaButton.className = 'dsh-mobile-media-button'
+  mediaButton.lang = language
+  mediaButton.textContent = '📎'
+  mediaButton.setAttribute('aria-label', label('Allega immagine', 'Attach image', '附加图片'))
+  mediaButton.setAttribute('aria-haspopup', 'dialog')
+  mediaButton.setAttribute('aria-expanded', 'false')
+  mediaButton.disabled = true
+  const mediaMenu = document.createElement('div')
+  mediaMenu.id = 'dsh-mobile-media-menu'
+  mediaMenu.className = 'dsh-mobile-media-menu'
+  mediaMenu.lang = language
+  mediaMenu.setAttribute('role', 'dialog')
+  mediaMenu.setAttribute('aria-label', label('Aggiungi immagine', 'Add image', '添加图片'))
+  mediaMenu.hidden = true
+  mediaButton.setAttribute('aria-controls', mediaMenu.id)
+  const fileButton = document.createElement('button')
+  fileButton.type = 'button'
+  fileButton.textContent = label('Scegli screenshot o immagine', 'Choose screenshot or image', '选择截图或图片')
+  const cameraButton = document.createElement('button')
+  cameraButton.type = 'button'
+  cameraButton.textContent = label('Scatta una foto', 'Take a photo', '拍摄照片')
+  mediaMenu.append(fileButton, cameraButton)
+  document.body.append(mediaMenu)
   let branchToastTimer = 0
+  let mediaToastTimer = 0
+  const showMediaToast = (message: string): void => {
+    mediaToast.textContent = message
+    mediaToast.dataset.visible = 'true'
+    if (mediaToastTimer !== 0) window.clearTimeout(mediaToastTimer)
+    mediaToastTimer = window.setTimeout(() => {
+      mediaToast.removeAttribute('data-visible')
+      mediaToastTimer = 0
+    }, 2200)
+  }
+  const closeMediaMenu = (restoreFocus = false): void => {
+    const wasOpen = !mediaMenu.hidden
+    mediaMenu.hidden = true
+    mediaButton.setAttribute('aria-expanded', 'false')
+    if (restoreFocus && wasOpen && mediaButton.isConnected && !mediaButton.disabled) mediaButton.focus({ preventScroll: true })
+  }
+  let mediaRequestGeneration = 0
+  let disposed = false
+  const preflightFile = new File([], 'dsh-mobile-preflight.png', { type: 'image/png' })
+  const canAcceptComposerDrop = (): boolean => preflightComposerImageDrop(document, [preflightFile])
+  const mediaPickerAbortController = new AbortController()
+  const browserPickerCleanups = new Set<() => void>()
+  const sessionTokens = new WeakMap<Element, string>()
+  let nextSessionToken = 0
+  type MediaRequestContext = ComposerMediaOrigin & { readonly composer: Element | null; readonly sessionRoot: Element | null }
+  const currentSessionOrigin = (): { readonly sessionRoot: Element | null; readonly sessionId: string | null } => {
+    const dedicatedRoot = mediaButton.closest('[data-dsh-mobile-session]')
+    const dedicatedId = dedicatedRoot?.getAttribute('data-dsh-mobile-session')
+    if (dedicatedRoot !== null && typeof dedicatedId === 'string' && dedicatedId !== '') {
+      return { sessionRoot: dedicatedRoot, sessionId: dedicatedId }
+    }
+    const selectedRow = document.querySelector<Element>('[role="treeitem"][aria-selected="true"]')
+    if (selectedRow === null) return { sessionRoot: null, sessionId: null }
+    let token = sessionTokens.get(selectedRow)
+    if (token === undefined) { token = `stock-${String(++nextSessionToken)}`; sessionTokens.set(selectedRow, token) }
+    const identity = selectedRow.getAttribute('data-session-id')
+      ?? selectedRow.getAttribute('aria-label')
+      ?? selectedRow.textContent?.trim()
+      ?? ''
+    return { sessionRoot: selectedRow, sessionId: `${token}:${identity}` }
+  }
+  const mediaRequestContext = (): MediaRequestContext => {
+    const session = currentSessionOrigin()
+    return {
+      generation: ++mediaRequestGeneration,
+      href: window.location.href,
+      composer: mediaButton.closest('[data-composer-card]'),
+      ...session,
+    }
+  }
+  const mediaRequestIsCurrent = (context: MediaRequestContext): boolean => {
+    const session = currentSessionOrigin()
+    const composer = mediaButton.closest('[data-composer-card]')
+    return isComposerMediaOriginCurrent(context, {
+      generation: mediaRequestGeneration,
+      href: window.location.href,
+      composer,
+      sessionRoot: session.sessionRoot,
+      sessionId: session.sessionId,
+      disposed,
+      composerConnected: context.composer?.isConnected === true,
+    })
+  }
+  const deliverImages = (files: readonly File[], context: ReturnType<typeof mediaRequestContext>): void => {
+    if (files.length === 0 || !mediaRequestIsCurrent(context)) return
+    dispatchComposerImageDrop(document, files)
+  }
+  const launchBrowserPicker = (camera: boolean, context: ReturnType<typeof mediaRequestContext>): void => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/png,image/jpeg,image/webp,image/gif'
+    if (camera) input.capture = 'environment'
+    input.hidden = true
+    const signal = mediaPickerAbortController.signal
+    let cleanupTimer = 0
+    let watchdogTimer = 0
+    let cleaned = false
+    const scheduleCleanup = (): void => {
+      if (!cleaned && cleanupTimer === 0) cleanupTimer = window.setTimeout(cleanup, 1000)
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') scheduleCleanup()
+    }
+    const onChange = (): void => {
+      if (cleaned) return
+      const files = input.files === null ? [] : [...input.files]
+      cleanup()
+      deliverImages(files, context)
+    }
+    const cleanup = (): void => {
+      if (cleaned) return
+      cleaned = true
+      if (cleanupTimer !== 0) window.clearTimeout(cleanupTimer)
+      if (watchdogTimer !== 0) window.clearTimeout(watchdogTimer)
+      cleanupTimer = 0
+      watchdogTimer = 0
+      input.removeEventListener('change', onChange)
+      input.removeEventListener('cancel', cleanup)
+      window.removeEventListener('focus', scheduleCleanup)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      signal.removeEventListener('abort', cleanup)
+      browserPickerCleanups.delete(cleanup)
+      input.remove()
+    }
+    input.addEventListener('change', onChange)
+    input.addEventListener('cancel', cleanup)
+    window.addEventListener('focus', scheduleCleanup)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    signal.addEventListener('abort', cleanup, { once: true })
+    watchdogTimer = window.setTimeout(cleanup, 300_000)
+    browserPickerCleanups.add(cleanup)
+    if (signal.aborted) { cleanup(); return }
+    try {
+      document.body.append(input)
+      input.click()
+    } catch {
+      cleanup()
+      if (mediaRequestIsCurrent(context)) showMediaToast(label('Impossibile aprire il selettore immagini', 'Could not open the image picker', '无法打开图片选择器'))
+    }
+  }
+  const pickImage = (camera: boolean): void => {
+    if (!canAcceptComposerDrop()) {
+      mediaButton.disabled = true
+      closeMediaMenu(true)
+      return
+    }
+    closeMediaMenu(true)
+    const context = mediaRequestContext()
+    const bridge = window.__DSH_MOBILE_NATIVE__
+    if (bridge === undefined) {
+      launchBrowserPicker(camera, context)
+      return
+    }
+    const action = camera ? 'camera.capture' : 'files.pick'
+    const input = camera ? {} : { accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] }
+    void Promise.resolve().then(() => bridge.invoke(action, input)).then(value => {
+      if (!mediaRequestIsCurrent(context)) return
+      if (value instanceof File) deliverImages([value], context)
+      else showMediaToast(label('Il file selezionato non è utilizzabile', 'The selected file is unavailable', '所选文件不可用'))
+    }).catch((error: unknown) => {
+      if (!mediaRequestIsCurrent(context)) return
+      const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : ''
+      if (code === 'cancelled') return
+      showMediaToast(code === 'payload_too_large'
+        ? label('L’immagine supera il limite di 8 MiB', 'The image exceeds the 8 MiB limit', '图片超过 8 MiB 限制')
+        : label('Impossibile aggiungere l’immagine', 'Could not attach the image', '无法附加图片'))
+    })
+  }
+  mediaButton.addEventListener('click', event => {
+    event.stopPropagation()
+    if (mediaMenu.hidden) {
+      if (!canAcceptComposerDrop()) { mediaButton.disabled = true; closeMediaMenu(); return }
+      mediaMenu.hidden = false
+      mediaButton.setAttribute('aria-expanded', 'true')
+      fileButton.focus({ preventScroll: true })
+    } else {
+      closeMediaMenu(true)
+    }
+  })
+  fileButton.addEventListener('click', () => { pickImage(false) })
+  cameraButton.addEventListener('click', () => { pickImage(true) })
+  const closeMediaMenuOnOutsideClick = (event: MouseEvent): void => {
+    if (mediaMenu.hidden || !(event.target instanceof Node)) return
+    if (!mediaMenu.contains(event.target) && !mediaButton.contains(event.target)) closeMediaMenu()
+  }
+  const handleMediaMenuKeyboard = (event: KeyboardEvent): void => {
+    if (mediaMenu.hidden) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeMediaMenu(true)
+      return
+    }
+    if (event.key !== 'Tab') return
+    const first = fileButton
+    const last = cameraButton
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus({ preventScroll: true })
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus({ preventScroll: true })
+    }
+  }
+  document.addEventListener('click', closeMediaMenuOnOutsideClick)
+  document.addEventListener('keydown', handleMediaMenuKeyboard, true)
   const showBranchToast = (): void => {
     const header = document.querySelector<HTMLElement>('[data-dsh-mobile-header]')
     const title = header === null ? undefined : header.querySelector<HTMLElement>('[class*="_crumbCurrent"]')?.textContent?.trim()
-    branchToast.textContent = title === undefined ? '当前分支' : `当前分支：${title}`
+    const prefix = label('Ramo corrente', 'Current branch', '当前分支')
+    branchToast.textContent = title === undefined ? prefix : `${prefix}: ${title}`
     branchToast.dataset.visible = 'true'
     if (branchToastTimer !== 0) window.clearTimeout(branchToastTimer)
     branchToastTimer = window.setTimeout(() => {
@@ -210,7 +520,7 @@ export function installNativeMobileSurface(): () => void {
   }
   const onBranchClick = (event: MouseEvent): void => {
     if (!(event.target instanceof Element)) return
-    const branch = event.target.closest<HTMLButtonElement>('button[aria-label*="分支"],button[aria-label*="Branch"],button[aria-label*="branch"]')
+    const branch = event.target.closest<HTMLButtonElement>('button[aria-label*="分支"],button[aria-label*="Branch"],button[aria-label*="branch"],button[aria-label*="Ramo"],button[aria-label*="ramo"]')
     if (branch === null || branch.hasAttribute('disabled') || branch.getAttribute('aria-disabled') === 'true') return
     window.setTimeout(showBranchToast, 80)
   }
@@ -283,6 +593,18 @@ export function installNativeMobileSurface(): () => void {
     })
   }
   document.addEventListener('click', animateNavigation)
+  let boundComposer: Element | null = null
+  let boundSessionRoot: Element | null = null
+  let boundSessionId: string | null = null
+  const syncMediaBinding = (composer: Element | null): void => {
+    const session = currentSessionOrigin()
+    if (composer === boundComposer && session.sessionRoot === boundSessionRoot && session.sessionId === boundSessionId) return
+    boundComposer = composer
+    boundSessionRoot = session.sessionRoot
+    boundSessionId = session.sessionId
+    mediaRequestGeneration += 1
+    closeMediaMenu()
+  }
 
   const sync = (): void => {
     scheduled = 0
@@ -297,6 +619,9 @@ export function installNativeMobileSurface(): () => void {
     const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
     if (center === undefined) {
       bindHistoryScroller(undefined)
+      mediaButton.disabled = true
+      closeMediaMenu()
+      mediaButton.remove()
       return
     }
     if (center !== undefined) {
@@ -333,15 +658,40 @@ export function installNativeMobileSurface(): () => void {
       }
       const composerCard = center.querySelector<HTMLElement>('[data-composer-card]')
       const composerRow = composerCard?.querySelector<HTMLElement>(':scope > [data-input-scroll]')?.nextElementSibling
+      if (!(composerRow instanceof HTMLElement)) {
+        syncMediaBinding(null)
+        mediaButton.disabled = true
+        mediaButton.title = label('Apri prima una sessione', 'Open a session first', '请先打开会话')
+        closeMediaMenu()
+        mediaButton.remove()
+      }
       if (composerRow instanceof HTMLElement) {
         composerRow.dataset.dshMobileComposerRow = 'true'
         const groups = Array.from(composerRow.children).filter((child): child is HTMLElement => child instanceof HTMLElement)
         const composerTools = groups[0]
         const composerTrailing = groups.at(-1)
-        if (composerTools !== undefined) composerTools.dataset.dshMobileComposerTools = 'true'
+        if (composerTools !== undefined) {
+          composerTools.dataset.dshMobileComposerTools = 'true'
+          if (mediaButton.parentElement !== composerTools) composerTools.append(mediaButton)
+          syncMediaBinding(composerCard ?? null)
+          const composerInput = composerCard?.querySelector<HTMLTextAreaElement>('textarea')
+          const composerBusy = composerCard?.getAttribute('aria-busy') === 'true'
+            || composerInput?.disabled === true
+            || composerInput?.readOnly === true
+          const attachmentBlocked = !canAcceptComposerDrop()
+          mediaButton.disabled = conversation === null || currentSessionOrigin().sessionId === null || composerBusy || attachmentBlocked
+          mediaButton.title = composerBusy
+            ? label('Attendi il completamento della risposta', 'Wait for the response to finish', '请等待回复完成')
+            : attachmentBlocked
+              ? label('Allegati immagine non disponibili', 'Image attachments are unavailable', '图片附件不可用')
+              : mediaButton.disabled
+                ? label('Apri prima una sessione', 'Open a session first', '请先打开会话')
+                : label('Allega screenshot, immagine o foto', 'Attach screenshot, image, or photo', '附加截图、图片或照片')
+          if (mediaButton.disabled) closeMediaMenu()
+        }
         if (composerTrailing !== undefined && composerTrailing !== composerTools) {
           composerTrailing.dataset.dshMobileComposerTrailing = 'true'
-          const modelTrigger = composerTrailing.querySelector<HTMLButtonElement>('button[aria-label^="选择模型"],button[aria-label^="Select model"]')
+          const modelTrigger = composerTrailing.querySelector<HTMLButtonElement>('button[aria-label^="选择模型"],button[aria-label^="Select model"],button[aria-label^="Seleziona modello"]')
           if (modelTrigger !== null) {
             modelTrigger.dataset.dshMobileComposerModelTrigger = 'true'
             modelTrigger.parentElement?.setAttribute('data-dsh-mobile-composer-model', 'true')
@@ -392,14 +742,25 @@ export function installNativeMobileSurface(): () => void {
   }
   const schedule = (): void => { if (scheduled === 0) scheduled = requestAnimationFrame(sync) }
   const observer = new MutationObserver(schedule)
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'disabled'] })
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'disabled', 'readonly', 'aria-busy', 'aria-selected', 'data-dsh-mobile-session'] })
   backdrop.addEventListener('click', () => { if (sidebar?.dataset.open === 'true') toggle?.click() })
   sync()
   return () => {
+    disposed = true
+    mediaRequestGeneration += 1
+    mediaPickerAbortController.abort()
+    restoreLanguageMarker()
+    for (const cleanup of [...browserPickerCleanups]) cleanup()
     observer.disconnect()
     document.removeEventListener('click', onBranchClick, true)
+    document.removeEventListener('click', closeMediaMenuOnOutsideClick)
+    document.removeEventListener('keydown', handleMediaMenuKeyboard, true)
     if (branchToastTimer !== 0) window.clearTimeout(branchToastTimer)
+    if (mediaToastTimer !== 0) window.clearTimeout(mediaToastTimer)
     branchToast.remove()
+    mediaToast.remove()
+    mediaMenu.remove()
+    mediaButton.remove()
     if (scheduled !== 0) cancelAnimationFrame(scheduled)
     if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
     if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
