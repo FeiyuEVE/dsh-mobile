@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { rewriteMobileIndex } from '../src/gateway.js'
 import { MOBILE_LAYOUT_MESSAGES, MOBILE_LAYOUT_STYLES, resolveMobileLayoutLanguage } from '../src/mobile-layout.js'
@@ -145,6 +146,13 @@ describe('dedicated mobile layout boot', () => {
     expect(MOBILE_LAYOUT_STYLES).toContain('max-height:min(42dvh,360px)')
     expect(MOBILE_LAYOUT_STYLES).toContain('height:auto!important')
     expect(MOBILE_LAYOUT_STYLES).toContain('min-height:44px')
+  })
+
+  it('opens the command menu without restoring focus to the mobile editor', () => {
+    const source = readFileSync(new URL('../src/mobile-layout.ts', import.meta.url), 'utf8')
+    expect(source).toContain("event.target.closest('button[aria-haspopup=\"listbox\"]')")
+    expect(source).toContain("target.matches('input,textarea') || target.isContentEditable")
+    expect(source).toContain("active.matches('input,textarea') || active.isContentEditable")
   })
 
   it('fails closed when the upstream page cannot identify one layout module', () => {

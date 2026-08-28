@@ -185,7 +185,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     const suppressAutofocus = (event: FocusEvent): void => {
       if (performance.now() >= suppressKeyboardUntil.current) return
       const target = event.target
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.blur()
+      if (target instanceof HTMLElement && (target.matches('input,textarea') || target.isContentEditable)) target.blur()
     }
     const suppressBranchAutofocus = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return
@@ -194,21 +194,21 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       suppressKeyboardUntil.current = performance.now() + 700
       window.setTimeout(() => {
         const active = document.activeElement
-        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+        if (active instanceof HTMLElement && (active.matches('input,textarea') || active.isContentEditable)) active.blur()
       }, 0)
     }
     const suppressCommandAutofocus = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return
       const commandButton = event.target.closest('button[aria-haspopup="listbox"]')
       if (commandButton === null) return
-      // The native composer deliberately restores textarea focus on mousedown;
+      // The native composer deliberately preserves editor focus on mousedown;
       // mobile command menus should open without summoning the soft keyboard.
       suppressKeyboardUntil.current = performance.now() + 700
       event.preventDefault()
       event.stopPropagation()
       window.setTimeout(() => {
         const active = document.activeElement
-        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+        if (active instanceof HTMLElement && (active.matches('input,textarea') || active.isContentEditable)) active.blur()
       }, 0)
     }
     document.addEventListener('focusin', suppressAutofocus, true)
