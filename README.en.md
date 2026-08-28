@@ -17,13 +17,11 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin verified with DeepSeek Harness 0.1.1-rc.2 and 0.1.2-alpha.1; the native app supports Android only.
+> DSH Mobile 0.3.0 is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.0 update**: one-click diagnostics and version guidance, DSH 0.1.2 Workspace, model, and session synchronization, and substantially smaller remote first-load transfers.
+> **0.3.0 update**: one-click diagnostics, version guidance, and clearer pairing and network errors; faster LAN and remote recovery, caching, and first load; DSH 0.1.2 Workspace, model, session, and community-plugin synchronization; plus status-bar, keyboard, narrow-screen, and app-icon refinements.
 >
-> Upgrading from app 0.1.3 or earlier still requires one uninstall and re-pair; app 0.2.2 remains compatible with the 0.3.0 plugin.
->
-> The project is evolving quickly. Update the Android app and desktop plugin together for full compatibility and the latest fixes.
+> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.0**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
 
 <p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.0/dsh-mobile-android-v0.3.0.apk"><strong>Download Android app 0.3.0</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.0">Release notes and checksums</a></p>
 
