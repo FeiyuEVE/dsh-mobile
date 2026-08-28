@@ -16,7 +16,7 @@ DeepSeek Harness 是这个轻量、社区维护的 Android WebView 薄壳的显�
 
 首次配对完后，App 使用 Android Keystore 加密保存可随时撤销的长期设备 token，日常 Web 会话仍然是短期的。电脑的局域网 IP 变化后，App 会扫描默认端口，用稳定的 DSH 安装标识找回同一台电脑，换取新的短期 Web 会话，并自动更新保存的地址。发现过程不会暴露设备 token 或 Session 凭据。
 
-App 会在配对前读取独立的版本元数据，明确区分“App 过旧”“插件过旧”和协议不兼容；旧插件没有该端点时仍按原流程连接。已配对连接会在后台快速恢复，连接选择页可立即操作；仅对短暂断网或服务不可用进行有限次数的自动重试。
+App 会在配对前读取独立的版本元数据，明确区分“App 过旧”“插件过旧”和协议不兼容；旧插件没有该端点时仍按原流程连接。已配对连接会在后台快速恢复，连接选择页可立即操作；仅对短暂断网或服务不可用进行有限次数的自动重试。移动界面保留中文，并支持英文和意大利文；语言依次按已保存偏好、页面语言和浏览器语言选择。
 
 自动发现会同时监听 DNS-SD/mDNS 与周期性 UDP 公告，也保留端口 `3443` 的主动 UDP 查询和私有 Wi-Fi、热点 `/24` 网段探测兜底。结果按稳定安装标识合并并更新地址。首页提供“扫码配对”（对准电脑屏幕上的二维码即可免密钥配对）、局域网扫描、结果列表和手动地址输入（如子网、非默认端口或发现被防火墙拦截时，可输入 `https://IP:端口` 直接连接）。点击一台 DSH 后才输入它的密钥。手机浏览器首次使用时，可直接打开电脑端“复制配对链接”得到的链接（配对码自动填入），也可以打开 HTTPS 地址中的 `/mobile-access/pair`，输入生成密钥最后一个点号后的 43 位配对码。
 
@@ -37,7 +37,7 @@ App 会在配对前读取独立的版本元数据，明确区分“App 过旧”
 | TLS | CA 只在 App 内固定；仅接受它为精确主机和有效期签发的服务器证书，其余 `SslError` 全部取消。 |
 | Origin | 只保存协议、规范化主机和端口；普通路径、查询和 fragment 不持久化。 |
 | 导航 | 同源主页面留在 WebView；用户点击的外部 HTTPS 链接交给系统浏览器。 |
-| 权限 | 文件输入使用系统文档选择器；相机仅在主动点击“扫码配对”时申请，用于读取配对二维码。 |
+| 权限 | 文件输入使用系统文档选择器，无需存储权限；只有用户主动扫码或拍照时才申请相机权限。 |
 | 下载 | 只允许当前 exact origin 的前台 GET；认证控制路径永不下载。 |
 | 数据 | 设备 token 由 Android Keystore 加密；Web 存储位于 App 沙箱；清除站点数据会删除设备凭据、origin、Cookie、缓存和 Web 存储。 |
 | 备份 | App 备份关闭，TLS 私钥和签名密钥不得进入仓库。 |
@@ -46,11 +46,13 @@ App 会在配对前读取独立的版本元数据，明确区分“App 过旧”
 
 ## 移动扩展桥
 
-认证后的页面可以通过 `dshMobile` 扩展调用 Android Bridge。Bridge 只注入到已配对的 HTTPS Origin 和顶层 WebView，不暴露 Cookie、设备令牌、配对密钥、CA 私钥或任意 Android API。
+认证后的页面可以通过 `dshMobile` 扩展调用 Android Bridge。Bridge 使用 `androidx.webkit` WebMessage listener，每条消息都校验配置的精确顶层 Origin 和 `isMainFrame`，绝不使用 `addJavascriptInterface`。入站消息上限为 1 MiB，剪贴板文本为 256 KiB，二进制结果为 8 MiB，回复为 12 MiB；它不暴露 Cookie、设备令牌、配对密钥、CA 私钥或任意 Android API。
 
-可用能力包括 `files.pick`、`camera.capture`、`share`、`clipboard.read`、`clipboard.write`。文件和拍照结果会转换为页面里的浏览器 `File`。文件选择、拍照等交互同一时间只允许一个；取消、旋转、WebView 销毁或 60 秒超时都会结束对应请求。手机浏览器使用对应 Web API，不支持时返回 `unsupported`。
+可用能力包括 `files.pick`、`camera.capture`、`share`、`clipboard.read`、`clipboard.write`。只有已打开会话且 DSH 附件 owner 的 `canAcceptDrop` 为真时，输入栏才显示回形针，并直接复用 DSH 原有附件入口而非伪造 drop。图片选择器仅接受 PNG、JPEG、WebP、GIF，单个文件不超过 8 MiB。拍照仅在使用时申请 Android 相机权限，通过 `FileProvider` 写入完整分辨率 JPEG，再作为浏览器 `File` 返回。文件选择和拍照同一时间只允许一个；取消、旋转、WebView 销毁、超时或会话已变化时都会清理或拒绝旧结果。手机浏览器使用对应 Web API，不支持时返回 `unsupported`。
 
 电脑端扩展是另一层：`host.mjs` 作为 DSH 主机上的可信 Node.js 代码运行，`mobile.js` 通过限定到自身扩展的 Action 和 Route 调用它。App Bridge 不能编辑或上传扩展源文件。
+
+客户端会校验扩展清单和带版本的资源 URL；刷新失败时保留上一份可用资源，扩展被移除或替换时完整清理旧激活。页面可见时每 45 秒、隐藏时每 5 分钟刷新，并在窗口聚焦、恢复联网或重新可见时立即刷新；重叠任务会合并，每个周期最长 30 秒。
 
 ## 构建
 
