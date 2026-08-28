@@ -85,7 +85,16 @@ internal object NativeBridgePolicy {
     const val MAX_BINARY_BYTES = 8 * 1024 * 1024
     const val MAX_CLIPBOARD_BYTES = 256 * 1024
     const val MAX_REPLY_BYTES = 12 * 1024 * 1024
+    const val ACTIVITY_REQUEST_TIMEOUT_MS = 5L * 60L * 1000L
+    const val PAGE_ACTIVITY_TIMEOUT_MS = ACTIVITY_REQUEST_TIMEOUT_MS + 5_000L
     const val CAMERA_ORPHAN_MAX_AGE_MS = 24L * 60L * 60L * 1000L
+
+    /** Keep the original deadline across recreation; old snapshots without one receive a fresh bound. */
+    fun resolveActivityDeadline(storedDeadlineMillis: Long, nowMillis: Long): Long =
+        storedDeadlineMillis.takeIf { it > 0L } ?: nowMillis + ACTIVITY_REQUEST_TIMEOUT_MS
+
+    fun remainingActivityTimeout(deadlineMillis: Long, nowMillis: Long): Long =
+        (deadlineMillis - nowMillis).coerceAtLeast(0L)
 
     /** Counts UTF-8 bytes without allocating another potentially large byte array. */
     fun isMessageWithinLimit(raw: String, limit: Int = MAX_MESSAGE_BYTES): Boolean {

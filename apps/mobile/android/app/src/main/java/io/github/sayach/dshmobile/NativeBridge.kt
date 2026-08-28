@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.WebView
@@ -21,6 +23,7 @@ import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.File
 import java.io.InputStream
 import java.util.Base64
@@ -52,6 +55,7 @@ internal class NativeBridge(
         val processing: Boolean,
         val cameraFile: File?,
         val cameraUri: Uri?,
+        val deadlineMillis: Long,
     ) {
         val disposition = RestoredOperationDisposition.CLEANUP_ONLY
     }
@@ -62,14 +66,29 @@ internal class NativeBridge(
         val cameraFile: File?,
         val cameraUri: Uri?,
         val resultUri: Uri?,
+        val deadlineMillis: Long,
+    )
+
+    private data class TimedOutOperation(
+        val pending: Pending?,
+        val cameraFile: File?,
+        val cameraUris: List<Uri>,
     )
 
     private class PayloadTooLargeException : Exception()
 
+    private class OwnedByteArrayOutputStream(capacity: Int) : ByteArrayOutputStream(capacity) {
+        fun takeBytes(): ByteArray = if (count == buf.size) buf else buf.copyOf(count)
+    }
+
     private val pending = PendingRequestRegistry<Pending>(MAX_PENDING)
     private val requestLock = Any()
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val timeoutHandler = Handler(Looper.getMainLooper())
     private var activityRequestId: String? = null
+    private var activityDeadlineRequestId: String? = null
+    private var activityDeadlineMillis: Long? = null
+    private var activityTimeoutRunnable: Runnable? = null
     private var cameraOutputFile: File? = null
     private var cameraOutputUri: Uri? = null
     private var processingTarget: ActivityResultTarget? = null
@@ -98,8 +117,9 @@ internal class NativeBridge(
     /** Install the origin-scoped WebMessage channel and page-side Promise adapter. */
     fun install(): Boolean {
         if (installed) return true
-        synchronized(requestLock) { restoredOperation?.takeIf { it.processing } }
-            ?.let(::cleanupRestoredOperation)
+        val restored = synchronized(requestLock) { restoredOperation }
+        if (restored?.processing == true) cleanupRestoredOperation(restored)
+        else restored?.let { scheduleActivityTimeout(it.requestId, it.deadlineMillis) }
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return false
         WebViewCompat.addWebMessageListener(
             webView,
@@ -147,15 +167,18 @@ internal class NativeBridge(
     fun handoffForConfiguration(): Bundle? {
         val state = synchronized(requestLock) {
             preservingForConfiguration = true
-            stateBundleLocked(markSnapshot = true) ?: cameraCleanupOwnership.takeDeferredForHandoff()?.let { file ->
+            val snapshot = stateBundleLocked(markSnapshot = true) ?: cameraCleanupOwnership.takeDeferredForHandoff()?.let { file ->
                 operationStateBundle(
                     requestId = RESTORED_CLEANUP_REQUEST_ID,
                     action = "camera.capture",
                     processing = true,
                     cameraFile = file,
                     cameraUri = null,
+                    deadlineMillis = System.currentTimeMillis(),
                 )
             }
+            cancelActivityTimeoutLocked()
+            snapshot
         }
         ioExecutor.shutdownNow()
         return state
@@ -169,6 +192,7 @@ internal class NativeBridge(
                 restored.processing,
                 restored.cameraFile,
                 restored.cameraUri,
+                restored.deadlineMillis,
             )
         }
         val activeId = activityRequestId
@@ -183,6 +207,9 @@ internal class NativeBridge(
             processing != null,
             cameraOutputFile ?: processing?.cameraFile,
             cameraOutputUri ?: processing?.cameraUri,
+            processing?.deadlineMillis
+                ?: activityDeadlineMillis
+                ?: NativeBridgePolicy.resolveActivityDeadline(0L, System.currentTimeMillis()),
         )
     }
 
@@ -210,6 +237,9 @@ internal class NativeBridge(
         onScrollDirection = null
 
         val (temporaryCameraFiles, temporaryCameraUris) = synchronized(requestLock) {
+            cancelActivityTimeoutLocked()
+            activityDeadlineRequestId = null
+            activityDeadlineMillis = null
             val preservedId = if (preservingForConfiguration) {
                 activityRequestId ?: processingTarget?.requestId ?: restoredOperation?.requestId
             } else null
@@ -369,6 +399,10 @@ internal class NativeBridge(
                 return
             }
             activityRequestId = requestId
+            scheduleActivityTimeoutLocked(
+                requestId,
+                NativeBridgePolicy.resolveActivityDeadline(0L, System.currentTimeMillis()),
+            )
         }
         activity.runOnUiThread {
             try {
@@ -380,13 +414,66 @@ internal class NativeBridge(
         }
     }
 
+    private fun scheduleActivityTimeout(requestId: String, deadlineMillis: Long) {
+        synchronized(requestLock) { scheduleActivityTimeoutLocked(requestId, deadlineMillis) }
+    }
+
+    private fun scheduleActivityTimeoutLocked(requestId: String, deadlineMillis: Long) {
+        cancelActivityTimeoutLocked()
+        activityDeadlineRequestId = requestId
+        activityDeadlineMillis = deadlineMillis
+        val task = Runnable { timeoutActivityOperation(requestId) }
+        activityTimeoutRunnable = task
+        timeoutHandler.postDelayed(
+            task,
+            NativeBridgePolicy.remainingActivityTimeout(deadlineMillis, System.currentTimeMillis()),
+        )
+    }
+
+    private fun cancelActivityTimeoutLocked() {
+        activityTimeoutRunnable?.let(timeoutHandler::removeCallbacks)
+        activityTimeoutRunnable = null
+    }
+
+    private fun timeoutActivityOperation(requestId: String) {
+        val terminal = synchronized(requestLock) {
+            if (preservingForConfiguration || activityDeadlineRequestId != requestId) return
+            val processing = processingTarget?.takeIf { it.requestId == requestId }
+            val restored = restoredOperation?.takeIf { it.requestId == requestId }
+            if (activityRequestId != requestId && processing == null && restored == null) return
+
+            activityRequestId = null
+            if (processing != null) processingTarget = null
+            if (restored != null) restoredOperation = null
+            val file = cameraOutputFile ?: processing?.cameraFile ?: restored?.cameraFile
+            val uris = listOfNotNull(cameraOutputUri, processing?.cameraUri, restored?.cameraUri).distinct()
+            cameraOutputFile = null
+            cameraOutputUri = null
+            val call = pending.remove(requestId)
+            val deleteNow = cameraCleanupOwnership.onTerminal(file)
+            cancelActivityTimeoutLocked()
+            activityDeadlineRequestId = null
+            activityDeadlineMillis = null
+            TimedOutOperation(call, deleteNow, uris)
+        }
+
+        terminal.cameraUris.forEach(::revokeCameraGrant)
+        terminal.cameraFile?.delete()
+        terminal.pending?.let { call ->
+            val body = errorJson("timeout", "native interaction timed out", requestId)
+            webView.post {
+                if (installed && !preservingForConfiguration) runCatching { call.replyProxy.postMessage(body) }
+            }
+        }
+    }
+
     private fun startClipboardRead(requestId: String) {
         activity.runOnUiThread {
             try {
                 val manager = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val item = manager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
                 executeIo(requestId) {
-                    val text = clipboardTextBounded(item)
+                    val text = clipboardTextBounded(requestId, item)
                     successJson(requestId, JSONObject().put("text", text))
                 }
             } catch (_: Exception) {
@@ -395,14 +482,14 @@ internal class NativeBridge(
         }
     }
 
-    private fun clipboardTextBounded(item: ClipData.Item?): String {
+    private fun clipboardTextBounded(requestId: String, item: ClipData.Item?): String {
         if (item == null) return ""
         val text = when {
             item.text != null -> item.text.toString()
-            item.uri != null -> withActiveOperation {
+            item.uri != null -> withActiveOperation(requestId) {
                 activity.contentResolver.openInputStream(item.uri)
             }?.use { input ->
-                String(readBounded(input, null, NativeBridgePolicy.MAX_CLIPBOARD_BYTES), Charsets.UTF_8)
+                String(readBounded(requestId, input, null, NativeBridgePolicy.MAX_CLIPBOARD_BYTES), Charsets.UTF_8)
             }.orEmpty()
             item.intent != null -> item.intent.toUri(Intent.URI_INTENT_SCHEME)
             else -> ""
@@ -467,7 +554,15 @@ internal class NativeBridge(
         activityRequestId = null
         val file = if (requestCode == CAMERA_REQUEST) cameraOutputFile.also { cameraOutputFile = null } else null
         val uri = if (requestCode == CAMERA_REQUEST) cameraOutputUri.also { cameraOutputUri = null } else null
-        ActivityResultTarget(requestId, expectedAction, file, uri, resultUri).also { processingTarget = it }
+        ActivityResultTarget(
+            requestId,
+            expectedAction,
+            file,
+            uri,
+            resultUri,
+            activityDeadlineMillis
+                ?: NativeBridgePolicy.resolveActivityDeadline(0L, System.currentTimeMillis()),
+        ).also { processingTarget = it }
     }
 
     private fun queueResultRead(target: ActivityResultTarget) {
@@ -479,8 +574,8 @@ internal class NativeBridge(
                 if (!mayProcessTarget(target)) return@execute
                 try {
                     val body = when (target.action) {
-                        "files.pick" -> fileJson(target.resultUri)
-                        else -> cameraJson(target.cameraFile)
+                        "files.pick" -> fileJson(target.requestId, target.resultUri)
+                        else -> cameraJson(target.requestId, target.cameraFile)
                     }
                     if (!mayProcessTarget(target)) return@execute
                     finishPending(target.requestId, successJson(target.requestId, body), target.cameraFile)
@@ -519,10 +614,23 @@ internal class NativeBridge(
             pending[target.requestId] != null
     } && !Thread.currentThread().isInterrupted
 
-    /** Provider/file calls are serialized with handoff so none can begin after freeze. */
-    private fun <T> withActiveOperation(block: () -> T): T = synchronized(requestLock) {
-        if (preservingForConfiguration || Thread.currentThread().isInterrupted) throw InterruptedException()
-        block()
+    /** Check both sides of blocking provider work without making timeout cleanup wait on that provider. */
+    private fun <T> withActiveOperation(requestId: String, block: () -> T): T {
+        ensureActiveOperation(requestId)
+        val value = block()
+        try {
+            ensureActiveOperation(requestId)
+            return value
+        } catch (error: InterruptedException) {
+            (value as? Closeable)?.runCatching { close() }
+            throw error
+        }
+    }
+
+    private fun ensureActiveOperation(requestId: String) = synchronized(requestLock) {
+        if (preservingForConfiguration || pending[requestId] == null || Thread.currentThread().isInterrupted) {
+            throw InterruptedException()
+        }
     }
 
     private fun startFilePicker(input: JSONObject) {
@@ -582,14 +690,19 @@ internal class NativeBridge(
         } else {
             errorJson("payload_too_large", "native reply is too large", requestId)
         }
-        webView.post {
-            val (call, deleteNow) = synchronized(requestLock) {
-                processingTarget?.takeIf { it.requestId == requestId }?.let { processingTarget = null }
-                pending.remove(requestId) to cameraCleanupOwnership.onTerminal(cleanupCameraFile)
+        val (call, deleteNow) = synchronized(requestLock) {
+            val claimed = pending.remove(requestId) ?: return
+            if (activityRequestId == requestId) activityRequestId = null
+            processingTarget?.takeIf { it.requestId == requestId }?.let { processingTarget = null }
+            if (activityDeadlineRequestId == requestId) {
+                cancelActivityTimeoutLocked()
+                activityDeadlineRequestId = null
+                activityDeadlineMillis = null
             }
-            if (call != null) runCatching { call.replyProxy.postMessage(boundedBody) }
-            deleteNow?.delete()
+            claimed to cameraCleanupOwnership.onTerminal(cleanupCameraFile)
         }
+        webView.post { runCatching { call.replyProxy.postMessage(boundedBody) } }
+        deleteNow?.delete()
     }
 
     private fun postDirectReply(replyProxy: JavaScriptReplyProxy?, body: String) {
@@ -604,12 +717,12 @@ internal class NativeBridge(
         else -> "camera.capture"
     }
 
-    private fun fileJson(uri: Uri?): JSONObject {
+    private fun fileJson(requestId: String, uri: Uri?): JSONObject {
         if (uri == null) throw Exception("no file selected")
         val resolver = activity.contentResolver
         var displayName: String? = null
         var declaredSize: Long? = null
-        withActiveOperation {
+        withActiveOperation(requestId) {
             resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { displayName = cursor.getString(it) }
@@ -618,24 +731,25 @@ internal class NativeBridge(
             }
         }
         if (declaredSize != null && declaredSize!! > NativeBridgePolicy.MAX_BINARY_BYTES) throw PayloadTooLargeException()
-        val input = withActiveOperation { resolver.openInputStream(uri) }
+        val input = withActiveOperation(requestId) { resolver.openInputStream(uri) }
             ?: throw Exception("selected file is unavailable")
-        val bytes = input.use { readBounded(it, declaredSize) }
-        val type = withActiveOperation { resolver.getType(uri) }
+        val bytes = input.use { readBounded(requestId, it, declaredSize) }
+        val type = withActiveOperation(requestId) { resolver.getType(uri) }
             ?.takeIf { MIME_TYPE.matches(it.lowercase()) }
             ?: "application/octet-stream"
         val name = safeDisplayName(displayName ?: uri.lastPathSegment ?: "file")
-        return binaryJson(name, type, bytes)
+        return binaryJson(requestId, name, type, bytes)
     }
 
-    private fun cameraJson(file: File?): JSONObject {
+    private fun cameraJson(requestId: String, file: File?): JSONObject {
         if (file == null || !file.isFile || file.length() <= 0L) throw Exception("camera result unavailable")
         if (file.length() > NativeBridgePolicy.MAX_BINARY_BYTES) throw PayloadTooLargeException()
-        val bytes = file.inputStream().use { readBounded(it, file.length()) }
-        return binaryJson("camera-${System.currentTimeMillis()}.jpg", "image/jpeg", bytes)
+        val bytes = file.inputStream().use { readBounded(requestId, it, file.length()) }
+        return binaryJson(requestId, "camera-${System.currentTimeMillis()}.jpg", "image/jpeg", bytes)
     }
 
     private fun readBounded(
+        requestId: String,
         input: InputStream,
         declaredSize: Long?,
         maxBytes: Int = NativeBridgePolicy.MAX_BINARY_BYTES,
@@ -644,21 +758,23 @@ internal class NativeBridge(
             ?.takeIf { it in 1..maxBytes.toLong() }
             ?.toInt()
             ?: DEFAULT_BUFFER_SIZE
-        val output = ByteArrayOutputStream(capacity)
+        val output = OwnedByteArrayOutputStream(capacity)
         val buffer = ByteArray(16 * 1024)
         var total = 0
         while (true) {
-            val count = withActiveOperation { input.read(buffer) }
+            val count = withActiveOperation(requestId) { input.read(buffer) }
             if (count < 0) break
             total += count
             if (total > maxBytes) throw PayloadTooLargeException()
             output.write(buffer, 0, count)
         }
-        return output.toByteArray()
+        // Provider and camera sizes are normally exact, so return the owned buffer
+        // instead of duplicating an up-to-8 MiB payload before Base64 encoding.
+        return output.takeBytes()
     }
 
-    private fun binaryJson(name: String, type: String, bytes: ByteArray): JSONObject {
-        val encoded = withActiveOperation { Base64.getEncoder().encodeToString(bytes) }
+    private fun binaryJson(requestId: String, name: String, type: String, bytes: ByteArray): JSONObject {
+        val encoded = withActiveOperation(requestId) { Base64.getEncoder().encodeToString(bytes) }
         return JSONObject().apply {
             put("name", name)
             put("type", type)
@@ -696,6 +812,10 @@ internal class NativeBridge(
             processing = state.getBoolean(STATE_PROCESSING),
             cameraFile = validatedCameraFile(state.getString(STATE_CAMERA_FILE)),
             cameraUri = state.getString(STATE_CAMERA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() },
+            deadlineMillis = NativeBridgePolicy.resolveActivityDeadline(
+                state.getLong(STATE_DEADLINE_MILLIS, 0L),
+                System.currentTimeMillis(),
+            ),
         )
     }
 
@@ -705,18 +825,25 @@ internal class NativeBridge(
         processing: Boolean,
         cameraFile: File?,
         cameraUri: Uri?,
+        deadlineMillis: Long,
     ): Bundle = Bundle().apply {
         putString(STATE_REQUEST_ID, requestId)
         putString(STATE_ACTION, action)
         putBoolean(STATE_PROCESSING, processing)
         putString(STATE_CAMERA_FILE, cameraFile?.absolutePath)
         putString(STATE_CAMERA_URI, cameraUri?.toString())
+        putLong(STATE_DEADLINE_MILLIS, deadlineMillis)
     }
 
     private fun takeRestoredOperation(requestCode: Int): RestoredOperation? = synchronized(requestLock) {
         val restored = restoredOperation ?: return@synchronized null
         if (restored.processing || restored.action != requestAction(requestCode)) return@synchronized null
         restoredOperation = null
+        if (activityDeadlineRequestId == restored.requestId) {
+            cancelActivityTimeoutLocked()
+            activityDeadlineRequestId = null
+            activityDeadlineMillis = null
+        }
         restored
     }
 
@@ -728,6 +855,11 @@ internal class NativeBridge(
         check(!restored.disposition.requiresPayloadRead() && !plan.readPayload)
         synchronized(requestLock) {
             if (restoredOperation?.requestId == restored.requestId) restoredOperation = null
+            if (activityDeadlineRequestId == restored.requestId) {
+                cancelActivityTimeoutLocked()
+                activityDeadlineRequestId = null
+                activityDeadlineMillis = null
+            }
         }
         if (plan.revokeGrant) revokeCameraGrant(restored.cameraUri)
         if (plan.deleteCameraFile) restored.cameraFile?.delete()
@@ -771,7 +903,8 @@ internal class NativeBridge(
               catch (_) { reject(Object.assign(new Error('native message is invalid'), { code: 'bad_message' })); return; }
               if (new TextEncoder().encode(raw).byteLength > $MAX_MESSAGE_BYTES) { reject(Object.assign(new Error('native message is too large'), { code: 'bad_message' })); return; }
               const waitsForActivity = action === 'files.pick' || action === 'camera.capture';
-              const timer = waitsForActivity ? null : setTimeout(() => { const item = pending.get(requestId); if (item) { pending.delete(requestId); item.reject(Object.assign(new Error('native capability timed out'), { code: 'timeout' })); } }, 60000);
+              const timeout = waitsForActivity ? ${NativeBridgePolicy.PAGE_ACTIVITY_TIMEOUT_MS} : 60000;
+              const timer = setTimeout(() => { const item = pending.get(requestId); if (item) { pending.delete(requestId); item.reject(Object.assign(new Error('native capability timed out'), { code: 'timeout' })); } }, timeout);
               pending.set(requestId, { resolve, reject, timer });
               try { bridge.postMessage(raw); }
               catch (_) { clearTimeout(timer); pending.delete(requestId); reject(Object.assign(new Error('native capability unavailable'), { code: 'unavailable' })); }
@@ -847,6 +980,7 @@ internal class NativeBridge(
         private const val STATE_PROCESSING = "processing"
         private const val STATE_CAMERA_FILE = "cameraFile"
         private const val STATE_CAMERA_URI = "cameraUri"
+        private const val STATE_DEADLINE_MILLIS = "deadlineMillis"
         private const val RESTORED_CLEANUP_REQUEST_ID = "restored-camera-cleanup"
         private val ACTIVITY_ACTIONS = setOf("files.pick", "camera.capture")
         private val MIME_TYPE = Regex("^[a-z0-9!#${'$'}&^_.+-]+/[a-z0-9!#${'$'}&^_.+*-]+${'$'}")
