@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONObject
@@ -17,6 +18,8 @@ import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 
 /**
  * Origin-scoped JS bridge for capabilities that belong to Android. Uses
@@ -27,7 +30,7 @@ import java.util.concurrent.Executors
 internal class NativeBridge(
     private val activity: Activity,
     private val webView: WebView,
-    private val origin: String,
+    private val origin: GatewayOrigin,
 ) {
     private data class Pending(val action: String)
     private class PayloadTooLargeException : Exception()
@@ -35,6 +38,7 @@ internal class NativeBridge(
     private val pending = ConcurrentHashMap<String, Pending>()
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var activityRequestId: String? = null
+    @Volatile
     private var installed = false
 
     /** Directional page-scroll observer set by the shell; reports "up" or "down". */
@@ -100,7 +104,7 @@ internal class NativeBridge(
     @JavascriptInterface
     fun invoke(raw: String): String {
         if (!installed) return errorJson("unavailable", "bridge is unavailable", "")
-        if (webView.url?.startsWith(origin) != true) return errorJson("bad_origin", "bridge call outside its origin", "")
+        if (!isTrustedPage()) return errorJson("bad_origin", "bridge call outside its origin", "")
         val parsed = try { JSONObject(raw) } catch (_: Exception) { return errorJson("bad_message", "message is invalid", "") }
         if (parsed.optInt("version", 0) != 1) return errorJson("bad_message", "unsupported version", "")
         val requestId = parsed.optString("requestId", "")
@@ -144,19 +148,31 @@ internal class NativeBridge(
     /** Scroll direction reported by the injected page adapter, on the UI thread. */
     @JavascriptInterface
     fun onPageScroll(direction: String) {
-        if (!installed || webView.url?.startsWith(origin) != true) return
         if (direction != "up" && direction != "down") return
-        activity.runOnUiThread { onScrollDirection?.invoke(direction) }
+        activity.runOnUiThread {
+            if (isTrustedPageOnMainThread()) onScrollDirection?.invoke(direction)
+        }
     }
 
     /** Synchronize the native status-bar strip with the authenticated page theme. */
     @JavascriptInterface
     fun updatePageBackground(red: Int, green: Int, blue: Int) {
-        if (!installed || webView.url?.startsWith(origin) != true) return
         if (red !in 0..255 || green !in 0..255 || blue !in 0..255) return
         val color = Color.rgb(red, green, blue)
-        activity.runOnUiThread { onPageBackgroundColor?.invoke(color) }
+        activity.runOnUiThread {
+            if (isTrustedPageOnMainThread()) onPageBackgroundColor?.invoke(color)
+        }
     }
+
+    private fun isTrustedPage(): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) return isTrustedPageOnMainThread()
+        val task = FutureTask(::isTrustedPageOnMainThread)
+        if (!webView.post(task)) return false
+        return runCatching { task.get(ORIGIN_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS) }.getOrDefault(false)
+    }
+
+    private fun isTrustedPageOnMainThread(): Boolean =
+        installed && webView.url?.let { GatewayUrlPolicy.isSameOrigin(origin, it) } == true
 
     private fun startPending(requestId: String, action: String, launch: () -> Unit): String {
         if (activityRequestId != null) return errorJson("busy", "another native interaction is active", requestId)
@@ -346,6 +362,7 @@ internal class NativeBridge(
         const val MAX_MESSAGE_BYTES = 1024 * 1024
         const val MAX_BINARY_BYTES = 700 * 1024
         const val MAX_PENDING = 16
+        const val ORIGIN_CHECK_TIMEOUT_SECONDS = 1L
         const val FILE_REQUEST = 5101
         const val CAMERA_REQUEST = 5102
     }

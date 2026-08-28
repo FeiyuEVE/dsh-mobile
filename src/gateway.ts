@@ -17,7 +17,8 @@ import { createServer as createHttpsServer, type Server as HttpsServer, type Ser
 import { connect, isIP, type AddressInfo, type Socket } from 'node:net'
 import { Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { createGzip } from 'node:zlib'
+import { promisify } from 'node:util'
+import { createGzip, gzip } from 'node:zlib'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import Bonjour from 'bonjour-service'
 import * as QRCode from 'qrcode'
@@ -175,9 +176,12 @@ interface RewrittenMobileIndex {
 interface StoredMobileBootBatch {
   readonly plan: MobileBootBatchPlan
   body?: Buffer
+  gzipBody?: Buffer
   etag?: string
   layoutMtimeMs?: number
 }
+
+const gzipBuffer = promisify(gzip)
 
 function ensureMobileViewport(html: string): string {
   const viewport = /<meta\b(?=[^>]*\bname\s*=\s*["']viewport["'])[^>]*>/iu
@@ -1627,24 +1631,33 @@ export class MobileAccessGateway {
       if (stored.body === undefined || stored.etag === undefined || stored.layoutMtimeMs !== layoutStat.mtimeMs) {
         const body = await this.assembleMobileBootBatch(stored.plan, operation.signal)
         stored.body = body
+        delete stored.gzipBody
         stored.etag = createHash('sha256').update(body).digest('hex')
         stored.layoutMtimeMs = layoutStat.mtimeMs
       }
-      if (headerValue(request.headers, 'if-none-match') === stored.etag) {
+      const compressed = acceptsGzip(request.headers['accept-encoding'])
+      const body = compressed
+        ? stored.gzipBody ??= await gzipBuffer(stored.body)
+        : stored.body
+      const etag = compressed ? `${stored.etag}-gzip` : stored.etag
+      const headers: OutgoingHttpHeaders = {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': body.byteLength,
+        'Cache-Control': 'private, no-cache',
+        ETag: etag,
+      }
+      if (compressed) headers['Content-Encoding'] = 'gzip'
+      addVaryAcceptEncoding(headers)
+      if (headerValue(request.headers, 'if-none-match') === etag) {
         setSecurityHeaders(response, this.tlsEnabled)
-        response.writeHead(304, { ETag: stored.etag, 'Cache-Control': 'private, no-cache' })
+        response.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache', Vary: String(headers.vary) })
         response.end()
         return
       }
       setSecurityHeaders(response, this.tlsEnabled)
-      response.writeHead(200, {
-        'Content-Type': 'text/javascript; charset=utf-8',
-        'Content-Length': stored.body.byteLength,
-        'Cache-Control': 'private, no-cache',
-        ETag: stored.etag,
-      })
+      response.writeHead(200, headers)
       if (request.method === 'HEAD') response.end()
-      else response.end(stored.body)
+      else response.end(body)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new HttpError(503, 'mobile_frontend_unavailable')
       throw error

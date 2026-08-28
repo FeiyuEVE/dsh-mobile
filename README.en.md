@@ -19,7 +19,7 @@
 
 > DSH Mobile 0.3.0 is a DeepSeek Harness community plugin verified with DeepSeek Harness 0.1.1-rc.2 and 0.1.2-alpha.1; the native app supports Android only.
 >
-> **0.3.0 update**: one-click diagnostics, version guidance, and faster connection recovery; sanitized reports help isolate network, firewall, and provider failures.
+> **0.3.0 update**: one-click diagnostics and version guidance, DSH 0.1.2 Workspace, model, and session synchronization, and substantially smaller remote first-load transfers.
 >
 > Upgrading from app 0.1.3 or earlier still requires one uninstall and re-pair; app 0.2.2 remains compatible with the 0.3.0 plugin.
 >
@@ -40,7 +40,7 @@ It also lets you customize the phone from a DSH conversation: `/mobile <what you
 - **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones.
 - **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
 - **One-click connection diagnostics**: check versions, gateway, network interface, firewall, and the remote path, then copy a report without credentials or complete addresses.
-- **Faster reconnection**: trusted connections race during restore and revisioned assets are reused.
+- **Faster reconnection**: trusted connections race during restore, revisioned assets are reused, and mobile boot batches are compressed.
 - **Three pairing options**: scan a QR code, paste a pairing link, or enter a key.
 
 A paired device is fully trusted and can operate the DSH on the computer. Use this only on a trusted home or office LAN, or a trusted VPN.

@@ -7,7 +7,7 @@ export const CSRF_COOKIE = 'dsh_ma_csrf'
 export const CSRF_HEADER = 'x-dsh-mobile-csrf'
 export const LOCAL_ADMIN_PREFIX = '/api/mobile-access'
 export const AUTH_PREFIX = '/mobile-access'
-export const WS_PATHS = new Set(['/api/events.mux', '/api/events.host'])
+export const WS_PATHS = new Set(['/api/events.mux', '/api/events.host', '/api/remote.mux'])
 
 /** Terse request failure safe to expose without internal diagnostics. */
 export class HttpError extends Error {

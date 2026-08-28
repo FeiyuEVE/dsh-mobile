@@ -532,6 +532,26 @@ describe('HTTP gateway', () => {
     expect(batch.body.indexOf('renderer.js')).toBeLessThan(batch.body.indexOf('__dedicatedMobileLayout'))
     expect(batch.body.indexOf('__dedicatedMobileLayout')).toBeLessThan(batch.body.indexOf('feature.js'))
 
+    const compressed = await request(instance.address().port, path, {
+      headers: { ...headers, 'accept-encoding': 'gzip' },
+    })
+    expect(compressed.status).toBe(200)
+    expect(compressed.headers['content-encoding']).toBe('gzip')
+    expect(compressed.headers.vary).toBe('Accept-Encoding')
+    expect(compressed.headers.etag).toMatch(/^[a-f\d]{64}-gzip$/u)
+    expect(gunzipSync(compressed.rawBody)).toEqual(batch.rawBody)
+    expect(compressed.rawBody.byteLength).toBeLessThan(batch.rawBody.byteLength)
+
+    const compressedCached = await request(instance.address().port, path, {
+      headers: {
+        ...headers,
+        'accept-encoding': 'gzip',
+        'if-none-match': String(compressed.headers.etag),
+      },
+    })
+    expect(compressedCached.status).toBe(304)
+    expect(compressedCached.headers.vary).toBe('Accept-Encoding')
+
     const cached = await request(instance.address().port, path, {
       headers: { ...headers, 'if-none-match': String(batch.headers.etag) },
     })
@@ -561,7 +581,7 @@ describe('HTTP gateway', () => {
     const asset = await request(instance.address().port, '/assets/app.js', { headers })
     expect(asset.status).toBe(200)
     expect(asset.headers['set-cookie']).toBeUndefined()
-    const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
+    const opened = await openWebSocket(instance, '/api/remote.mux', paired.session)
     expect(opened.response).toContain('101 Switching Protocols')
     opened.socket.destroy()
 
@@ -1159,15 +1179,17 @@ describe('WebSocket gateway', () => {
     expect(response.status).toBe(200)
   })
 
-  it('allows only the two known paths, forwards only the Session Cookie, and closes both on revocation', async () => {
+  it('allows only the known DSH event and Remote paths, forwards only the Session Cookie, and closes all on revocation', async () => {
     const inner = await upstream()
-    const instance = await gateway(inner.port, { maxWebSockets: 2 })
+    const instance = await gateway(inner.port, { maxWebSockets: 3 })
     const paired = await pair(instance)
     const first = await openWebSocket(instance, '/api/events.mux', paired.session)
     const second = await openWebSocket(instance, '/api/events.host', paired.session)
+    const third = await openWebSocket(instance, '/api/remote.mux', paired.session)
     expect(first.response).toContain('101 Switching Protocols')
     expect(second.response).toContain('101 Switching Protocols')
-    expect(inner.upgradeObservations).toHaveLength(2)
+    expect(third.response).toContain('101 Switching Protocols')
+    expect(inner.upgradeObservations).toHaveLength(3)
     for (const observed of inner.upgradeObservations) {
       expect(observed.cookie).toBeUndefined()
       expect(observed.origin).toBe(`http://127.0.0.1:${String(inner.port)}`)
@@ -1176,19 +1198,20 @@ describe('WebSocket gateway', () => {
 
     const firstClosed = new Promise<void>(resolve => { first.socket.once('close', () => resolve()) })
     const secondClosed = new Promise<void>(resolve => { second.socket.once('close', () => resolve()) })
+    const thirdClosed = new Promise<void>(resolve => { third.socket.once('close', () => resolve()) })
     await instance.access.revokeDevice(paired.deviceId)
-    await Promise.all([firstClosed, secondClosed])
+    await Promise.all([firstClosed, secondClosed, thirdClosed])
 
     const unknown = await openWebSocket(instance, '/api/events.unknown', paired.session)
     expect(unknown.response).toContain('404')
     unknown.socket.destroy()
   })
 
-  it('rejects a wrong WebSocket Origin on both paths before opening upstream work', async () => {
+  it('rejects a wrong WebSocket Origin on every allowed path before opening upstream work', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
     const paired = await pair(instance)
-    for (const path of ['/api/events.mux', '/api/events.host']) {
+    for (const path of ['/api/events.mux', '/api/events.host', '/api/remote.mux']) {
       const rejected = await openWebSocket(instance, path, paired.session, 'http://attacker.example')
       expect(rejected.response).toContain('403')
       rejected.socket.destroy()

@@ -1196,7 +1196,7 @@ class MainActivity : Activity() {
             }
         }
         nativeBridge?.dispose()
-        nativeBridge = NativeBridge(this, browser, origin.serialized).also { bridge ->
+        nativeBridge = NativeBridge(this, browser, origin).also { bridge ->
             bridge.onPageBackgroundColor = { color ->
                 statusBarBackdrop.setBackgroundColor(color)
                 applyStatusBarIconContrast(window, color)
