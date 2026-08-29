@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useSyncExternalStore } from 'react'
+import { createElement, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { MOBILE_LAYOUT_MESSAGES, type MobileLayoutLanguage } from './mobile-layout-messages.js'
 
@@ -39,11 +39,10 @@ interface LayoutSnapshot {
 
 /** Resolve the supported language used by the dedicated mobile layout. */
 export function resolveMobileLayoutLanguage(
-  preference: string,
   documentLanguage: string,
   browserLanguages: readonly string[],
 ): MobileLayoutLanguage {
-  return [preference, documentLanguage, ...browserLanguages]
+  return [documentLanguage, ...browserLanguages]
     .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
     .find((value): value is MobileLayoutLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
 }
@@ -162,16 +161,21 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
   const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot)
   const suppressKeyboardUntil = useRef(0)
-  let localePreference = ''
-  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
+  const [documentLanguage, setDocumentLanguage] = useState(document.documentElement.lang)
   const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
-  const language = resolveMobileLayoutLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const language = resolveMobileLayoutLanguage(documentLanguage, browserLanguages)
   const messages = MOBILE_LAYOUT_MESSAGES[language]
   const activeSessionId = props.useSessions(session => {
     const current = session.current
     return current !== undefined && session.byId[current]?.blank === false ? current : undefined
   })
   const hasSession = activeSessionId !== undefined
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => { setDocumentLanguage(document.documentElement.lang) })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
+    return () => { observer.disconnect() }
+  }, [])
 
   useEffect(() => {
     if (!hasSession) props.controller.closeDetails()

@@ -19,7 +19,7 @@
 
 > DSH Mobile 0.3.2 is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.2 update**: image selection and capture move into the composer plus menu; extension edits notify phones immediately; Android Bridge, the extension SDK, atomic hot updates, Funnel lifecycles, and the Chinese/English/Italian UI are hardened.
+> **0.3.2 update**: image selection and capture move into the composer plus menu; extension edits notify phones immediately; Android Bridge, the extension SDK, atomic hot updates, Funnel lifecycles, and the localization foundation are hardened.
 >
 > **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
 
@@ -35,7 +35,7 @@ It also lets you customize the phone from a DSH conversation: `/mobile <what you
 
 - **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
 - **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
-- **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones, with Chinese preserved and English and Italian supported.
+- **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones. Native app screens follow the Android system locale in Simplified Chinese, English, or Italian. Plugin-owned Web UI follows DSH's selected locale; Italian resources are ready for a future DSH Italian locale.
 - **Image attachments**: use the top row of the composer plus menu to select an image or take a photo; PNG, JPEG, WebP, and GIF files up to 8 MiB are supported, plus full-resolution JPEG capture.
 - **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
 - **One-click connection diagnostics**: check versions, gateway, network interface, firewall, and the remote path; stable reason codes are localized in the UI, and the copied report excludes credentials and complete addresses.

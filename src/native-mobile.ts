@@ -218,11 +218,10 @@ export function applyNativeMobileLanguageMarker(root: Pick<HTMLElement, 'dataset
 
 /** Resolve the supported language used by native-mobile controls. */
 export function resolveNativeMobileLanguage(
-  preference: string,
   documentLanguage: string,
   browserLanguages: readonly string[],
 ): NativeMobileLanguage {
-  return [preference, documentLanguage, ...browserLanguages]
+  return [documentLanguage, ...browserLanguages]
     .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
     .find((value): value is NativeMobileLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
 }
@@ -260,10 +259,8 @@ export function isComposerMediaOriginCurrent(
 /** Add mobile semantics without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
-  let localePreference = ''
-  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
   const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
-  const language = resolveNativeMobileLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const language = resolveNativeMobileLanguage(document.documentElement.lang, browserLanguages)
   const restoreLanguageMarker = applyNativeMobileLanguageMarker(document.documentElement, language)
   const label = (italian: string, english: string, chinese: string): string => language === 'it' ? italian : language === 'zh' ? chinese : english
   const mediaIcon = (kind: 'attachment' | 'camera'): SVGSVGElement => {

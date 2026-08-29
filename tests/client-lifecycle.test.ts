@@ -13,6 +13,7 @@ import {
   extensionRouteUrl,
   failClosedExtensionGenerationReplacement,
   handleMissingExtensionManifest,
+  installDshLanguageBoundSurface,
   MOBILE_CONTROL_MESSAGES,
   normalizeDiagnosticOverall,
   normalizeDiagnosticStatus,
@@ -39,15 +40,16 @@ class FakeWindow extends EventTarget {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('mobile-control localization', () => {
-  it('selects a deterministic supported locale and honors the stored preference first', () => {
+  it('follows the DSH document language before the browser fallback', () => {
     expect(selectMobileControlLocale('it-IT', ['en-US'])).toBe('it')
     expect(selectMobileControlLocale('', ['zh-Hant', 'en-US'])).toBe('zh')
     expect(selectMobileControlLocale('de-DE', ['fr-FR'])).toBe('en')
-    expect(selectMobileControlLocale('en-US', ['zh-CN'], '  IT_it ')).toBe('it')
-    expect(selectMobileControlLocale('zh-CN', ['it-IT'], 'unsupported')).toBe('zh')
+    expect(selectMobileControlLocale('en-US', ['it-IT'])).toBe('en')
+    expect(selectMobileControlLocale('zh-CN', ['it-IT'])).toBe('zh')
   })
 
   it('keeps Italian, English, and Chinese catalogs in parity including v0.3 diagnostics', () => {
@@ -65,6 +67,34 @@ describe('mobile-control localization', () => {
     const englishReasons = Object.keys(DIAGNOSTIC_REASON_MESSAGES.en).sort()
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.it).sort()).toEqual(englishReasons)
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.zh).sort()).toEqual(englishReasons)
+  })
+
+  it('remounts plugin-owned UI only when the DSH document language changes', () => {
+    const documentElement = { lang: 'en-US' }
+    let observer: { callback: MutationCallback, disconnect: ReturnType<typeof vi.fn> } | undefined
+    class FakeMutationObserver {
+      readonly disconnect = vi.fn()
+      constructor(readonly callback: MutationCallback) { observer = this }
+      observe = vi.fn()
+    }
+    vi.stubGlobal('document', { documentElement })
+    vi.stubGlobal('navigator', { language: 'zh-CN', languages: ['zh-CN'] })
+    vi.stubGlobal('MutationObserver', FakeMutationObserver)
+    const disposers = [vi.fn(), vi.fn()]
+    const install = vi.fn(() => disposers[install.mock.calls.length - 1] ?? vi.fn())
+
+    const stop = installDshLanguageBoundSurface(install)
+    expect(install).toHaveBeenCalledTimes(1)
+    documentElement.lang = 'it-IT'
+    observer?.callback([], observer as unknown as MutationObserver)
+    expect(disposers[0]).toHaveBeenCalledOnce()
+    expect(install).toHaveBeenCalledTimes(2)
+    observer?.callback([], observer as unknown as MutationObserver)
+    expect(install).toHaveBeenCalledTimes(2)
+
+    stop()
+    expect(observer?.disconnect).toHaveBeenCalledOnce()
+    expect(disposers[1]).toHaveBeenCalledOnce()
   })
 
   it('fails closed for malformed diagnostic states and preserves unknown server copy', () => {

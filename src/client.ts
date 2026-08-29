@@ -91,8 +91,8 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
 }
 
-export function selectMobileControlLocale(documentLanguage = '', navigatorLanguages: readonly string[] = [], preference = ''): MobileControlLocale {
-  for (const value of [preference, documentLanguage, ...navigatorLanguages]) {
+export function selectMobileControlLocale(documentLanguage = '', navigatorLanguages: readonly string[] = []): MobileControlLocale {
+  for (const value of [documentLanguage, ...navigatorLanguages]) {
     const language = value.trim().toLowerCase().split(/[-_]/u)[0]
     if (language === 'it' || language === 'en' || language === 'zh') return language
   }
@@ -100,9 +100,25 @@ export function selectMobileControlLocale(documentLanguage = '', navigatorLangua
 }
 
 export function selectedMobileControlLocale(): MobileControlLocale {
-  let preference = ''
-  try { preference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage can be unavailable in hardened browser contexts. */ }
-  return selectMobileControlLocale(document.documentElement.lang, navigator.languages?.length ? navigator.languages : [navigator.language], preference)
+  return selectMobileControlLocale(document.documentElement.lang, navigator.languages?.length ? navigator.languages : [navigator.language])
+}
+
+/** Remount one plugin-owned surface when DSH changes the document language. */
+export function installDshLanguageBoundSurface(install: () => () => void): () => void {
+  let locale = selectedMobileControlLocale()
+  let dispose = install()
+  const observer = new MutationObserver(() => {
+    const next = selectedMobileControlLocale()
+    if (next === locale) return
+    dispose()
+    locale = next
+    dispose = install()
+  })
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
+  return () => {
+    observer.disconnect()
+    dispose()
+  }
 }
 
 function controlTranslator(locale = selectedMobileControlLocale()): (key: string, values?: Readonly<Record<string, string | number>>) => string {
@@ -1956,22 +1972,25 @@ export function apply(ctx: ClientContext): void {
     document.head.append(style)
     if (!loopback) {
       const removeCustom = installCustomAssets()
-      const removeSurface = installNativeMobileSurface()
+      const removeSurface = installDshLanguageBoundSurface(installNativeMobileSurface)
       return () => { removeCustom(); removeSurface(); style.remove() }
     }
-    const control = installControl()
-    const triggerLocale = selectedMobileControlLocale()
-    const t = controlTranslator(triggerLocale)
-    const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register<{ wide: boolean }>({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
-      'aria-expanded': false,
-      'aria-label': t('mobileAccess'),
-      className: `dsh-mobile-control__trigger${wide ? '' : ' is-rail'}`,
-      lang: triggerLocale,
-      type: 'button',
-      title: t('mobileAccess'),
-      onClick: control.toggle,
-    }, createElement('span', { 'aria-hidden': true, className: 'dsh-mobile-control__trigger-icon' }), wide ? createElement('span', { className: 'dsh-mobile-control__trigger-label' }, t('mobileAccess')) : undefined)))
-    return () => { disposeSlot(); control.remove(); style.remove() }
+    const removeControl = installDshLanguageBoundSurface(() => {
+      const control = installControl()
+      const triggerLocale = selectedMobileControlLocale()
+      const t = controlTranslator(triggerLocale)
+      const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register<{ wide: boolean }>({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
+        'aria-expanded': false,
+        'aria-label': t('mobileAccess'),
+        className: `dsh-mobile-control__trigger${wide ? '' : ' is-rail'}`,
+        lang: triggerLocale,
+        type: 'button',
+        title: t('mobileAccess'),
+        onClick: control.toggle,
+      }, createElement('span', { 'aria-hidden': true, className: 'dsh-mobile-control__trigger-icon' }), wide ? createElement('span', { className: 'dsh-mobile-control__trigger-label' }, t('mobileAccess')) : undefined)))
+      return () => { disposeSlot(); control.remove() }
+    })
+    return () => { removeControl(); style.remove() }
   }, 'dsh-mobile: stock mobile adaptation and local control')
 }
 

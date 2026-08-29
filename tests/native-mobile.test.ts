@@ -102,13 +102,13 @@ describe('native mobile presentation', () => {
     expect(isComposerMediaOriginCurrent({ ...origin, sessionRoot: null, sessionId: null }, { ...current, sessionRoot: null, sessionId: null })).toBe(false)
   })
 
-  it('resolves the selected media language and marks it independently from document lang', () => {
-    expect(resolveNativeMobileLanguage('it-IT', 'zh-CN', ['en-US'])).toBe('it')
-    expect(resolveNativeMobileLanguage('', 'zh-CN', ['en-US'])).toBe('zh')
-    expect(resolveNativeMobileLanguage('fr', '', ['de-DE', 'en-GB'])).toBe('en')
-    expect(resolveNativeMobileLanguage('fr', '', ['de-DE'])).toBe('en')
+  it('follows the DSH document language before the browser fallback', () => {
+    expect(resolveNativeMobileLanguage('it-IT', ['en-US'])).toBe('it')
+    expect(resolveNativeMobileLanguage('zh-CN', ['it-IT', 'en-US'])).toBe('zh')
+    expect(resolveNativeMobileLanguage('', ['de-DE', 'en-GB'])).toBe('en')
+    expect(resolveNativeMobileLanguage('', ['de-DE'])).toBe('en')
 
-    const selected = resolveNativeMobileLanguage('zh-CN', 'en-US', ['en-US'])
+    const selected = resolveNativeMobileLanguage('zh-CN', ['en-US'])
     const root = { dataset: {} as DOMStringMap }
     const restore = applyNativeMobileLanguageMarker(root, selected)
     expect(root.dataset.dshMobileLanguage).toBe('zh')

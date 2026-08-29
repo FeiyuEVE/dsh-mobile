@@ -9,7 +9,7 @@ Notable changes to DSH Mobile are recorded here. GitHub Releases remain the sour
 - Push extension and `/mobile` changes to authenticated phones immediately, while retaining bounded polling as a network-recovery fallback.
 - Bind each mobile UI to its matching Host, script, style, and asset generation; retain the previous Host through a bounded refresh window, fail closed on client activation errors, and tighten scoped requests against encoded path traversal.
 - Bound long-running Android picker and camera interactions, release temporary provider grants across success, cancellation, timeout, rotation, and Activity teardown, and retain compatibility with supported WebView releases.
-- Split mobile language dictionaries into dedicated modules and keep localized diagnostics based on stable reason codes.
+- Split mobile language dictionaries into dedicated modules; make native Android screens follow the system locale in Simplified Chinese, English, or Italian; make plugin-owned Web UI follow DSH's selected locale; and retain Italian resources for future DSH support.
 - Correct the mobile extension and Funnel documentation, and record the Android runtime libraries shipped with the app.
 
 ## 0.3.1 - 2026-08-28
