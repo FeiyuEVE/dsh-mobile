@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
+  bindClientResponseLifetime,
+  combineClientSignalLifetime,
   combineClientSignals,
   diagnosticEntriesForRender,
   diagnosticOverallForChecks,
   diagnosticServerCopy,
   DIAGNOSTIC_REASON_MESSAGES,
+  extensionAssetUrl,
+  extensionGenerationHeaders,
   extensionRouteUrl,
+  failClosedExtensionGenerationReplacement,
   handleMissingExtensionManifest,
   MOBILE_CONTROL_MESSAGES,
   normalizeDiagnosticOverall,
@@ -242,6 +247,69 @@ describe('extension request isolation', () => {
     expect(combined.reason).toBe('caller stopped')
   })
 
+  it('detaches combined signal listeners after a normal request completes', () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const removeExtension = vi.spyOn(extension.signal, 'removeEventListener')
+    const removeCaller = vi.spyOn(caller.signal, 'removeEventListener')
+    const combined = combineClientSignalLifetime(extension.signal, caller.signal)
+    combined.cleanup()
+    expect(removeExtension).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(removeCaller).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(combined.signal.aborted).toBe(false)
+  })
+
+  it('retains request abort wiring until a streamed response finishes', async () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const removeExtension = vi.spyOn(extension.signal, 'removeEventListener')
+    const removeCaller = vi.spyOn(caller.signal, 'removeEventListener')
+    const lifetime = combineClientSignalLifetime(extension.signal, caller.signal)
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined
+    const response = bindClientResponseLifetime(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller },
+    }), { headers: { 'content-type': 'text/plain' }, status: 200 }), lifetime.cleanup)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain')
+    expect(removeExtension).not.toHaveBeenCalled()
+    expect(removeCaller).not.toHaveBeenCalled()
+
+    const reader = response.body?.getReader()
+    expect(reader).toBeDefined()
+    source?.enqueue(new TextEncoder().encode('chunk'))
+    await expect(reader?.read()).resolves.toMatchObject({ done: false })
+    expect(removeExtension).not.toHaveBeenCalled()
+    const finished = reader?.read()
+    source?.close()
+    await expect(finished).resolves.toEqual({ done: true, value: undefined })
+    expect(removeExtension).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(removeCaller).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
+  it('keeps a streamed response abortable after fetch has returned its headers', async () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const lifetime = combineClientSignalLifetime(extension.signal, caller.signal)
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined
+    const response = bindClientResponseLifetime(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller },
+    })), lifetime.cleanup)
+    const pending = response.body?.getReader().read()
+    caller.abort(new DOMException('extension request cancelled', 'AbortError'))
+    source?.error(caller.signal.reason)
+    expect(lifetime.signal.aborted).toBe(true)
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('fails closed when a replacement Host generation cannot activate', () => {
+    const dispose = vi.fn()
+    expect(failClosedExtensionGenerationReplacement(true, 'old', 'new', dispose)).toBe(true)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(failClosedExtensionGenerationReplacement(true, 'new', 'new', dispose)).toBe(false)
+    expect(failClosedExtensionGenerationReplacement(false, 'old', 'new', dispose)).toBe(false)
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
   it('normalizes route URLs before enforcing the current extension namespace', () => {
     const origin = 'https://dsh.example/'
     expect(extensionRouteUrl('demo', '/status?full=1', origin).href).toBe('https://dsh.example/mobile-access/extensions/demo/routes/status?full=1')
@@ -249,6 +317,22 @@ describe('extension request isolation', () => {
     for (const path of ['/../other/routes/status', '/%2e%2e/other/routes/status', '/safe/%2f../other', '//evil.test/x', '/ok#fragment']) {
       expect(() => extensionRouteUrl('demo', path, origin)).toThrowError('extension routes must be relative')
     }
+  })
+
+  it('builds generation-pinned asset URLs without path escape', () => {
+    const generation = 'a'.repeat(64)
+    expect(extensionAssetUrl('demo', generation, 'icons/photo.png', 'https://dsh.example/').href)
+      .toBe(`https://dsh.example/mobile-access/extensions/demo/assets/icons/photo.png?generation=${generation}`)
+    for (const path of ['', '/absolute.png', '../secret', 'safe/../secret']) {
+      expect(() => extensionAssetUrl('demo', generation, path, 'https://dsh.example/')).toThrowError('extension asset path is invalid')
+    }
+  })
+
+  it('pins SDK requests to the activated Host generation', () => {
+    const generation = 'c'.repeat(64)
+    const headers = extensionGenerationHeaders(generation, { accept: 'application/json', 'x-dsh-mobile-extension-generation': 'stale' })
+    expect(headers.get('accept')).toBe('application/json')
+    expect(headers.get('x-dsh-mobile-extension-generation')).toBe(generation)
   })
 })
 
@@ -410,18 +494,20 @@ describe('client extension manifest reconciliation', () => {
   })
 
   it('validates protocol, schema, ids, duplicates, and resource URLs before authority', () => {
+    const generation = 'b'.repeat(64)
     expect(parseMobileExtensionManifest({
       protocol: 1,
-      extensions: [{ id: 'demo', scriptUrl: '/mobile-access/extensions/demo/mobile.js' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
+      extensions: [{ id: 'demo', generation, scriptUrl: `/mobile-access/extensions/demo/mobile.js?generation=${generation}`, assetsUrl: '/mobile-access/extensions/demo/assets/' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
       legacy: { scriptRevision: 'js-1', styleRevision: 'css-1' },
     })).toEqual({
-      extensions: [{ id: 'demo', scriptUrl: '/mobile-access/extensions/demo/mobile.js' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
+      extensions: [{ id: 'demo', generation, scriptUrl: `/mobile-access/extensions/demo/mobile.js?generation=${generation}`, assetsUrl: '/mobile-access/extensions/demo/assets/' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
       legacy: { scriptRevision: 'js-1', styleRevision: 'css-1' },
     })
     expect(parseMobileExtensionManifest({ protocol: 2, extensions: [], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: {}, legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo' }, { id: 'demo' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo', scriptUrl: 'https://evil.test/x.js' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
+    expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo', generation: 'stale' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
   })
 
   it('can reconcile script and style presence independently', () => {

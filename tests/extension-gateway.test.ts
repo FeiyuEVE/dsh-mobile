@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { createServer, request as requestHttp, type ClientRequest, type IncomingMessage } from 'node:http'
 import type { AddressInfo, Server } from 'node:net'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -116,6 +116,52 @@ describe('gateway extension namespace', () => {
     expect(action.status).toBe(200); expect(JSON.parse(action.body)).toEqual({ input: { value: 1 } })
     const route = await request(gateway.address().port, '/mobile-access/extensions/hello/routes/status', { headers })
     expect(route.status).toBe(200); expect(JSON.parse(route.body)).toEqual({ ok: true })
+  })
+
+  it('routes old mobile UI requests to their retained Host and asset generation', async () => {
+    const upstream = createServer((_, response) => { response.writeHead(200); response.end('ok') })
+    const upstreamPort = await listen(upstream)
+    cleanups.push(async () => { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())) })
+    const state = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-generation-gateway-'))
+    cleanups.push(() => rm(state, { recursive: true, force: true }))
+    const extensionRoot = join(state, 'extensions')
+    const directory = join(extensionRoot, 'demo')
+    await mkdir(join(directory, 'assets'), { recursive: true })
+    await writeFile(join(directory, 'extension.json'), JSON.stringify({ schemaVersion: 1, id: 'demo', name: 'Demo', version: '1.0.0' }))
+    await writeFile(join(directory, 'mobile.js'), 'window.dshMobile.define({apiVersion:1,id:"demo",activate(){}})')
+    await writeFile(join(directory, 'assets', 'value.txt'), 'one')
+    await writeFile(join(directory, 'host.mjs'), 'export default async api => api.action("ping", { async run() { return 1 } })')
+    const context = new Context(); cleanups.push(() => context.fiber.dispose())
+    const service = new MobileAccessService(context)
+    await service.startLocal(extensionRoot, context); cleanups.push(() => service.stopLocal())
+    const first = service.manifest()[0]?.generation as string
+
+    const config = parseGatewayConfig({ listenHost: '127.0.0.1', listenPort: 38087, upstreamOrigin: `http://127.0.0.1:${String(upstreamPort)}`, publicAuthorities: ['127.0.0.1'], allowedCidrs: ['127.0.0.0/8'], stateFile: join(state, 'devices.json'), tls: { mode: 'disabled' } })
+    const gateway = new MobileAccessGateway(config, new MemoryDeviceStore(), service)
+    await gateway.start(); cleanups.push(() => gateway.close())
+    const origin = gateway.address().origin
+    const opened = await gateway.access.openPairing()
+    const paired = await request(gateway.address().port, '/mobile-access/auth/pair', { method: 'POST', headers: { host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: JSON.stringify({ token: opened.token }) })
+    const session = cookie(paired.headers, SESSION_COOKIE); const csrf = JSON.parse(paired.body) as { csrfToken: string }
+    const headers = { host: new URL(origin).host, origin, 'sec-fetch-site': 'same-origin', cookie: session, [CSRF_HEADER]: csrf.csrfToken, 'content-type': 'application/json' }
+
+    await writeFile(join(directory, 'assets', 'value.txt'), 'two')
+    await writeFile(join(directory, 'host.mjs'), 'export default async api => api.action("ping", { async run() { return 2 } })')
+    await service.refreshLocal()
+    const second = service.manifest()[0]?.generation as string
+    expect(second).not.toBe(first)
+
+    const oldAction = await request(gateway.address().port, '/mobile-access/extensions/demo/actions/ping', { method: 'POST', headers: { ...headers, 'x-dsh-mobile-extension-generation': first }, body: '{}' })
+    const newAction = await request(gateway.address().port, '/mobile-access/extensions/demo/actions/ping', { method: 'POST', headers: { ...headers, 'x-dsh-mobile-extension-generation': second }, body: '{}' })
+    expect(JSON.parse(oldAction.body)).toBe(1)
+    expect(JSON.parse(newAction.body)).toBe(2)
+    const oldAsset = await request(gateway.address().port, `/mobile-access/extensions/demo/assets/value.txt?generation=${first}`, { headers })
+    const newAsset = await request(gateway.address().port, `/mobile-access/extensions/demo/assets/value.txt?generation=${second}`, { headers })
+    expect(oldAsset.body).toBe('one')
+    expect(newAsset.body).toBe('two')
+    const invalid = await request(gateway.address().port, '/mobile-access/extensions/demo/actions/ping', { method: 'POST', headers: { ...headers, 'x-dsh-mobile-extension-generation': 'stale' }, body: '{}' })
+    expect(invalid.status).toBe(400)
+    expect(JSON.parse(invalid.body)).toEqual({ error: 'invalid_extension_generation' })
   })
 
   it('admits extension bodies before buffering and rejects oversized declarations first', async () => {

@@ -690,6 +690,14 @@ function extensionTarget(pathname: string):
   return undefined
 }
 
+const EXTENSION_GENERATION_HEADER = 'x-dsh-mobile-extension-generation'
+
+function extensionGeneration(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (!/^[a-f\d]{64}$/u.test(value)) throw new HttpError(400, 'invalid_extension_generation')
+  return value
+}
+
 function mobileBootBatchKey(pathname: string): string | undefined {
   const match = new RegExp(`^${MOBILE_BOOT_BATCH_PREFIX.replaceAll('/', '\\/')}([a-f\\d]{64})\\.js$`, 'u').exec(pathname)
   return match?.[1]
@@ -1395,13 +1403,14 @@ export class MobileAccessGateway {
     }
     if (targetInfo.kind === 'script' || targetInfo.kind === 'style' || targetInfo.kind === 'asset') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
+      const generation = extensionGeneration(new URLSearchParams(target.search).get('generation') ?? undefined)
       const operation = this.allocateRequest(authorization, response, {})
       try {
         const file = targetInfo.kind === 'script'
-          ? await extensions.readClientFile(targetInfo.id, 'script', operation.signal)
+          ? await extensions.readClientFile(targetInfo.id, 'script', operation.signal, generation)
           : targetInfo.kind === 'style'
-            ? await extensions.readClientFile(targetInfo.id, 'style', operation.signal)
-            : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '', operation.signal)
+            ? await extensions.readClientFile(targetInfo.id, 'style', operation.signal, generation)
+            : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '', operation.signal, generation)
         if (headerValue(request.headers, 'if-none-match') === file.digest) {
           setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
         }
@@ -1420,15 +1429,16 @@ export class MobileAccessGateway {
       if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
       const maximum = 1024 * 1024
       assertBoundedContentLength(request, maximum)
+      const generation = extensionGeneration(headerValue(request.headers, EXTENSION_GENERATION_HEADER))
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
-      const generationSignal = extensions.signal(targetInfo.id)
+      const generationSignal = extensions.signal(targetInfo.id, generation)
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
         const body = await readJsonObject(request, maximum)
-        const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId })
+        const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId }, generation)
         let serialized: Buffer
         try { serialized = Buffer.from(JSON.stringify(result)) } catch { throw new MobileExtensionError('extension_failed', 'extension action failed', 500) }
         if (serialized.byteLength > 4 * 1024 * 1024) throw new MobileExtensionError('extension_result_too_large', 'extension result is too large', 500)
@@ -1444,10 +1454,11 @@ export class MobileAccessGateway {
       if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new HttpError(405, 'method_not_allowed')
       const hasBody = method !== 'GET' && method !== 'HEAD'
       if (hasBody) assertBoundedContentLength(request, this.config.maxBodyBytes)
+      const generation = extensionGeneration(headerValue(request.headers, EXTENSION_GENERATION_HEADER))
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
-      const generationSignal = extensions.signal(targetInfo.id)
+      const generationSignal = extensions.signal(targetInfo.id, generation)
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
@@ -1457,7 +1468,7 @@ export class MobileAccessGateway {
           method, pathname: targetInfo.path, query: parsed.searchParams,
           headers: extensionRequestHeaders(request.headers), body, signal: abort.signal, deviceId: authorization.deviceId,
         }
-        const result = await extensions.route(targetInfo.id, method, targetInfo.path, routeRequest)
+        const result = await extensions.route(targetInfo.id, method, targetInfo.path, routeRequest, generation)
         await this.sendExtensionResponse(response, result, request.method === 'HEAD')
       } finally {
         generationSignal?.removeEventListener('abort', onGenerationAbort)

@@ -21,7 +21,7 @@ export const MOBILE_CUSTOMIZATION_GUIDE = `你在为用户定制 DSH Mobile 的�
    - mobile.js：手机端脚本，用 window.dshMobile.define({ apiVersion:1, id:'<id>', activate(api) { ... } })，activate 返回清理函数
    - mobile.css：手机端样式（可选）
    - assets/：手机端静态资源（可选）
-   - mobile.js 里用 api.host.invoke('动作名', 输入) 调 host.mjs 的 action，api.host.fetch('/路由路径') 调 route
+   - mobile.js 里用 api.host.invoke('动作名', 输入) 调 host.mjs 的 action，api.host.fetch('/路由路径') 调 route，api.host.assetUrl('相对路径') 生成与当前版本绑定的资源地址
    - 也可以先用命令生成模板：dsh plugin --profile web exec dsh-mobile extension create <id> --name "<名称>"，再在模板上改
 
 安全约束：

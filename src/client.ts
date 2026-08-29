@@ -42,6 +42,7 @@ interface MobileClientApi {
   readonly host: {
     invoke(action: string, input: unknown): Promise<unknown>
     fetch(path: string, init?: RequestInit): Promise<Response>
+    assetUrl(path: string): string
   }
   readonly ui: {
     registerSurface(surface: MobileSurface): () => void
@@ -968,12 +969,17 @@ function mobileRequest(path: string, init: RequestInit = {}): Promise<Response> 
   return fetch(target, { ...init, headers, credentials: 'same-origin', cache: 'no-store', redirect: 'error' })
 }
 
-/** Combine extension and caller abort lifetimes on WebViews without AbortSignal.any. */
-export function combineClientSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+export interface CombinedClientSignal {
+  readonly signal: AbortSignal
+  readonly cleanup: () => void
+}
+
+/** Combine extension and caller abort lifetimes and expose deterministic listener cleanup. */
+export function combineClientSignalLifetime(first: AbortSignal, second: AbortSignal): CombinedClientSignal {
   if (first.aborted || second.aborted) {
     const aborted = new AbortController()
     aborted.abort(first.aborted ? first.reason : second.reason)
-    return aborted.signal
+    return { signal: aborted.signal, cleanup: () => undefined }
   }
   const controller = new AbortController()
   const cleanup = (): void => {
@@ -984,7 +990,69 @@ export function combineClientSignals(first: AbortSignal, second: AbortSignal): A
   const abortSecond = (): void => { cleanup(); controller.abort(second.reason) }
   first.addEventListener('abort', abortFirst, { once: true })
   second.addEventListener('abort', abortSecond, { once: true })
-  return controller.signal
+  return { signal: controller.signal, cleanup }
+}
+
+/** Combine extension and caller abort lifetimes on WebViews without AbortSignal.any. */
+export function combineClientSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+  return combineClientSignalLifetime(first, second).signal
+}
+
+/** Keep a combined request lifetime until a streamed response is consumed or cancelled. */
+export function bindClientResponseLifetime(response: Response, cleanup: () => void): Response {
+  if (response.body === null) {
+    cleanup()
+    return response
+  }
+  const reader = response.body.getReader()
+  let released = false
+  const release = (): void => {
+    if (released) return
+    released = true
+    cleanup()
+  }
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read()
+        if (result.done) {
+          release()
+          controller.close()
+        } else controller.enqueue(result.value)
+      } catch (error) {
+        release()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason) } finally { release() }
+    },
+  })
+  try {
+    const retained = new Response(body, { headers: response.headers, status: response.status, statusText: response.statusText })
+    Object.defineProperties(retained, {
+      redirected: { configurable: true, value: response.redirected },
+      type: { configurable: true, value: response.type },
+      url: { configurable: true, value: response.url },
+    })
+    return retained
+  } catch (error) {
+    void reader.cancel(error)
+    release()
+    throw error
+  }
+}
+
+/** Dispose an old UI when its replacement Host generation cannot be activated. */
+export function failClosedExtensionGenerationReplacement(
+  hasActive: boolean,
+  activeGeneration: string | undefined,
+  replacementGeneration: string | undefined,
+  dispose: () => void,
+): boolean {
+  if (!hasActive || activeGeneration === replacementGeneration) return false
+  dispose()
+  return true
 }
 
 /** Resolve one SDK route and prove its normalized path remains in the current extension namespace. */
@@ -1007,6 +1075,27 @@ export function extensionRouteUrl(id: string, path: string, baseUrl: string): UR
   const relative = decodedPathname.slice(prefix.length)
   if (relative.split('/').some(part => part === '.' || part === '..')) throw new TypeError('extension routes must be relative')
   return target
+}
+
+/** Resolve one generation-pinned static asset URL in the current extension namespace. */
+export function extensionAssetUrl(id: string, generation: string | undefined, path: string, baseUrl: string): URL {
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(id) || generation !== undefined && !/^[a-f\d]{64}$/u.test(generation)) {
+    throw new TypeError('extension asset path is invalid')
+  }
+  const normalized = path.replaceAll('\\', '/')
+  if (normalized.length === 0 || normalized.startsWith('/') || normalized.split('/').some(part => part === '' || part === '.' || part === '..')) {
+    throw new TypeError('extension asset path is invalid')
+  }
+  const target = new URL(`/mobile-access/extensions/${id}/assets/${normalized.split('/').map(encodeURIComponent).join('/')}`, new URL(baseUrl).origin)
+  if (generation !== undefined) target.searchParams.set('generation', generation)
+  return target
+}
+
+/** Add the immutable Host generation selected for one activated mobile UI. */
+export function extensionGenerationHeaders(generation: string | undefined, headers?: HeadersInit): Headers {
+  const result = new Headers(headers)
+  if (generation !== undefined) result.set('x-dsh-mobile-extension-generation', generation)
+  return result
 }
 
 export function registerUniqueDisposable<T extends { readonly dispose: () => void }>(
@@ -1054,8 +1143,10 @@ export function publishAuthoritativeExtensionIds(
 
 interface MobileExtensionManifestEntry {
   readonly id: string
+  readonly generation?: string
   readonly scriptUrl?: string
   readonly styleUrl?: string
+  readonly assetsUrl?: string
 }
 interface MobileExtensionManifest {
   readonly extensions: readonly MobileExtensionManifestEntry[]
@@ -1078,12 +1169,20 @@ export function parseMobileExtensionManifest(payload: unknown): MobileExtensionM
   const extensions: MobileExtensionManifestEntry[] = []
   for (const value of candidate.extensions) {
     if (typeof value !== 'object' || value === null) return undefined
-    const entry = value as { id?: unknown; scriptUrl?: unknown; styleUrl?: unknown }
+    const entry = value as { id?: unknown; generation?: unknown; scriptUrl?: unknown; styleUrl?: unknown; assetsUrl?: unknown }
     if (typeof entry.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(entry.id) || ids.has(entry.id)) return undefined
+    if (entry.generation !== undefined && (typeof entry.generation !== 'string' || !/^[a-f\d]{64}$/u.test(entry.generation))) return undefined
     if (entry.scriptUrl !== undefined && !validManifestResourceUrl(entry.scriptUrl)) return undefined
     if (entry.styleUrl !== undefined && !validManifestResourceUrl(entry.styleUrl)) return undefined
+    if (entry.assetsUrl !== undefined && !validManifestResourceUrl(entry.assetsUrl)) return undefined
     ids.add(entry.id)
-    extensions.push({ id: entry.id, ...(entry.scriptUrl === undefined ? {} : { scriptUrl: entry.scriptUrl }), ...(entry.styleUrl === undefined ? {} : { styleUrl: entry.styleUrl }) })
+    extensions.push({
+      id: entry.id,
+      ...(entry.generation === undefined ? {} : { generation: entry.generation }),
+      ...(entry.scriptUrl === undefined ? {} : { scriptUrl: entry.scriptUrl }),
+      ...(entry.styleUrl === undefined ? {} : { styleUrl: entry.styleUrl }),
+      ...(entry.assetsUrl === undefined ? {} : { assetsUrl: entry.assetsUrl }),
+    })
   }
   return { extensions, legacy: { scriptRevision: legacy.scriptRevision, styleRevision: legacy.styleRevision } }
 }
@@ -1383,6 +1482,8 @@ function installCustomAssets(): () => void {
   const styleNodes = new Map<string, HTMLStyleElement>()
   const styleEtags = new Map<string, string>()
   const scriptDigests = new Map<string, string>()
+  const activeHostGenerations = new Map<string, string | undefined>()
+  const activationKeys = new Map<string, { readonly definition: MobileClientDefinition; readonly generation?: string }>()
   const manifestExtensionIds = new Set<string>()
   const managedDefinitionIds = new Set<string>()
   let manifestEtag = ''
@@ -1488,11 +1589,11 @@ function installCustomAssets(): () => void {
     }
     throw new Error('native capability is unavailable')
   }
-  const makeApi = (id: string, controller: AbortController, surfaces: Map<string, ExtensionSurfaceEntry>, surfaceIds: Set<string>): MobileClientApi => {
+  const makeApi = (id: string, hostGeneration: string | undefined, controller: AbortController, surfaces: Map<string, ExtensionSurfaceEntry>, surfaceIds: Set<string>): MobileClientApi => {
     const ensureCurrent = (): void => { if (controller.signal.aborted) throw controller.signal.reason }
-    const requestSignal = (signal?: AbortSignal | null): AbortSignal => signal === undefined || signal === null
-      ? controller.signal
-      : combineClientSignals(controller.signal, signal)
+    const requestSignal = (signal?: AbortSignal | null): CombinedClientSignal => signal === undefined || signal === null
+      ? { signal: controller.signal, cleanup: () => undefined }
+      : combineClientSignalLifetime(controller.signal, signal)
     const mountSurface = (surface: MobileSurface): (() => void) => {
       ensureCurrent()
       if (!/^[a-z][a-z0-9-]{0,63}$/u.test(surface.id) || surface.label.length > 120) throw new Error('invalid mobile surface')
@@ -1508,13 +1609,19 @@ function installCustomAssets(): () => void {
       host: {
         invoke: (action: string, input: unknown) => {
           ensureCurrent()
-          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, { method: 'POST', body: JSON.stringify(input ?? {}), signal: controller.signal }).then(async response => { const value = await response.json() as unknown; if (!response.ok) throw new Error(typeof value === 'object' && value !== null && 'error' in value ? String((value as { error: unknown }).error) : `HTTP ${String(response.status)}`); return value })
+          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, { method: 'POST', headers: extensionGenerationHeaders(hostGeneration), body: JSON.stringify(input ?? {}), signal: controller.signal }).then(async response => { const value = await response.json() as unknown; if (!response.ok) throw new Error(typeof value === 'object' && value !== null && 'error' in value ? String((value as { error: unknown }).error) : `HTTP ${String(response.status)}`); return value })
         },
         fetch: (path: string, init?: RequestInit) => {
           ensureCurrent()
           const target = extensionRouteUrl(id, path, location.href)
-          return mobileRequest(target.href, { ...init, signal: requestSignal(init?.signal) })
+          const headers = extensionGenerationHeaders(hostGeneration, init?.headers)
+          const lifetime = requestSignal(init?.signal)
+          return mobileRequest(target.href, { ...init, headers, signal: lifetime.signal }).then(
+            response => bindClientResponseLifetime(response, lifetime.cleanup),
+            error => { lifetime.cleanup(); throw error },
+          )
         },
+        assetUrl: path => { ensureCurrent(); return extensionAssetUrl(id, hostGeneration, path, location.href).href },
       },
       ui: {
         registerSurface: mountSurface,
@@ -1529,9 +1636,15 @@ function installCustomAssets(): () => void {
       signal: controller.signal, document, window,
     }
   }
-  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal, commitGeneration?: () => void): Promise<boolean> => activations.activate(
+  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal, commitGeneration?: () => void, hostGeneration?: string): Promise<boolean> => {
+    const previousKey = activationKeys.get(definition.id)
+    const key = previousKey?.definition === definition && previousKey.generation === hostGeneration
+      ? previousKey
+      : { definition, ...(hostGeneration === undefined ? {} : { generation: hostGeneration }) }
+    activationKeys.set(definition.id, key)
+    return activations.activate(
     definition.id,
-    definition,
+    key,
     cycleSignal,
     controller => {
       const surfaces = new Map<string, ExtensionSurfaceEntry>()
@@ -1546,7 +1659,7 @@ function installCustomAssets(): () => void {
         surfaces.clear()
         surfaceIds.clear()
       }
-      const result = Promise.resolve().then(() => definition.activate(makeApi(definition.id, controller, surfaces, surfaceIds))).then(cleanup => ({
+      const result = Promise.resolve().then(() => definition.activate(makeApi(definition.id, hostGeneration, controller, surfaces, surfaceIds))).then(cleanup => ({
         controller,
         surfaces,
         ...(typeof cleanup === 'function' ? { cleanup } : {}),
@@ -1557,6 +1670,7 @@ function installCustomAssets(): () => void {
         commit: value => {
           if (definitions.get(definition.id) !== definition || controller.signal.aborted) throw new Error('stale mobile extension activation')
           for (const surface of value.surfaces.values()) surface.host().append(surface.container)
+          activeHostGenerations.set(definition.id, hostGeneration)
           commitGeneration?.()
         },
         dispose: value => {
@@ -1565,7 +1679,8 @@ function installCustomAssets(): () => void {
         },
       }
     },
-  )
+    )
+  }
   const define = (definition: MobileClientDefinition): void => {
     if (disposed || definition.apiVersion !== 1 || !/^[a-z][a-z0-9-]{0,63}$/u.test(definition.id) || typeof definition.activate !== 'function') return
     if (expectedDefinitionId !== undefined && definition.id !== expectedDefinitionId) return
@@ -1614,7 +1729,7 @@ function installCustomAssets(): () => void {
   let legacyStyleRevision = ''
   const disposeManifestExtension = (id: string): void => {
     activations.remove(id)
-    styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id)
+    styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id); activeHostGenerations.delete(id); activationKeys.delete(id)
     if (managedDefinitionIds.delete(id)) definitions.delete(id)
   }
   const managedManifestIdSources = (): readonly Iterable<string>[] => [styleNodes.keys(), styleEtags.keys(), scriptDigests.keys(), managedDefinitionIds]
@@ -1669,6 +1784,8 @@ function installCustomAssets(): () => void {
         if (etag !== undefined && etag !== '') styleEtags.set(id, etag)
       }
       for (const entry of entries) {
+        const hadActiveGeneration = activations.hasActive(entry.id)
+        const previousHostGeneration = activeHostGenerations.get(entry.id)
         let previousDefinition: MobileClientDefinition | undefined
         let evaluatedDefinition = false
         try {
@@ -1695,6 +1812,7 @@ function installCustomAssets(): () => void {
             if (refreshAborted(signal)) return false
             commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag)
             activations.remove(entry.id)
+            activeHostGenerations.delete(entry.id)
             scriptDigests.delete(entry.id)
             if (managedDefinitionIds.delete(entry.id)) definitions.delete(entry.id)
           } else {
@@ -1731,8 +1849,8 @@ function installCustomAssets(): () => void {
             const definition = definitions.get(entry.id)
             const commitGeneration = (): void => { commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag) }
             if (definition === undefined) throw new Error('mobile extension definition is unavailable')
-            if (evaluatedDefinition || !activations.hasActive(entry.id)) {
-              if (!await activateDefinition(definition, signal, commitGeneration)) throw new Error('mobile extension activation failed')
+            if (evaluatedDefinition || !activations.hasActive(entry.id) || activeHostGenerations.get(entry.id) !== entry.generation) {
+              if (!await activateDefinition(definition, signal, commitGeneration, entry.generation)) throw new Error('mobile extension activation failed')
             } else {
               if (refreshAborted(signal)) return false
               commitGeneration()
@@ -1745,6 +1863,12 @@ function installCustomAssets(): () => void {
             if (previousDefinition === undefined) definitions.delete(entry.id)
             else definitions.set(entry.id, previousDefinition)
           }
+          failClosedExtensionGenerationReplacement(
+            hadActiveGeneration,
+            previousHostGeneration,
+            entry.generation,
+            () => { disposeManifestExtension(entry.id) },
+          )
           refreshComplete = false
         }
       }
