@@ -56,6 +56,26 @@ internal class CameraCleanupOwnership<T> {
     }
 }
 
+/** Single temporary provider grant owned by the active file-picker result. */
+internal class TemporaryGrantOwnership<T> {
+    private var grant: T? = null
+
+    fun claim(value: T?) {
+        if (value == null) return
+        check(grant == null) { "temporary grant is already owned" }
+        grant = value
+    }
+
+    /** Releases only the expected grant, so stale callbacks cannot revoke a newer result. */
+    fun release(expected: T): T? {
+        if (grant != expected) return null
+        return grant.also { grant = null }
+    }
+
+    /** Releases the active grant when its request is abandoned without a matching callback. */
+    fun releaseAny(): T? = grant.also { grant = null }
+}
+
 internal enum class RestoredOperationDisposition {
     CLEANUP_ONLY,
 }

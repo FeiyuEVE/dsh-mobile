@@ -73,6 +73,13 @@ internal class NativeBridge(
         val pending: Pending?,
         val cameraFile: File?,
         val cameraUris: List<Uri>,
+        val pickerUri: Uri?,
+    )
+
+    private data class DisposedTemporaryResources(
+        val cameraFiles: List<File>,
+        val cameraUris: List<Uri>,
+        val pickerUri: Uri?,
     )
 
     private class PayloadTooLargeException : Exception()
@@ -94,6 +101,7 @@ internal class NativeBridge(
     private var processingTarget: ActivityResultTarget? = null
     private var restoredOperation: RestoredOperation? = null
     private val cameraCleanupOwnership = CameraCleanupOwnership<File>()
+    private val pickerGrantOwnership = TemporaryGrantOwnership<Uri>()
     @Volatile private var installed = false
     @Volatile private var preservingForConfiguration = false
 
@@ -165,7 +173,7 @@ internal class NativeBridge(
      * state. This non-configuration snapshot supersedes the earlier saved-state copy.
      */
     fun handoffForConfiguration(): Bundle? {
-        val state = synchronized(requestLock) {
+        val (state, pickerUri) = synchronized(requestLock) {
             preservingForConfiguration = true
             val snapshot = stateBundleLocked(markSnapshot = true) ?: cameraCleanupOwnership.takeDeferredForHandoff()?.let { file ->
                 operationStateBundle(
@@ -178,8 +186,9 @@ internal class NativeBridge(
                 )
             }
             cancelActivityTimeoutLocked()
-            snapshot
+            snapshot to pickerGrantOwnership.releaseAny()
         }
+        revokePickerGrant(pickerUri)
         ioExecutor.shutdownNow()
         return state
     }
@@ -236,7 +245,7 @@ internal class NativeBridge(
         onPageBackgroundColor = null
         onScrollDirection = null
 
-        val (temporaryCameraFiles, temporaryCameraUris) = synchronized(requestLock) {
+        val temporaryResources = synchronized(requestLock) {
             cancelActivityTimeoutLocked()
             activityDeadlineRequestId = null
             activityDeadlineMillis = null
@@ -245,7 +254,11 @@ internal class NativeBridge(
             } else null
             pending.keys().filter { it != preservedId }.forEach { pending.remove(it) }
             if (preservingForConfiguration) {
-                cameraCleanupOwnership.onDispose(null, true) to emptyList()
+                DisposedTemporaryResources(
+                    cameraCleanupOwnership.onDispose(null, true),
+                    emptyList(),
+                    pickerGrantOwnership.releaseAny(),
+                )
             } else {
                 pending.clear()
                 activityRequestId = null
@@ -257,25 +270,40 @@ internal class NativeBridge(
                 val uris = listOfNotNull(cameraOutputUri, processing?.cameraUri, restored?.cameraUri).distinct()
                 cameraOutputFile = null
                 cameraOutputUri = null
-                cameraCleanupOwnership.onDispose(activeFile, false) to uris
+                DisposedTemporaryResources(
+                    cameraCleanupOwnership.onDispose(activeFile, false),
+                    uris,
+                    pickerGrantOwnership.releaseAny(),
+                )
             }
         }
-        temporaryCameraUris.forEach(::revokeCameraGrant)
-        temporaryCameraFiles.forEach { it.delete() }
+        temporaryResources.cameraUris.forEach(::revokeCameraGrant)
+        revokePickerGrant(temporaryResources.pickerUri)
+        temporaryResources.cameraFiles.forEach { it.delete() }
         ioExecutor.shutdownNow()
     }
 
     /** Forward Activity Result callbacks for bridge-owned system pickers. */
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
         if (!isBridgeRequestCode(requestCode)) return false
-        if (preservingForConfiguration) return true
+        val pickerResultUri = data?.data.takeIf { requestCode == FILE_REQUEST }
+        if (preservingForConfiguration) {
+            revokePickerGrant(pickerResultUri)
+            return true
+        }
         takeRestoredOperation(requestCode)?.let { restored ->
+            revokePickerGrant(pickerResultUri)
             cleanupRestoredOperation(restored)
             return true
         }
-        val target = takeActivityResult(requestCode, data?.data) ?: return true
+        val target = takeActivityResult(requestCode, data?.data)
+        if (target == null) {
+            revokePickerGrant(pickerResultUri)
+            return true
+        }
         revokeCameraGrant(target.cameraUri)
         if (resultCode != Activity.RESULT_OK) {
+            revokePickerGrant(takePickerGrant(target))
             finishPending(
                 target.requestId,
                 errorJson("cancelled", "operation cancelled", target.requestId),
@@ -451,13 +479,15 @@ internal class NativeBridge(
             cameraOutputUri = null
             val call = pending.remove(requestId)
             val deleteNow = cameraCleanupOwnership.onTerminal(file)
+            val pickerUri = pickerGrantOwnership.releaseAny()
             cancelActivityTimeoutLocked()
             activityDeadlineRequestId = null
             activityDeadlineMillis = null
-            TimedOutOperation(call, deleteNow, uris)
+            TimedOutOperation(call, deleteNow, uris, pickerUri)
         }
 
         terminal.cameraUris.forEach(::revokeCameraGrant)
+        revokePickerGrant(terminal.pickerUri)
         terminal.cameraFile?.delete()
         terminal.pending?.let { call ->
             val body = errorJson("timeout", "native interaction timed out", requestId)
@@ -554,6 +584,7 @@ internal class NativeBridge(
         activityRequestId = null
         val file = if (requestCode == CAMERA_REQUEST) cameraOutputFile.also { cameraOutputFile = null } else null
         val uri = if (requestCode == CAMERA_REQUEST) cameraOutputUri.also { cameraOutputUri = null } else null
+        if (requestCode == FILE_REQUEST) pickerGrantOwnership.claim(resultUri)
         ActivityResultTarget(
             requestId,
             expectedAction,
@@ -571,8 +602,8 @@ internal class NativeBridge(
         }
         runCatching {
             ioExecutor.execute {
-                if (!mayProcessTarget(target)) return@execute
                 try {
+                    if (!mayProcessTarget(target)) return@execute
                     val body = when (target.action) {
                         "files.pick" -> fileJson(target.requestId, target.resultUri)
                         else -> cameraJson(target.requestId, target.cameraFile)
@@ -595,9 +626,12 @@ internal class NativeBridge(
                             target.cameraFile,
                         )
                     }
+                } finally {
+                    revokePickerGrant(takePickerGrant(target))
                 }
             }
         }.onFailure {
+            revokePickerGrant(takePickerGrant(target))
             if (mayProcessTarget(target)) {
                 finishPending(
                     target.requestId,
@@ -635,9 +669,10 @@ internal class NativeBridge(
 
     private fun startFilePicker(input: JSONObject) {
         val mimeTypes = acceptedMimeTypes(input.opt("accept"))
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            // The bridge imports one payload immediately and never requests persistable document access.
+            addFlags(FILE_PICKER_GRANT_FLAGS)
             type = if (mimeTypes.size == 1) mimeTypes.single() else "*/*"
             if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
         }
@@ -682,6 +717,17 @@ internal class NativeBridge(
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
+    }
+
+    private fun takePickerGrant(target: ActivityResultTarget): Uri? {
+        val uri = target.resultUri ?: return null
+        if (target.action != "files.pick") return null
+        return synchronized(requestLock) { pickerGrantOwnership.release(uri) }
+    }
+
+    private fun revokePickerGrant(uri: Uri?) {
+        if (uri == null) return
+        runCatching { activity.revokeUriPermission(uri, FILE_PICKER_GRANT_FLAGS) }
     }
 
     private fun finishPending(requestId: String, body: String, cleanupCameraFile: File? = null) {
@@ -974,6 +1020,7 @@ internal class NativeBridge(
         private const val FILE_REQUEST = 5101
         private const val CAMERA_REQUEST = 5102
         const val CAMERA_PERMISSION_REQUEST = 5103
+        private const val FILE_PICKER_GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION
         private const val CAMERA_CACHE_DIRECTORY = "native-camera"
         private const val STATE_REQUEST_ID = "requestId"
         private const val STATE_ACTION = "action"

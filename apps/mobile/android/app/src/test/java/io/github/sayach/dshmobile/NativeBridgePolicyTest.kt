@@ -145,6 +145,28 @@ class NativeBridgePolicyTest {
     }
 
     @Test
+    fun temporaryGrantIsReleasedExactlyOnceByItsOwningResult() {
+        val ownership = TemporaryGrantOwnership<String>()
+        ownership.claim("content://provider/selected")
+
+        assertNull(ownership.release("content://provider/stale"))
+        assertEquals("content://provider/selected", ownership.release("content://provider/selected"))
+        assertNull(ownership.release("content://provider/selected"))
+        assertNull(ownership.releaseAny())
+    }
+
+    @Test
+    fun abandonedTemporaryGrantCanBeDrainedWithoutAResultCallback() {
+        val ownership = TemporaryGrantOwnership<String>()
+        ownership.claim(null)
+        assertNull(ownership.releaseAny())
+
+        ownership.claim("content://provider/late")
+        assertEquals("content://provider/late", ownership.releaseAny())
+        assertNull(ownership.releaseAny())
+    }
+
+    @Test
     fun exactOriginRejectsHostPrefixAndPortChanges() {
         val origin = GatewayOrigin.parse("https://trusted.example:3443")!!
         assertTrue(GatewayUrlPolicy.isSameOrigin(origin, "https://trusted.example:3443/session"))
