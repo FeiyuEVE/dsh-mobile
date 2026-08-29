@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rewriteMobileIndex } from '../src/gateway.js'
-import { MOBILE_LAYOUT_STYLES } from '../src/mobile-layout.js'
+import { MOBILE_LAYOUT_MESSAGES, MOBILE_LAYOUT_STYLES, resolveMobileLayoutLanguage } from '../src/mobile-layout.js'
 
 function index(entries: unknown[]): string {
   return `<!doctype html><html><head><script>window.__DSH_BOOT__ = ${JSON.stringify({ rev: 'stock', entries })};</script></head><body></body></html>`
@@ -121,6 +121,19 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('window.__DSH_MOBILE_FRONTEND__="dedicated"')
     expect(output).toContain('globalThis["__DSH_BOOT__"] = {')
     expect(output).toContain('"url":"/mobile-access/mobile-layout.js"')
+  })
+
+  it('selects and localizes the dedicated layout language', () => {
+    expect(resolveMobileLayoutLanguage('it-IT', 'zh-CN', ['en-US'])).toBe('it')
+    expect(resolveMobileLayoutLanguage('', 'zh-CN', ['en-US'])).toBe('zh')
+    expect(resolveMobileLayoutLanguage('fr', '', ['en-GB'])).toBe('en')
+    expect(resolveMobileLayoutLanguage('', '', ['fr-FR'])).toBe('en')
+    expect(MOBILE_LAYOUT_MESSAGES.it).toEqual({
+      closePanels: 'Chiudi pannelli',
+      workspaceNavigation: 'Navigazione area di lavoro e sessioni',
+    })
+    expect(MOBILE_LAYOUT_MESSAGES.en.closePanels).toBe('Close panels')
+    expect(MOBILE_LAYOUT_MESSAGES.zh.workspaceNavigation).toBe('工作区与会话导航')
   })
 
   it('adapts stable DSH question surfaces for touch screens', () => {

@@ -655,6 +655,25 @@ describe('HTTP gateway', () => {
     expect(reset.status).toBe(200)
   })
 
+  it('never trusts X-Forwarded-For for pairing rate-limit identity', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port, { maxPairingAttempts: 2 })
+    const statuses: number[] = []
+    for (const forwarded of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
+      const attempted = await request(instance.address().port, '/mobile-access/auth/pair', {
+        method: 'POST',
+        headers: {
+          ...browserHeaders(instance),
+          'content-type': 'application/json',
+          'x-forwarded-for': forwarded,
+        },
+        body: JSON.stringify({ token: 'invalid' }),
+      })
+      statuses.push(attempted.status)
+    }
+    expect(statuses).toEqual([401, 401, 429])
+  })
+
   it('discovers one instance and renews a native long-lived device credential', async () => {
     const inner = await upstream()
     const instanceId = 'a'.repeat(64)

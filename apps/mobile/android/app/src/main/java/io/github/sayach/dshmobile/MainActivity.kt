@@ -62,6 +62,18 @@ class MainActivity : Activity() {
         val caCertificate: ByteArray?,
     )
 
+    private data class DeferredBridgeResult(
+        val requestCode: Int,
+        val resultCode: Int,
+        val data: Intent?,
+    )
+
+    private data class RetainedBridgeHandoff(
+        val bridgeState: Bundle?,
+        val deferredResult: DeferredBridgeResult?,
+        val deferredPermission: IntArray?,
+    )
+
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
     private val lanCredentialStore by lazy { DeviceCredentialStore(this, "lan") }
     private val remoteCredentialStore by lazy { DeviceCredentialStore(this, "remote") }
@@ -71,6 +83,9 @@ class MainActivity : Activity() {
     private var webView: WebView? = null
     private var secureWebViewClient: SecureWebViewClient? = null
     private var nativeBridge: NativeBridge? = null
+    private var restoredNativeBridgeState: Bundle? = null
+    private var deferredBridgeResult: DeferredBridgeResult? = null
+    private var deferredBridgePermission: IntArray? = null
     private var gatewayOrigin: GatewayOrigin? = null
     private var accessMode = AccessMode.LAN
     private var setupBackAction: (() -> Unit)? = null
@@ -98,6 +113,22 @@ class MainActivity : Activity() {
         configureEdgeToEdgeWindow(window)
         applyStatusBarIconContrast(window, getColor(R.color.app_background))
         nearbyPermissionLimited = preferences.getBoolean(PREFERENCE_NEARBY_PERMISSION_LIMITED, false)
+        val retainedHandoff = lastNonConfigurationInstance as? RetainedBridgeHandoff
+        restoredNativeBridgeState = retainedHandoff?.bridgeState
+            ?: savedInstanceState?.getBundle(STATE_NATIVE_BRIDGE)
+        if (retainedHandoff != null) {
+            deferredBridgeResult = retainedHandoff.deferredResult
+            deferredBridgePermission = retainedHandoff.deferredPermission
+        } else {
+            savedInstanceState?.getInt(STATE_DEFERRED_BRIDGE_REQUEST, -1)?.takeIf { it >= 0 }?.let { requestCode ->
+                deferredBridgeResult = DeferredBridgeResult(
+                    requestCode,
+                    savedInstanceState.getInt(STATE_DEFERRED_BRIDGE_RESULT),
+                    @Suppress("DEPRECATION") savedInstanceState.getParcelable(STATE_DEFERRED_BRIDGE_DATA),
+                )
+            }
+            deferredBridgePermission = savedInstanceState?.getIntArray(STATE_DEFERRED_BRIDGE_PERMISSION)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
@@ -118,8 +149,21 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_SHOWING_SETUP, showingSetup)
         outState.putString(STATE_ACCESS_MODE, accessMode.name)
+        (nativeBridge?.saveState() ?: restoredNativeBridgeState)?.let { outState.putBundle(STATE_NATIVE_BRIDGE, it) }
+        deferredBridgeResult?.let { result ->
+            outState.putInt(STATE_DEFERRED_BRIDGE_REQUEST, result.requestCode)
+            outState.putInt(STATE_DEFERRED_BRIDGE_RESULT, result.resultCode)
+            outState.putParcelable(STATE_DEFERRED_BRIDGE_DATA, result.data)
+        }
+        deferredBridgePermission?.let { outState.putIntArray(STATE_DEFERRED_BRIDGE_PERMISSION, it) }
         super.onSaveInstanceState(outState)
     }
+
+    override fun onRetainNonConfigurationInstance(): Any = RetainedBridgeHandoff(
+        bridgeState = nativeBridge?.handoffForConfiguration() ?: restoredNativeBridgeState,
+        deferredResult = deferredBridgeResult,
+        deferredPermission = deferredBridgePermission?.copyOf(),
+    )
 
     @Deprecated("Activity back dispatch is retained for Android 12 and earlier.")
     override fun onBackPressed() {
@@ -129,6 +173,10 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (nativeBridge?.onActivityResult(requestCode, resultCode, data) == true) return
+        if (NativeBridge.isBridgeRequestCode(requestCode)) {
+            deferredBridgeResult = DeferredBridgeResult(requestCode, resultCode, data)
+            return
+        }
         when (requestCode) {
             FILE_CHOOSER_REQUEST -> finishFileSelection(resultCode, data)
             DOWNLOAD_DESTINATION_REQUEST -> finishDownloadSelection(resultCode, data)
@@ -138,6 +186,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        nativeBridge?.onHostResumed()
         webView?.onResume()
     }
 
@@ -155,7 +204,11 @@ class MainActivity : Activity() {
         uploadCallback?.onReceiveValue(null)
         uploadCallback = null
         retryUrl = null
-        destroyWebView()
+        destroyWebView(isChangingConfigurations)
+        if (!isChangingConfigurations) {
+            restoredNativeBridgeState?.let { NativeBridge.disposeSavedState(this, it) }
+            restoredNativeBridgeState = null
+        }
         ioExecutor.shutdownNow()
         restoreExecutor.shutdownNow()
         super.onDestroy()
@@ -889,6 +942,11 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (nativeBridge?.onRequestPermissionsResult(requestCode, grantResults) == true) return
+        if (requestCode == NativeBridge.CAMERA_PERMISSION_REQUEST) {
+            deferredBridgePermission = grantResults.copyOf()
+            return
+        }
         when (requestCode) {
             NEARBY_WIFI_REQUEST -> {
                 val retry = pendingScan
@@ -1169,6 +1227,7 @@ class MainActivity : Activity() {
             openExternal = ::openExternal,
             onBlocked = { toastError(R.string.blocked_navigation) },
             onFailure = ::showLoadFailure,
+            onTopLevelUrlChanged = { nativeBridge?.onTopLevelNavigation(it) },
             onLoaded = {
                 if (webView === browser && gatewayOrigin == origin) {
                     retryUrl = origin.serialized
@@ -1196,13 +1255,20 @@ class MainActivity : Activity() {
             }
         }
         nativeBridge?.dispose()
-        nativeBridge = NativeBridge(this, browser, origin).also { bridge ->
+        val bridgeState = restoredNativeBridgeState.also { restoredNativeBridgeState = null }
+        nativeBridge = NativeBridge(this, browser, origin, bridgeState).also { bridge ->
             bridge.onPageBackgroundColor = { color ->
                 statusBarBackdrop.setBackgroundColor(color)
                 applyStatusBarIconContrast(window, color)
                 preferences.edit().putInt(PREFERENCE_WEB_CHROME_COLOR, color).apply()
             }
             bridge.install()
+            deferredBridgeResult?.let { result ->
+                if (bridge.onActivityResult(result.requestCode, result.resultCode, result.data)) deferredBridgeResult = null
+            }
+            deferredBridgePermission?.let { grants ->
+                if (bridge.onRequestPermissionsResult(NativeBridge.CAMERA_PERMISSION_REQUEST, grants)) deferredBridgePermission = null
+            }
         }
         nativeBridge?.onScrollDirection = { direction -> animateToolbar(direction, bar, loading) }
         browser.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -1491,10 +1557,10 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun destroyWebView() {
+    private fun destroyWebView(changingConfigurations: Boolean = false) {
         secureWebViewClient?.dispose()
         secureWebViewClient = null
-        nativeBridge?.dispose()
+        nativeBridge?.dispose(changingConfigurations)
         nativeBridge = null
         webView?.apply {
             stopLoading()
@@ -1634,6 +1700,11 @@ class MainActivity : Activity() {
         const val PREFERENCE_WEB_CHROME_COLOR = "web_chrome_color"
         const val STATE_SHOWING_SETUP = "showing_setup"
         const val STATE_ACCESS_MODE = "access_mode"
+        const val STATE_NATIVE_BRIDGE = "native_bridge"
+        const val STATE_DEFERRED_BRIDGE_REQUEST = "deferred_bridge_request"
+        const val STATE_DEFERRED_BRIDGE_RESULT = "deferred_bridge_result"
+        const val STATE_DEFERRED_BRIDGE_DATA = "deferred_bridge_data"
+        const val STATE_DEFERRED_BRIDGE_PERMISSION = "deferred_bridge_permission"
         const val FILE_CHOOSER_REQUEST = 4101
         const val DOWNLOAD_DESTINATION_REQUEST = 4102
         const val SCAN_CAMERA_REQUEST = 4103

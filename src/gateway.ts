@@ -691,11 +691,15 @@ function mobileBootBatchKey(pathname: string): string | undefined {
   return match?.[1]
 }
 
-async function readBoundedBody(request: IncomingMessage, maximum: number): Promise<Buffer> {
+function assertBoundedContentLength(request: IncomingMessage, maximum: number): void {
   const declared = request.headers['content-length']
   if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > maximum)) {
     throw new HttpError(413, 'payload_too_large')
   }
+}
+
+async function readBoundedBody(request: IncomingMessage, maximum: number): Promise<Buffer> {
+  assertBoundedContentLength(request, maximum)
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of request) {
@@ -1390,7 +1394,8 @@ export class MobileAccessGateway {
     }
     if (targetInfo.kind === 'action') {
       if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
-      const body = await readJsonObject(request, 1024 * 1024)
+      const maximum = 1024 * 1024
+      assertBoundedContentLength(request, maximum)
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
@@ -1398,6 +1403,7 @@ export class MobileAccessGateway {
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
+        const body = await readJsonObject(request, maximum)
         const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId })
         let serialized: Buffer
         try { serialized = Buffer.from(JSON.stringify(result)) } catch { throw new MobileExtensionError('extension_failed', 'extension action failed', 500) }
@@ -1412,7 +1418,8 @@ export class MobileAccessGateway {
     if (targetInfo.kind === 'route') {
       const method = request.method ?? 'GET'
       if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new HttpError(405, 'method_not_allowed')
-      const body = method === 'GET' || method === 'HEAD' ? Buffer.alloc(0) : await readBoundedBody(request, this.config.maxBodyBytes)
+      const hasBody = method !== 'GET' && method !== 'HEAD'
+      if (hasBody) assertBoundedContentLength(request, this.config.maxBodyBytes)
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
@@ -1420,6 +1427,7 @@ export class MobileAccessGateway {
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
+        const body = hasBody ? await readBoundedBody(request, this.config.maxBodyBytes) : Buffer.alloc(0)
         const parsed = new URL(target.raw, this.address().origin)
         const routeRequest: MobileRouteRequest = {
           method, pathname: targetInfo.path, query: parsed.searchParams,

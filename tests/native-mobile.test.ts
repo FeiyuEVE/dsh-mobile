@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NATIVE_MOBILE_STYLES, shouldAutoLoadEarlier } from '../src/native-mobile.js'
+import { applyNativeMobileLanguageMarker, dispatchComposerImageDrop, installNativeMobileSurface, isComposerMediaOriginCurrent, NATIVE_MOBILE_STYLES, preflightComposerImageDrop, resolveNativeMobileLanguage, shouldAutoLoadEarlier } from '../src/native-mobile.js'
 
 describe('native mobile presentation', () => {
   it('keeps touch focus quiet without removing keyboard focus globally', () => {
@@ -41,7 +41,8 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-composer-card] ~ * [class*="_root"]')
     expect(NATIVE_MOBILE_STYLES).toContain('white-space:normal !important; overflow:visible !important')
     expect(NATIVE_MOBILE_STYLES).toContain('margin-bottom:-6px !important')
-    expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-attach')
+    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-button')
+    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-menu[hidden] { display:none; }')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-row] { display:grid !important; grid-template-columns:max-content minmax(0,1fr) !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 0 !important')
@@ -52,6 +53,95 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_rowActions"] { flex:0 0 auto !important; flex-wrap:nowrap !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_rowActions"] button { flex:none !important; width:auto !important; min-width:44px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('white-space:nowrap !important; word-break:keep-all !important; writing-mode:horizontal-tb !important')
+  })
+
+  it('preflights the official document DnD contract and drops only when it reports copy', () => {
+    const file = new File(['image'], 'image.png', { type: 'image/png' })
+    let canCopy = false
+    const events: DragEvent[] = []
+    const target = {
+      dispatchEvent(event: Event): boolean {
+        const drag = event as DragEvent
+        events.push(drag)
+        if (drag.type === 'dragover') {
+          drag.preventDefault()
+          if (canCopy && drag.dataTransfer !== null) drag.dataTransfer.dropEffect = 'copy'
+        }
+        return !drag.defaultPrevented
+      },
+    }
+
+    expect(preflightComposerImageDrop(target, [file])).toBe(false)
+    expect(events.at(-1)?.defaultPrevented).toBe(true)
+    events.length = 0
+    expect(dispatchComposerImageDrop(target, [file])).toBe(false)
+    expect(events.map(event => event.type)).toEqual(['dragover'])
+
+    canCopy = true
+    expect(preflightComposerImageDrop(target, [file])).toBe(true)
+    events.length = 0
+    expect(dispatchComposerImageDrop(target, [file])).toBe(true)
+    expect(events.map(event => event.type)).toEqual(['dragover', 'drop'])
+    expect([...(events[1]?.dataTransfer?.files ?? [])]).toEqual([file])
+  })
+
+  it('rejects asynchronous media results after session, composer, or lifecycle changes', () => {
+    const composer = {}
+    const sessionRoot = {}
+    const origin = { generation: 2, href: 'https://dsh.test/session', composer, sessionRoot, sessionId: 'session-a' }
+    const current = { ...origin, disposed: false, composerConnected: true }
+    expect(isComposerMediaOriginCurrent(origin, current)).toBe(true)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, sessionId: 'session-b' })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, composer: {} })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, generation: 3 })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, disposed: true })).toBe(false)
+    expect(isComposerMediaOriginCurrent(origin, { ...current, composerConnected: false })).toBe(false)
+    expect(isComposerMediaOriginCurrent({ ...origin, sessionRoot: null, sessionId: null }, { ...current, sessionRoot: null, sessionId: null })).toBe(false)
+  })
+
+  it('resolves the selected media language and marks it independently from document lang', () => {
+    expect(resolveNativeMobileLanguage('it-IT', 'zh-CN', ['en-US'])).toBe('it')
+    expect(resolveNativeMobileLanguage('', 'zh-CN', ['en-US'])).toBe('zh')
+    expect(resolveNativeMobileLanguage('fr', '', ['de-DE', 'en-GB'])).toBe('en')
+    expect(resolveNativeMobileLanguage('fr', '', ['de-DE'])).toBe('en')
+
+    const selected = resolveNativeMobileLanguage('zh-CN', 'en-US', ['en-US'])
+    const root = { dataset: {} as DOMStringMap }
+    const restore = applyNativeMobileLanguageMarker(root, selected)
+    expect(root.dataset.dshMobileLanguage).toBe('zh')
+    restore()
+    expect(root.dataset.dshMobileLanguage).toBeUndefined()
+    expect(NATIVE_MOBILE_STYLES).toContain('html[data-dsh-mobile-language="zh"]')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('html:lang(zh)')
+  })
+
+  it('hardens picker cleanup, menu focus, and composer state observation', () => {
+    const source = installNativeMobileSurface.toString()
+    expect(source).toContain('input.addEventListener("change", onChange)')
+    expect(source).toContain('input.addEventListener("cancel", cleanup)')
+    expect(source).toContain('window.addEventListener("focus", scheduleCleanup)')
+    expect(source).toContain('document.addEventListener("visibilitychange", onVisibilityChange)')
+    expect(source).toContain('signal.addEventListener("abort", cleanup')
+    expect(source).toMatch(/window\.setTimeout\(cleanup, (?:300_000|3e5)\)/u)
+    expect(source).toContain('if (cleaned) return')
+    expect(source).toContain('fileButton.focus({ preventScroll: true })')
+    expect(source).toContain('event.key === "Escape"')
+    expect(source).toContain('event.key !== "Tab"')
+    expect(source).toContain('closeMediaMenu(true)')
+    expect(source).toContain('!mediaButton.contains(event.target)) closeMediaMenu()')
+    expect(source).toContain('"readonly"')
+    expect(source).toContain('"aria-busy"')
+    expect(source).toContain('"aria-selected"')
+    expect(source).toContain('mediaButton.lang = language')
+    expect(source).toContain('mediaMenu.lang = language')
+    expect(source).toContain('backdrop.lang = language')
+    expect(source).toContain('branchToast.lang = language')
+    expect(source).toContain('mediaToast.lang = language')
+    expect(source).toContain('dispatchComposerImageDrop(document, files)')
+    expect(source).toContain('const attachmentBlocked = !canAcceptComposerDrop()')
+    expect(source).toContain('label("Allegati immagine non disponibili", "Image attachments are unavailable", "图片附件不可用")')
+    expect(source).not.toContain('AttachmentOwner')
+    expect(source).toContain('label("Ramo corrente", "Current branch", "当前分支")')
   })
 
   it('loads older history only after an upward scroll reaches the top zone', () => {

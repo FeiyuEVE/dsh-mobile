@@ -32,6 +32,10 @@ internal fun loadFailureForHttpStatus(status: Int): LoadFailure = when (status) 
 internal fun webViewLoadTimeoutMs(host: String): Long =
     if (RemoteHostPolicy.isSupported(host)) 30_000L else 15_000L
 
+/** Subframes may load only resources and documents from the authenticated gateway. */
+internal fun shouldBlockSubframeNavigation(origin: GatewayOrigin, candidate: String): Boolean =
+    !GatewayUrlPolicy.isSameOrigin(origin, candidate)
+
 /** Enforces exact-origin navigation and optionally accepts the LAN pairing CA. */
 internal class SecureWebViewClient(
     private val origin: GatewayOrigin,
@@ -39,6 +43,7 @@ internal class SecureWebViewClient(
     private val openExternal: (Uri) -> Unit,
     private val onBlocked: () -> Unit,
     private val onFailure: (LoadFailure) -> Unit,
+    private val onTopLevelUrlChanged: (String) -> Unit,
     private val onLoaded: () -> Unit,
 ) : WebViewClient() {
     private val handler = Handler(Looper.getMainLooper())
@@ -50,8 +55,8 @@ internal class SecureWebViewClient(
     }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        if (!request.isForMainFrame) return false
         val candidate = request.url.toString()
+        if (!request.isForMainFrame) return shouldBlockSubframeNavigation(origin, candidate)
         if (GatewayUrlPolicy.isSameOrigin(origin, candidate)) return false
         if (request.hasGesture() && GatewayUrlPolicy.isExternalHttps(candidate)) {
             openExternal(request.url)
@@ -62,6 +67,7 @@ internal class SecureWebViewClient(
     }
 
     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+        onTopLevelUrlChanged(url)
         if (url != "about:blank" && !GatewayUrlPolicy.isSameOrigin(origin, url)) {
             clearTimeout()
             view.stopLoading()

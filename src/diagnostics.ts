@@ -6,11 +6,29 @@ import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from './version.js'
 const execFile = promisify(execFileCallback)
 
 export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'info'
+export type DiagnosticReason =
+  | 'versions-current'
+  | 'network-unavailable' | 'network-interface' | 'network-fixed'
+  | 'lan-ready' | 'lan-off'
+  | 'firewall-ready' | 'firewall-missing' | 'firewall-unknown'
+  | 'remote-off' | 'remote-ready' | 'remote-rate-limited' | 'remote-fake-ip' | 'remote-unreachable'
+  | 'remote-needs-login' | 'remote-connecting' | 'remote-controller-error'
+  | 'phone-network-unknown'
 
-/** One user-facing diagnostic result with an optional shortest recovery action. */
+export interface DiagnosticFacts {
+  readonly provider?: 'tailscale' | 'cpolar'
+  readonly latencyMs?: number
+  readonly interfaceName?: string
+  readonly endpointSuffix?: string
+  readonly controllerCode?: string
+}
+
+/** One user-facing diagnostic result with stable localization data and server fallback copy. */
 export interface DiagnosticCheck {
   readonly id: string
   readonly status: DiagnosticStatus
+  readonly reason: DiagnosticReason
+  readonly facts?: DiagnosticFacts
   readonly label: string
   readonly detail: string
   readonly action?: string
@@ -91,11 +109,13 @@ const REMOTE_ERROR_GUIDANCE: Readonly<Record<string, string>> = Object.freeze({
 function check(
   id: string,
   status: DiagnosticStatus,
+  reason: DiagnosticReason,
   label: string,
   detail: string,
   action?: string,
+  facts?: DiagnosticFacts,
 ): DiagnosticCheck {
-  return Object.freeze({ id, status, label, detail, ...(action === undefined ? {} : { action }) })
+  return Object.freeze({ id, status, reason, ...(facts === undefined ? {} : { facts: Object.freeze(facts) }), label, detail, ...(action === undefined ? {} : { action }) })
 }
 
 function maskLanOrigin(origin: string | undefined): string {
@@ -209,76 +229,93 @@ export async function collectConnectionDiagnostics(
   checks.push(check(
     'versions',
     'ok',
+    'versions-current',
     '版本兼容',
     `插件 ${DSH_MOBILE_VERSION}，DSH ${snapshot.dshVersion}，Android App 最低 ${MINIMUM_ANDROID_APP_VERSION}。`,
   ))
 
   if (snapshot.lan.networkError !== undefined) {
-    checks.push(check('network', 'error', '局域网网卡', '已保存的网卡当前不可用。', '重新运行 dsh-mobile setup。'))
+    checks.push(check('network', 'error', 'network-unavailable', '局域网网卡', '已保存的网卡当前不可用。', '重新运行 dsh-mobile setup。'))
   } else if (snapshot.lan.configuredInterface !== undefined) {
+    const interfaceName = snapshot.lan.interfaceName ?? snapshot.lan.configuredInterface
     checks.push(check(
       'network',
       'ok',
+      'network-interface',
       '局域网网卡',
-      `正在跟随 ${snapshot.lan.interfaceName ?? snapshot.lan.configuredInterface}。`,
+      `正在跟随 ${interfaceName}。`,
+      undefined,
+      { interfaceName },
     ))
   } else {
-    checks.push(check('network', 'info', '局域网网卡', '当前使用固定网络配置。'))
+    checks.push(check('network', 'info', 'network-fixed', '局域网网卡', '当前使用固定网络配置。'))
   }
 
   if (snapshot.lan.running && snapshot.lan.origin !== undefined) {
-    checks.push(check('lan', 'ok', '局域网网关', `已监听 ${maskLanOrigin(snapshot.lan.origin)}，配对入口可用。`))
+    const endpointSuffix = maskLanOrigin(snapshot.lan.origin)
+    checks.push(check('lan', 'ok', 'lan-ready', '局域网网关', `已监听 ${endpointSuffix}，配对入口可用。`, undefined, { endpointSuffix }))
   } else {
-    checks.push(check('lan', 'info', '局域网网关', '当前未开启。', '需要手机直连时开启局域网访问。'))
+    checks.push(check('lan', 'info', 'lan-off', '局域网网关', '当前未开启。', '需要手机直连时开启局域网访问。'))
   }
 
   if (firewall.state === 'ready') {
-    checks.push(check('firewall', 'ok', 'Windows 防火墙', '局域网 TCP 与发现规则已启用。'))
+    checks.push(check('firewall', 'ok', 'firewall-ready', 'Windows 防火墙', '局域网 TCP 与发现规则已启用。'))
   } else if (firewall.state === 'missing') {
-    checks.push(check('firewall', 'warning', 'Windows 防火墙', '未找到完整的局域网放行规则。', '以管理员身份重新运行 dsh-mobile setup。'))
+    checks.push(check('firewall', 'warning', 'firewall-missing', 'Windows 防火墙', '未找到完整的局域网放行规则。', '以管理员身份重新运行 dsh-mobile setup。'))
   } else if (firewall.state === 'unknown') {
-    checks.push(check('firewall', 'info', 'Windows 防火墙', '系统未允许插件读取防火墙状态。', '若手机找不到电脑，以管理员身份重新运行 setup。'))
+    checks.push(check('firewall', 'info', 'firewall-unknown', 'Windows 防火墙', '系统未允许插件读取防火墙状态。', '若手机找不到电脑，以管理员身份重新运行 setup。'))
   }
 
   if (!snapshot.remote.running || snapshot.remote.state === 'off') {
-    checks.push(check('remote', 'info', '远程通道', '当前未启用。'))
+    checks.push(check('remote', 'info', 'remote-off', '远程通道', '当前未启用。', undefined, { provider: snapshot.remote.provider }))
   } else if (snapshot.remote.state === 'ready' && snapshot.remote.origin !== undefined) {
+    const endpointSuffix = remoteSuffix(snapshot.remote.origin)
+    const facts = { provider: snapshot.remote.provider, endpointSuffix, ...(remoteObservation.latencyMs === undefined ? {} : { latencyMs: remoteObservation.latencyMs }) }
     if (remoteObservation.state === 'ready') {
-      checks.push(check('remote', 'ok', '远程通道', `${snapshot.remote.provider} 公共地址 ${remoteSuffix(snapshot.remote.origin)} 可达，往返约 ${String(remoteObservation.latencyMs ?? 0)} ms。`))
+      checks.push(check('remote', 'ok', 'remote-ready', '远程通道', `${snapshot.remote.provider} 公共地址 ${endpointSuffix} 可达，往返约 ${String(remoteObservation.latencyMs ?? 0)} ms。`, undefined, facts))
     } else if (remoteObservation.state === 'rate-limited') {
-      checks.push(check('remote', 'warning', '远程通道', '公共地址可达，但本次检查观察到服务限流。', '稍后重试；旧会话会按需加载以减少流量。'))
+      checks.push(check('remote', 'warning', 'remote-rate-limited', '远程通道', '公共地址可达，但本次检查观察到服务限流。', '稍后重试；旧会话会按需加载以减少流量。', facts))
     } else if (snapshot.remote.provider === 'tailscale' && remoteObservation.fakeIp === true) {
       checks.push(check(
         'remote',
         'error',
+        'remote-fake-ip',
         '远程通道',
         'Tailscale 地址被当前 VPN 或 DNS 代理接管，但 TLS 链路未建立。',
         '切换 VPN 节点或代理模式；仍失败时改用 cpolar。',
+        facts,
       ))
     } else {
-      checks.push(check('remote', 'error', '远程通道', '提供方显示已就绪，但公共地址暂不可达。', '点击“重新连接”；仍失败时检查提供方状态。'))
+      checks.push(check('remote', 'error', 'remote-unreachable', '远程通道', '提供方显示已就绪，但公共地址暂不可达。', '点击“重新连接”；仍失败时检查提供方状态。', facts))
     }
   } else if (snapshot.remote.state === 'starting' || snapshot.remote.state === 'connecting' || snapshot.remote.state === 'needs-login') {
+    const needsLogin = snapshot.remote.state === 'needs-login'
     checks.push(check(
       'remote',
       'warning',
+      needsLogin ? 'remote-needs-login' : 'remote-connecting',
       '远程通道',
-      snapshot.remote.state === 'needs-login' ? '等待完成 Tailscale 登录。' : '仍在建立连接。',
-      snapshot.remote.state === 'needs-login' ? '返回远程页继续登录。' : '等待片刻后重新检查。',
+      needsLogin ? '等待完成 Tailscale 登录。' : '仍在建立连接。',
+      needsLogin ? '返回远程页继续登录。' : '等待片刻后重新检查。',
+      { provider: snapshot.remote.provider },
     ))
   } else {
+    const controllerCode = snapshot.remote.errorCode ?? snapshot.remote.state
     checks.push(check(
       'remote',
       'error',
+      'remote-controller-error',
       '远程通道',
-      `连接未建立（${snapshot.remote.errorCode ?? snapshot.remote.state}）。`,
-      REMOTE_ERROR_GUIDANCE[snapshot.remote.errorCode ?? ''] ?? '返回远程页点击“重新连接”。',
+      `连接未建立（${controllerCode}）。`,
+      REMOTE_ERROR_GUIDANCE[controllerCode] ?? '返回远程页点击“重新连接”。',
+      { provider: snapshot.remote.provider, controllerCode },
     ))
   }
 
   checks.push(check(
     'phone-network',
     'info',
+    'phone-network-unknown',
     '手机网络',
     '电脑无法判断路由器是否隔离了手机。',
     '局域网仍失败时，确认手机与电脑在同一网络，并关闭访客网络或 AP 隔离。',

@@ -33,6 +33,25 @@ interface LayoutSnapshot {
   readonly detailsOpen: boolean
 }
 
+export type MobileLayoutLanguage = 'it' | 'en' | 'zh'
+
+export const MOBILE_LAYOUT_MESSAGES = Object.freeze({
+  it: Object.freeze({ closePanels: 'Chiudi pannelli', workspaceNavigation: 'Navigazione area di lavoro e sessioni' }),
+  en: Object.freeze({ closePanels: 'Close panels', workspaceNavigation: 'Workspace and session navigation' }),
+  zh: Object.freeze({ closePanels: '关闭浮层', workspaceNavigation: '工作区与会话导航' }),
+})
+
+/** Resolve the supported language used by the dedicated mobile layout. */
+export function resolveMobileLayoutLanguage(
+  preference: string,
+  documentLanguage: string,
+  browserLanguages: readonly string[],
+): MobileLayoutLanguage {
+  return [preference, documentLanguage, ...browserLanguages]
+    .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
+    .find((value): value is MobileLayoutLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
+}
+
 class MobileLayoutController {
   private snapshot: LayoutSnapshot = Object.freeze({ sidebarOpen: false, detailsOpen: false })
   private readonly listeners = new Set<() => void>()
@@ -147,10 +166,16 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
   const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot)
   const suppressKeyboardUntil = useRef(0)
-  const hasSession = props.useSessions(session => {
+  let localePreference = ''
+  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
+  const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
+  const language = resolveMobileLayoutLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const messages = MOBILE_LAYOUT_MESSAGES[language]
+  const activeSessionId = props.useSessions(session => {
     const current = session.current
-    return current !== undefined && session.byId[current]?.blank === false
+    return current !== undefined && session.byId[current]?.blank === false ? current : undefined
   })
+  const hasSession = activeSessionId !== undefined
 
   useEffect(() => {
     if (!hasSession) props.controller.closeDetails()
@@ -164,7 +189,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     }
     const suppressBranchAutofocus = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return
-      const branch = event.target.closest('button[aria-label*="分支"],button[aria-label*="Branch"],button[aria-label*="branch"]')
+      const branch = event.target.closest('button[aria-label*="分支"],button[aria-label*="Branch"],button[aria-label*="branch"],button[aria-label*="Ramo"],button[aria-label*="ramo"]')
       if (branch === null || branch.hasAttribute('disabled') || branch.getAttribute('aria-disabled') === 'true') return
       suppressKeyboardUntil.current = performance.now() + 700
       window.setTimeout(() => {
@@ -201,7 +226,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     const row = event.target.closest<HTMLElement>('[role="treeitem"][aria-selected]')
     const action = event.target.closest('button,[role="button"]')
     const startsSession = action?.matches('button[class*="_newSession"],button[class*="_brand"]')
-      || /新建会话|新会话|new session|new conversation/i.test(action?.getAttribute('aria-label') ?? '')
+      || /新建会话|新会话|new session|new conversation|nuova sessione|nuova conversazione/i.test(action?.getAttribute('aria-label') ?? '')
     if (row === null && !startsSession) return
     if (row !== null && action !== null && action !== row) return
     suppressKeyboardUntil.current = performance.now() + 500
@@ -213,10 +238,10 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     }, 0)
   }
 
-  return createElement('div', { className: 'dshm-shell' },
-    createElement('main', { className: 'dshm-main' }, props.renderSlot('conversation', {})),
+  return createElement('div', { className: 'dshm-shell', lang: language },
+    createElement('main', { className: 'dshm-main', 'data-dsh-mobile-session': activeSessionId }, props.renderSlot('conversation', {})),
     createElement('button', {
-      'aria-label': '关闭浮层',
+      'aria-label': messages.closePanels,
       className: 'dshm-scrim',
       'data-open': state.sidebarOpen || state.detailsOpen,
       onClick: () => { state.detailsOpen ? props.controller.closeDetails() : props.controller.closeSidebar() },
@@ -224,7 +249,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       type: 'button',
     }),
     createElement('aside', {
-      'aria-label': '工作区与会话导航',
+      'aria-label': messages.workspaceNavigation,
       className: 'dshm-drawer',
       'data-open': state.sidebarOpen,
       onClickCapture: closeDrawerAfterSessionAction,

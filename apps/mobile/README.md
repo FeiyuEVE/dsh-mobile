@@ -16,7 +16,7 @@ Android is the only supported native target. The iOS client remains an unpublish
 
 After the first pairing, the app encrypts a revocable, long-lived device token with Android Keystore. Every later launch uses it to renew a short Web session before opening DSH, so the pairing key is not requested again unless the device is revoked, the trust expires, or app data is cleared. If the computer receives another LAN address, the app scans the default port, matches the stable DSH installation identifier, and updates the saved origin automatically. Discovery never exposes the device token or Session credentials.
 
-Before pairing, the app reads separate version metadata to distinguish an outdated app, an outdated plugin, and an unsupported protocol. A legacy plugin without that endpoint continues through the original flow. After pairing, the connection chooser remains immediately usable while the saved connection restores in the background. Bounded automatic retries run only for transient network or provider failures.
+Before pairing, the app reads separate version metadata to distinguish an outdated app, an outdated plugin, and an unsupported protocol. A legacy plugin without that endpoint continues through the original flow. After pairing, the connection chooser remains immediately usable while the saved connection restores in the background. Bounded automatic retries run only for transient network or provider failures. The mobile UI preserves Chinese and also supports English and Italian, selected from the saved preference, document language, or browser languages.
 
 Discovery listens to DNS-SD/mDNS and periodic UDP announcements at the same time, sends an active UDP query on port `3443`, and retains bounded HTTPS scans of visible private Wi-Fi and phone-hotspot `/24` networks as a compatibility fallback. Every discovery path carries metadata only and results are merged by stable installation identifier, so a changed address updates the existing device. The first screen offers **Scan QR code** (point the camera at the screen to pair without a key), Scan, a result list, and a manual address field (enter `https://IP:port` to connect when discovery fails, e.g. across subnets, on a non-default port, or behind a firewall); select one DSH before entering its key. For a browser's first connection, open the **Copy pairing link** link on the phone (the pairing code is prefilled), or visit `/mobile-access/pair` on the shown HTTPS origin and enter the 43-character pairing code after the generated key's final dot.
 
@@ -24,11 +24,13 @@ The CA is not discovery data. After selection and key entry, Android retrieves i
 
 ## Mobile extension bridge
 
-The authenticated page can call the Android bridge through `dshMobile` extensions. The bridge is injected only into the paired HTTPS origin and only for the top-level WebView frame. It does not expose cookies, device tokens, pairing keys, CA private keys, or arbitrary Android APIs.
+The authenticated page can call the Android bridge through `dshMobile` extensions. It uses an `androidx.webkit` WebMessage listener, checks the exact configured top-level origin and `isMainFrame` on every message, and never uses `addJavascriptInterface`. Inbound messages are capped at 1 MiB, clipboard text at 256 KiB, binary results at 8 MiB, and replies at 12 MiB. The bridge does not expose cookies, device tokens, pairing keys, CA private keys, or arbitrary Android APIs.
 
-Available actions are `files.pick`, `camera.capture`, `share`, `clipboard.read`, and `clipboard.write`. File and camera results are returned to the page as browser `File` objects. Only one interactive Android result (file picker or camera) runs at a time; cancellation, rotation, WebView destruction, and a 60-second timeout reject the pending request. Browsers use the corresponding Web APIs and return `unsupported` when a capability is unavailable.
+Available actions are `files.pick`, `camera.capture`, `share`, `clipboard.read`, and `clipboard.write`. The composer paperclip exists only for an open session whose DSH attachment owner reports `canAcceptDrop`; it uses the existing DSH attachment path rather than synthesizing a drop. The picker accepts PNG, JPEG, WebP, and GIF up to 8 MiB. Camera capture requests Android camera permission only when used, writes a full-resolution JPEG through `FileProvider`, and returns it as a browser `File`. Only one interactive Android result runs at a time; cancellation, rotation, WebView destruction, timeout, and stale-session results are cleaned up or rejected. Browsers use the corresponding Web APIs and return `unsupported` when a capability is unavailable.
 
 Computer-side extensions are separate: their `host.mjs` runs as trusted local Node.js code on the DSH host, while `mobile.js` calls its scoped actions and routes. The app bridge cannot edit or upload extension source files.
+
+The client validates the extension manifest and revisioned resource URLs, keeps the last good resources when a refresh fails, and fully disposes removed or superseded activations. It refreshes every 45 seconds while visible and every 5 minutes while hidden, plus on focus, online, and visible transitions; overlapping work is coalesced and every cycle is bounded to 30 seconds.
 
 ## Why use the app
 
@@ -47,7 +49,7 @@ A mobile browser is always a first-class alternative; the app is optional.
 | TLS | The pairing-key CA is stored privately. Only `SSL_UNTRUSTED` for its valid, exact-host leaf is accepted; every other TLS error is cancelled. |
 | Origin | Only scheme, normalized host, and port persist. Ordinary paths, queries, and fragments do not. |
 | Navigation | Same-origin main frames stay inside; user-initiated external HTTPS links open in the system browser. |
-| Permissions | File input uses the system document picker; the camera is requested only when the user taps **Scan QR code**, to read the pairing QR. |
+| Permissions | File input uses the system document picker without storage permission; camera permission is requested only when the user starts QR scanning or photo capture. |
 | Downloads | Foreground GET from the exact origin only; authentication control paths are never downloads. |
 | Data | The device token is encrypted by Android Keystore; Web storage stays in the app sandbox; Clear Site Data removes the credential, origin, cookies, cache, and Web storage. |
 | Backup | App backup is disabled; TLS private keys and signing keys must remain outside the repository. |
