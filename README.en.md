@@ -19,7 +19,7 @@
 
 > DSH Mobile 0.3.2 is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3.2 update**: image selection and capture move into the composer plus menu; extension edits notify phones immediately; Android Bridge, the extension SDK, atomic hot updates, Funnel lifecycles, and the localization foundation are hardened.
+> **0.3.2 update**: image selection and full-resolution capture move into the composer plus menu with file, size, concurrency, and interaction deadlines; extension and `/mobile` edits notify authenticated phones immediately while Host code, scripts, styles, and assets switch as one generation and retain a usable version on failure; scoped request paths and response limits are tightened, Android Bridge temporary files and grants are fully released, Funnel now follows the DSH lifecycle, native app screens follow the system Chinese/English/Italian locale, and plugin-owned UI follows DSH's locale.
 >
 > **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
 
