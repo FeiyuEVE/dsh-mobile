@@ -28,6 +28,11 @@ async function main() {
   if (typeof manifest.version !== 'string') throw new Error('package.version must be a string')
 
   const packageVersion = manifest.version
+  const packageLock = JSON.parse(await read('package-lock.json'))
+  const lockRootVersion = packageLock?.packages?.['']?.version
+  if (packageLock?.version !== packageVersion || lockRootVersion !== packageVersion) {
+    throw new Error(`package-lock versions ${JSON.stringify(packageLock?.version)} and ${JSON.stringify(lockRootVersion)} must equal package.version ${JSON.stringify(packageVersion)}`)
+  }
   const android = await read('apps/mobile/android/app/build.gradle.kts')
 
   const androidVersion = singleMatch(android, /^\s*versionName\s*=\s*"([^"]+)"\s*$/gm, 'Android versionName')

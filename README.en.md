@@ -17,13 +17,13 @@
 
 <p align="center"><a href="README.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-> DSH Mobile 0.3.1 is a DeepSeek Harness community plugin; the native app supports Android only.
+> DSH Mobile 0.3.2 is a DeepSeek Harness community plugin; the native app supports Android only.
 >
-> **0.3 series update**: one-click diagnostics, version guidance, and clearer pairing and network errors; faster LAN and remote recovery, caching, and first load; DSH 0.1.2 Workspace, model, session, and community-plugin synchronization; image attachments, Chinese/English/Italian UI, and hardened Android bridge, extension-refresh, and Funnel lifecycles.
+> **0.3.2 update**: image selection and capture move into the composer plus menu; extension edits notify phones immediately; Android Bridge, the extension SDK, atomic hot updates, Funnel lifecycles, and the Chinese/English/Italian UI are hardened.
 >
-> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.1**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
+> **With DeepSeek Harness 0.1.2-alpha.1, update both the plugin and app to 0.3.2**; older apps use a status-bar strategy that does not fit the new Web UI, and app 0.1.3 or earlier also requires reinstalling and pairing again.
 
-<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.1/dsh-mobile-android-v0.3.1.apk"><strong>Download Android app 0.3.1</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.1">Release notes and checksums</a></p>
+<p align="center"><a href="https://github.com/saya-ch/dsh-mobile/releases/download/v0.3.2/dsh-mobile-android-v0.3.2.apk"><strong>Download Android app 0.3.2</strong></a> · <a href="https://github.com/saya-ch/dsh-mobile/releases/tag/v0.3.2">Release notes and checksums</a></p>
 
 DSH Mobile is a DeepSeek Harness plugin that lets a mobile browser or the Android app connect over a protected LAN or an optional Tailscale Funnel or cpolar remote path. Local and remote access keep the same sessions, Workspaces, messages, and tools while using separate switches and paired-device stores without modifying DeepSeek Harness source.
 
@@ -36,7 +36,7 @@ It also lets you customize the phone from a DSH conversation: `/mobile <what you
 - **Continue DSH work from a phone**: the same sessions, Workspaces, messages, and tools, in real time.
 - **Customize the phone UI by talking to DSH**: change the mobile layout, interactions, and features from a conversation; open pages refresh within seconds.
 - **A dedicated touch layout**: session drawer, tool details, settings, question cards, and composer reorganized for phones, with Chinese preserved and English and Italian supported.
-- **Image attachments**: the paperclip appears only in an open session while the DSH composer accepts attachments; choose PNG, JPEG, WebP, or GIF up to 8 MiB, or capture a full-resolution JPEG.
+- **Image attachments**: use the top row of the composer plus menu to select an image or take a photo; PNG, JPEG, WebP, and GIF files up to 8 MiB are supported, plus full-resolution JPEG capture.
 - **Auto-discovery, no re-pairing**: Wi-Fi, hotspot, or IP changes normally recover automatically.
 - **One-click connection diagnostics**: check versions, gateway, network interface, firewall, and the remote path; stable reason codes are localized in the UI, and the copied report excludes credentials and complete addresses.
 - **Faster reconnection**: trusted connections race during restore, revisioned assets are reused, and mobile boot batches are compressed.
@@ -111,7 +111,7 @@ Remote providers may impose bandwidth and connection limits: the [cpolar Free pl
 3. In the Android app, open **Remote access** and scan the QR code to create its separate pairing.
 4. The app keeps device trust and reconnects automatically. Disable remote access when it is not needed; LAN access remains unchanged.
 
-Tailscale Funnel has broad reach but may be unreliable from mainland China. Its runtime ties the public listener to the parent process and a bounded control channel; timeout, channel closure, or an extra command stops the current generation and cleans up its resources. cpolar is better suited to mainland networks. The plugin validates the pinned component download, stores its configuration and program entirely under `$DSH_HOME/mobile-access/`, and can remove them completely from the panel.
+Tailscale Funnel has broad reach but may be unreliable from mainland China. Its runtime ties the public listener to the parent process and a bounded control channel; parent exit, channel closure, or an explicit stop ends the current generation and cleans up its resources. cpolar is better suited to mainland networks. The plugin validates the pinned component download, stores its configuration and program entirely under `$DSH_HOME/mobile-access/`, and can remove them completely from the panel.
 
 The public remote origin still requires DSH device pairing. Managed remote components currently support Windows x64.
 
@@ -131,7 +131,7 @@ It can also drive computer capabilities the phone can use, like reading the mach
 
 Two kinds of changes are supported: the phone UI itself (theme, layout, buttons), and computer capabilities the phone can use (browsing computer files, running programs on the computer). `/mobile` hands the request to the DSH agent, which edits files under the local DSH configuration directory (`$DSH_HOME/mobile-access/`); the phone client applies them automatically. UI changes live in `mobile.css`/`mobile.js`. Computer capabilities come from extensions under `extensions/`, whose `host.mjs` runs with the local user's privileges on the computer. DeepSeek Harness source is not modified.
 
-The extension manifest and its revisioned scripts and styles refresh every 45 seconds while visible and every 5 minutes while hidden, plus immediately on focus, online, and visible transitions. Refreshes coalesce and each cycle is capped at 30 seconds. Invalid manifests do not replace the last good resources; removing or updating an extension cancels stale work and disposes its styles, surfaces, and callbacks.
+Extension manifests, scripts, styles, and assets are revisioned. When the plugin observes a `/mobile` or extension-file change, it notifies authenticated phones to refresh immediately; 45-second visible and 5-minute hidden checks remain only as recovery fallbacks. A failed Host staging pass keeps the current version; if the Host has changed but the new phone UI cannot activate, that extension closes and retries instead of mixing generations.
 
 <sub>You can even use an extension to connect to SillyTavern running on the same computer, give it a lightweight mobile frontend, and open it from the same app.</sub>
 
@@ -182,6 +182,7 @@ See [SECURITY.md](SECURITY.md).
 
 | DSH Mobile | Verified DeepSeek Harness releases |
 | --- | --- |
+| `0.3.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.1` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.3.0` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2`, `0.1.2-alpha.1` |
 | `0.2.2` | `0.1.0-rc.5`, `0.1.0-rc.6`, `0.1.0-rc.7`, `0.1.1-rc.2` |
