@@ -1,5 +1,9 @@
-import { createElement, useEffect, useRef, useSyncExternalStore } from 'react'
+import { createElement, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
+import { MOBILE_LAYOUT_MESSAGES, type MobileLayoutLanguage } from './mobile-layout-messages.js'
+
+export { MOBILE_LAYOUT_MESSAGES } from './mobile-layout-messages.js'
+export type { MobileLayoutLanguage } from './mobile-layout-messages.js'
 
 interface SessionState {
   readonly current?: string
@@ -33,21 +37,12 @@ interface LayoutSnapshot {
   readonly detailsOpen: boolean
 }
 
-export type MobileLayoutLanguage = 'it' | 'en' | 'zh'
-
-export const MOBILE_LAYOUT_MESSAGES = Object.freeze({
-  it: Object.freeze({ closePanels: 'Chiudi pannelli', workspaceNavigation: 'Navigazione area di lavoro e sessioni' }),
-  en: Object.freeze({ closePanels: 'Close panels', workspaceNavigation: 'Workspace and session navigation' }),
-  zh: Object.freeze({ closePanels: '关闭浮层', workspaceNavigation: '工作区与会话导航' }),
-})
-
 /** Resolve the supported language used by the dedicated mobile layout. */
 export function resolveMobileLayoutLanguage(
-  preference: string,
   documentLanguage: string,
   browserLanguages: readonly string[],
 ): MobileLayoutLanguage {
-  return [preference, documentLanguage, ...browserLanguages]
+  return [documentLanguage, ...browserLanguages]
     .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
     .find((value): value is MobileLayoutLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
 }
@@ -166,16 +161,21 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
   const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot)
   const suppressKeyboardUntil = useRef(0)
-  let localePreference = ''
-  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
+  const [documentLanguage, setDocumentLanguage] = useState(document.documentElement.lang)
   const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
-  const language = resolveMobileLayoutLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const language = resolveMobileLayoutLanguage(documentLanguage, browserLanguages)
   const messages = MOBILE_LAYOUT_MESSAGES[language]
   const activeSessionId = props.useSessions(session => {
     const current = session.current
     return current !== undefined && session.byId[current]?.blank === false ? current : undefined
   })
   const hasSession = activeSessionId !== undefined
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => { setDocumentLanguage(document.documentElement.lang) })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
+    return () => { observer.disconnect() }
+  }, [])
 
   useEffect(() => {
     if (!hasSession) props.controller.closeDetails()
@@ -185,7 +185,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
     const suppressAutofocus = (event: FocusEvent): void => {
       if (performance.now() >= suppressKeyboardUntil.current) return
       const target = event.target
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.blur()
+      if (target instanceof HTMLElement && (target.matches('input,textarea') || target.isContentEditable)) target.blur()
     }
     const suppressBranchAutofocus = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return
@@ -194,21 +194,21 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       suppressKeyboardUntil.current = performance.now() + 700
       window.setTimeout(() => {
         const active = document.activeElement
-        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+        if (active instanceof HTMLElement && (active.matches('input,textarea') || active.isContentEditable)) active.blur()
       }, 0)
     }
     const suppressCommandAutofocus = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return
       const commandButton = event.target.closest('button[aria-haspopup="listbox"]')
       if (commandButton === null) return
-      // The native composer deliberately restores textarea focus on mousedown;
+      // The native composer deliberately preserves editor focus on mousedown;
       // mobile command menus should open without summoning the soft keyboard.
       suppressKeyboardUntil.current = performance.now() + 700
       event.preventDefault()
       event.stopPropagation()
       window.setTimeout(() => {
         const active = document.activeElement
-        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
+        if (active instanceof HTMLElement && (active.matches('input,textarea') || active.isContentEditable)) active.blur()
       }, 0)
     }
     document.addEventListener('focusin', suppressAutofocus, true)

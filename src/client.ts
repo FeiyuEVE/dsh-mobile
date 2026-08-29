@@ -1,5 +1,14 @@
 import { createElement } from 'react'
+import {
+  DIAGNOSTIC_REASON_MESSAGES,
+  LOCALIZED_DIAGNOSTIC_COPY,
+  MOBILE_CONTROL_MESSAGES,
+  type MobileControlLocale,
+} from './client-messages.js'
 import { installNativeMobileSurface, NATIVE_MOBILE_STYLES } from './native-mobile.js'
+
+export { DIAGNOSTIC_REASON_MESSAGES, MOBILE_CONTROL_MESSAGES } from './client-messages.js'
+export type { MobileControlLocale } from './client-messages.js'
 
 interface ClientContext {
   effect(effect: () => void | (() => void), label?: string): void
@@ -33,6 +42,7 @@ interface MobileClientApi {
   readonly host: {
     invoke(action: string, input: unknown): Promise<unknown>
     fetch(path: string, init?: RequestInit): Promise<Response>
+    assetUrl(path: string): string
   }
   readonly ui: {
     registerSurface(surface: MobileSurface): () => void
@@ -81,84 +91,8 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
 }
 
-export type MobileControlLocale = 'it' | 'en' | 'zh'
-
-export const MOBILE_CONTROL_MESSAGES = {
-  en: {
-    mobileAccess: 'Mobile access', collapseMobileAccess: 'Collapse Mobile access', downloadAndroid: 'Download Android app', downloadAndroidAria: 'Download the latest Android app from GitHub Releases',
-    lan: 'Local network', remote: 'Remote', lanAccess: 'Local network access', remoteAccess: 'Remote access', browserAccess: 'Browser access', remoteAddress: 'Remote address', loadingStatus: 'Loading status…', loadingRemoteStatus: 'Loading remote status…',
-    generateCopyKey: 'Generate and copy key', copyPairLink: 'Copy pairing link', managePairedDevices: 'Manage paired devices', clearAllDevices: 'Clear all devices', pairingQr: 'Pairing QR code',
-    remoteIntro: 'Choose the remote channel that suits you. Switching or disabling remote access does not affect the local network.', chooseProvider: 'Choose connection method', providerInfoAria: 'View remote connection security and network information', providerGroupAria: 'Remote connection method', providerSafeTitle: 'You remain protected', providerSafeText: 'Only paired devices can access DSH. cpolar is installed on demand and can be removed completely; Tailscale may be slow or unavailable on mainland China networks, where cpolar is recommended.',
-    builtIn: 'Built in', mainlandPreferred: 'Preferred in mainland China', tailscaleDescription: 'Wider coverage; mainland China networks may be unstable. The first connection requires login and Funnel authorization.', cpolarDescription: 'Installs the official component on demand and is suitable for mainland China networks.',
-    prepareCpolar: 'Prepare cpolar', checkingComponent: 'Checking component…', installOfficial: 'Install official component', cpolarAccountNote: 'Sign in to the cpolar website and copy the Authtoken. The token is stored only in the plugin private directory and is never shown on the page or in logs.', registerCpolar: 'Register with cpolar', openDashboard: 'Open dashboard to get token', tokenPlaceholder: 'Paste cpolar Authtoken', saveConnect: 'Save and connect', saving: 'Saving…', componentDetails: 'Component source and cleanup', componentDetailsText: 'Downloaded from the official cpolar website and verified at a fixed version only after you choose Install. It does not add a system service, startup item, registry entry, or PATH entry.', pluginPrivateDirectory: 'Plugin private directory', officialDownload: 'Official download page', terms: 'Terms of service', purgeCpolar: 'Completely remove cpolar component and configuration', tailscaleHelp: 'How to use Tailscale', tailscaleHelpText: 'The runtime component is included with the plugin. The first connection opens the official Tailscale login and Funnel authorization pages; the plugin never accesses your account password.',
-    funnelGuideAria: 'Steps to enable Tailscale Funnel', funnelGuideTitle: 'Remote access setup · Step 2', funnelGuideSummary: 'Tailscale login is complete. Funnel must still be allowed for this computer; the official page also enables HTTPS.', funnelStep1: 'Open the official Tailscale authorization page for this node.', funnelStep2: 'Confirm Funnel; you do not need to sign in to DSH again.', funnelStep3: 'Return to DSH; the plugin checks and connects automatically.', funnelGuideNote: 'Requires an Owner, Admin, or Network admin account.', continueFunnel: 'Continue Funnel authorization', retryNow: 'Done, retry now',
-    enableRemote: 'Enable remote access', disableRemote: 'Disable remote access', continueLogin: 'Continue login', reconnect: 'Reconnect', generateRemoteQr: 'Generate remote pairing QR code', manageRemoteDevices: 'Manage remote devices', resetRemoteLogin: 'Sign out and clear remote login', resetRemoteDevices: 'Disable and clear remote devices',
-    lanOn: 'Local network access is on.', lanOff: 'Local network access is off.', enableLan: 'Enable local network access', disableLan: 'Disable local network access', extensionsLoaded: 'Extensions: {loaded} loaded', extensionsFailed: 'Extensions: {loaded} loaded, {failed} failed',
-    keyGenerationFailed: 'Could not generate a pairing key.', keyCopied: 'Pairing key copied. Paste it into the Android app.', linkCopied: 'Pairing link copied. Send it to the phone and paste it into the app or open it in a browser.', copySecret: 'Copy {kind}: {value}', pairingKey: 'pairing key', pairingLink: 'pairing link', noDevices: 'No paired devices.', noRemoteDevices: 'No remote paired devices.', device: 'Device', expires: 'Expires {time}', revoke: 'Revoke', confirmResetDevices: 'Remove all paired devices? Connected devices will be disconnected immediately.',
-    ready: 'Ready', installed: 'Installed', installWithSize: 'Install official component · {size} MB', cpolarUnsupported: 'Only Windows x64 is currently supported. You can still use the built-in Tailscale Funnel.', cpolarNotInstalled: 'Not installed. A fixed version is downloaded from the official cpolar website only after you click the button below.', cpolarNeedsToken: 'Official component {version} is verified. Save the account token to continue.', cpolarReady: 'Official component {version} and the local account configuration are ready.',
-    remoteOff: 'Remote access is disabled. Local network access is unaffected.', remoteUnavailableCpolar: 'cpolar is not installed or its local account is not configured.', remoteUnavailableTailscale: 'This computer is missing the Funnel runtime component. Reinstall the complete plugin package.', remoteStartingCpolar: 'Connecting to a cpolar node…', remoteStartingTailscale: 'Starting the secure Tailscale channel…', remoteNeedsLogin: 'Complete a one-time Tailscale login in the browser. The plugin never reads your password.', remoteConnectingCpolar: 'Public address allocated; starting the DSH authentication gateway…', remoteConnectingTailscale: 'Login complete; creating the public HTTPS address…', remoteReady: 'Remote access is ready. Only paired devices can access DSH.', remoteError: 'The remote connection was not established. Reconnect; local network access still works.',
-    funnelPermission: 'Login is complete. Authorize Funnel to establish the remote connection automatically.', funnelHttps: 'Login is complete. Authorize Funnel; the official page also enables HTTPS.', funnelStart: 'Login is complete. Finish the initial Tailscale Funnel authorization.', tailscaleDnsMissing: 'Tailscale has not provided a remote address. Reconnect and confirm login is complete.', gatewayStartFailed: 'The remote gateway failed to start. Reconnect; local network access is unaffected.', controlChannelFailed: 'The remote component connection was interrupted. Reconnect.', cpolarMissing: 'The official cpolar component is not installed. Complete the preparation steps above.', cpolarInvalid: 'cpolar component verification failed. Remove it completely and reinstall.', cpolarConfigMissing: 'No cpolar account token is saved. Complete the preparation steps above.', cpolarConfigInvalid: 'The local cpolar configuration is invalid. Save the account token again.', cpolarPortUnavailable: 'Could not allocate a local remote-gateway port. Try again.', cpolarLaunchFailed: 'The cpolar client failed to start.', cpolarTimeout: 'Timed out connecting to a cpolar node. Reconnect.', cpolarStopped: 'The cpolar connection stopped.', cpolarExited: 'The cpolar connection exited unexpectedly. Reconnect.', cpolarOutputInvalid: 'cpolar returned an unrecognized status.', cpolarOriginInvalid: 'The public address returned by cpolar failed validation.', setupOpened: 'The official Tailscale page is open. Return to DSH after enabling Funnel; reconnection is automatic.',
-    switchProviderConfirm: 'Switching connection method first disables the current remote channel. Local network access and paired devices are unaffected. Continue?', switchingCpolar: 'Switching to cpolar…', switchingTailscale: 'Switching to Tailscale Funnel…', installConfirm: 'Download and verify a fixed version from the official cpolar website (about 7.3 MB) and extract it only to the DSH Mobile private directory? No system service, PATH/registry entry, or startup item is added.', downloading: 'Downloading and verifying…', installingCpolar: 'Installing the official cpolar component. Keep DSH running until it completes.', installFailed: 'Component installation failed: {error}', invalidToken: 'Paste the complete Authtoken from the cpolar dashboard.', configuredConnecting: 'Account configuration saved; connecting through cpolar…', configureFailed: 'Configuration failed: {error}', purgeConfirm: 'Completely remove the cpolar component, token configuration, and runtime logs from the DSH Mobile private directory? Local network access, DSH data, and other system programs are unaffected.', purging: 'Stopping the channel and removing cpolar files managed by DSH Mobile…', purgeFailed: 'Cleanup failed: {error}', reconnectingCpolar: 'Reconnecting to a cpolar node…', reconnectingTailscale: 'Checking Tailscale settings and reconnecting…', remoteQrReady: 'Remote pairing QR code generated. Scan it from “Remote access” in the app.', resetCpolarConfirm: 'Disable the cpolar remote channel and remove all remote paired devices? Your cpolar account and other tunnels are unchanged.', resetTailscaleConfirm: 'Sign out of Tailscale on this computer and remove all remote paired devices? Local network configuration is unchanged.', requestFailed: 'Request failed: {error}',
-  },
-  it: {
-    mobileAccess: 'Accesso mobile', collapseMobileAccess: 'Riduci Accesso mobile', downloadAndroid: 'Scarica app Android', downloadAndroidAria: 'Scarica l’ultima app Android da GitHub Releases',
-    lan: 'Rete locale', remote: 'Remoto', lanAccess: 'Accesso rete locale', remoteAccess: 'Accesso remoto', browserAccess: 'Accesso browser', remoteAddress: 'Indirizzo remoto', loadingStatus: 'Lettura stato…', loadingRemoteStatus: 'Lettura stato remoto…',
-    generateCopyKey: 'Genera e copia chiave', copyPairLink: 'Copia link di abbinamento', managePairedDevices: 'Gestisci dispositivi abbinati', clearAllDevices: 'Rimuovi tutti i dispositivi', pairingQr: 'Codice QR di abbinamento', remoteIntro: 'Scegli il canale remoto più adatto. Cambiare o disattivare l’accesso remoto non influisce sulla rete locale.', chooseProvider: 'Scegli metodo di connessione', providerInfoAria: 'Informazioni su sicurezza e rete della connessione remota', providerGroupAria: 'Metodo di connessione remota', providerSafeTitle: 'La protezione resta attiva', providerSafeText: 'Solo i dispositivi abbinati possono accedere a DSH. cpolar viene installato su richiesta e può essere rimosso completamente; Tailscale può essere lento o non disponibile nelle reti della Cina continentale, dove è consigliato cpolar.',
-    builtIn: 'Integrato', mainlandPreferred: 'Preferito in Cina continentale', tailscaleDescription: 'Copertura più ampia; le reti della Cina continentale possono essere instabili. Il primo collegamento richiede accesso e autorizzazione Funnel.', cpolarDescription: 'Installa su richiesta il componente ufficiale, adatto alle reti della Cina continentale.', prepareCpolar: 'Prepara cpolar', checkingComponent: 'Controllo componente…', installOfficial: 'Installa componente ufficiale', cpolarAccountNote: 'Accedi al sito cpolar e copia l’Authtoken. Il token resta solo nella directory privata del plugin e non viene mostrato nella pagina o nei log.', registerCpolar: 'Registrati su cpolar', openDashboard: 'Apri la dashboard per il token', tokenPlaceholder: 'Incolla Authtoken cpolar', saveConnect: 'Salva e connetti', saving: 'Salvataggio…', componentDetails: 'Origine e rimozione del componente', componentDetailsText: 'Viene scaricato dal sito ufficiale cpolar e verificato a una versione fissa solo dopo aver scelto Installa. Non aggiunge servizi di sistema, avvio automatico, voci di registro o PATH.', pluginPrivateDirectory: 'Directory privata del plugin', officialDownload: 'Pagina download ufficiale', terms: 'Termini di servizio', purgeCpolar: 'Rimuovi completamente componente e configurazione cpolar', tailscaleHelp: 'Guida a Tailscale', tailscaleHelpText: 'Il componente runtime è incluso nel plugin. Il primo collegamento apre le pagine ufficiali di accesso Tailscale e autorizzazione Funnel; il plugin non accede mai alla password.', funnelGuideAria: 'Passaggi per abilitare Tailscale Funnel', funnelGuideTitle: 'Configurazione accesso remoto · Passaggio 2', funnelGuideSummary: 'L’accesso Tailscale è completato. Devi ancora consentire Funnel per questo computer; la pagina ufficiale abilita anche HTTPS.', funnelStep1: 'Apri la pagina ufficiale di autorizzazione Tailscale per questo nodo.', funnelStep2: 'Conferma Funnel; non serve accedere di nuovo a DSH.', funnelStep3: 'Torna in DSH; il plugin controlla e si connette automaticamente.', funnelGuideNote: 'Richiede un account Owner, Admin o Network admin.', continueFunnel: 'Continua autorizzazione Funnel', retryNow: 'Fatto, riprova ora', enableRemote: 'Attiva accesso remoto', disableRemote: 'Disattiva accesso remoto', continueLogin: 'Continua accesso', reconnect: 'Riconnetti', generateRemoteQr: 'Genera QR di abbinamento remoto', manageRemoteDevices: 'Gestisci dispositivi remoti', resetRemoteLogin: 'Esci e rimuovi accesso remoto', resetRemoteDevices: 'Disattiva e rimuovi dispositivi remoti',
-    lanOn: 'Accesso dalla rete locale attivo.', lanOff: 'Accesso dalla rete locale disattivato.', enableLan: 'Attiva accesso rete locale', disableLan: 'Disattiva accesso rete locale', extensionsLoaded: 'Estensioni: {loaded} caricate', extensionsFailed: 'Estensioni: {loaded} caricate, {failed} non riuscite', keyGenerationFailed: 'Impossibile generare la chiave di abbinamento.', keyCopied: 'Chiave di abbinamento copiata. Incollala nell’app Android.', linkCopied: 'Link di abbinamento copiato. Invialo al telefono e incollalo nell’app oppure aprilo nel browser.', copySecret: 'Copia {kind}: {value}', pairingKey: 'chiave di abbinamento', pairingLink: 'link di abbinamento', noDevices: 'Nessun dispositivo abbinato.', noRemoteDevices: 'Nessun dispositivo remoto abbinato.', device: 'Dispositivo', expires: 'Scade {time}', revoke: 'Revoca', confirmResetDevices: 'Rimuovere tutti i dispositivi abbinati? I dispositivi connessi verranno disconnessi subito.', ready: 'Pronto', installed: 'Installato', installWithSize: 'Installa componente ufficiale · {size} MB', cpolarUnsupported: 'Attualmente è supportato solo Windows x64. Puoi comunque usare Tailscale Funnel integrato.', cpolarNotInstalled: 'Non installato. Una versione fissa viene scaricata dal sito ufficiale cpolar solo dopo aver premuto il pulsante.', cpolarNeedsToken: 'Componente ufficiale {version} verificato. Salva il token account per continuare.', cpolarReady: 'Componente ufficiale {version} e configurazione account locale pronti.',
-    remoteOff: 'Accesso remoto disattivato. La rete locale non è interessata.', remoteUnavailableCpolar: 'cpolar non è installato o l’account locale non è configurato.', remoteUnavailableTailscale: 'Su questo computer manca il componente runtime Funnel. Reinstalla il pacchetto completo del plugin.', remoteStartingCpolar: 'Connessione a un nodo cpolar…', remoteStartingTailscale: 'Avvio del canale sicuro Tailscale…', remoteNeedsLogin: 'Completa una volta l’accesso Tailscale nel browser. Il plugin non legge mai la password.', remoteConnectingCpolar: 'Indirizzo pubblico assegnato; avvio del gateway di autenticazione DSH…', remoteConnectingTailscale: 'Accesso completato; creazione dell’indirizzo HTTPS pubblico…', remoteReady: 'Accesso remoto pronto. Solo i dispositivi abbinati possono accedere a DSH.', remoteError: 'Connessione remota non stabilita. Riconnettiti; la rete locale continua a funzionare.', funnelPermission: 'Accesso completato. Autorizza Funnel per stabilire automaticamente la connessione remota.', funnelHttps: 'Accesso completato. Autorizza Funnel; la pagina ufficiale abilita anche HTTPS.', funnelStart: 'Accesso completato. Termina la prima autorizzazione Tailscale Funnel.', tailscaleDnsMissing: 'Tailscale non ha fornito un indirizzo remoto. Riconnettiti e verifica di aver completato l’accesso.', gatewayStartFailed: 'Avvio del gateway remoto non riuscito. Riconnettiti; la rete locale non è interessata.', controlChannelFailed: 'Connessione al componente remoto interrotta. Riconnettiti.', cpolarMissing: 'Il componente ufficiale cpolar non è installato. Completa i passaggi sopra.', cpolarInvalid: 'Verifica del componente cpolar non riuscita. Rimuovilo completamente e reinstallalo.', cpolarConfigMissing: 'Nessun token account cpolar salvato. Completa i passaggi sopra.', cpolarConfigInvalid: 'Configurazione locale cpolar non valida. Salva nuovamente il token.', cpolarPortUnavailable: 'Impossibile assegnare una porta locale al gateway remoto. Riprova.', cpolarLaunchFailed: 'Avvio del client cpolar non riuscito.', cpolarTimeout: 'Connessione al nodo cpolar scaduta. Riconnettiti.', cpolarStopped: 'Connessione cpolar arrestata.', cpolarExited: 'Connessione cpolar terminata inaspettatamente. Riconnettiti.', cpolarOutputInvalid: 'cpolar ha restituito uno stato non riconosciuto.', cpolarOriginInvalid: 'L’indirizzo pubblico restituito da cpolar non ha superato la verifica.', setupOpened: 'La pagina ufficiale Tailscale è aperta. Torna in DSH dopo aver abilitato Funnel; la riconnessione è automatica.',
-    switchProviderConfirm: 'Il cambio di metodo disattiva prima il canale remoto corrente. Rete locale e dispositivi abbinati non sono interessati. Continuare?', switchingCpolar: 'Passaggio a cpolar…', switchingTailscale: 'Passaggio a Tailscale Funnel…', installConfirm: 'Scaricare e verificare una versione fissa dal sito ufficiale cpolar (circa 7,3 MB), estraendola solo nella directory privata DSH Mobile? Non vengono aggiunti servizi, PATH/registro o avvio automatico.', downloading: 'Download e verifica…', installingCpolar: 'Installazione del componente ufficiale cpolar. Mantieni DSH in esecuzione fino al termine.', installFailed: 'Installazione componente non riuscita: {error}', invalidToken: 'Incolla l’Authtoken completo dalla dashboard cpolar.', configuredConnecting: 'Configurazione account salvata; connessione tramite cpolar…', configureFailed: 'Configurazione non riuscita: {error}', purgeConfirm: 'Rimuovere completamente componente cpolar, configurazione token e log runtime dalla directory privata DSH Mobile? Rete locale, dati DSH e altri programmi non sono interessati.', purging: 'Arresto del canale e rimozione dei file cpolar gestiti da DSH Mobile…', purgeFailed: 'Pulizia non riuscita: {error}', reconnectingCpolar: 'Riconnessione a un nodo cpolar…', reconnectingTailscale: 'Controllo impostazioni Tailscale e riconnessione…', remoteQrReady: 'QR di abbinamento remoto generato. Scansionalo da “Accesso remoto” nell’app.', resetCpolarConfirm: 'Disattivare il canale remoto cpolar e rimuovere tutti i dispositivi remoti? Account cpolar e altri tunnel restano invariati.', resetTailscaleConfirm: 'Uscire da Tailscale su questo computer e rimuovere tutti i dispositivi remoti? La configurazione della rete locale resta invariata.', requestFailed: 'Richiesta non riuscita: {error}',
-  },
-  zh: {} as Record<string, string>,
-} satisfies Record<MobileControlLocale, Record<string, string>>
-
-Object.assign(MOBILE_CONTROL_MESSAGES.zh, {
-  mobileAccess: '移动访问', collapseMobileAccess: '收起移动访问', downloadAndroid: '下载 Android App', downloadAndroidAria: '前往 GitHub Releases 下载最新版 Android App', lan: '局域网', remote: '远程', lanAccess: '局域网访问', remoteAccess: '远程访问', browserAccess: '浏览器访问', remoteAddress: '远程地址', loadingStatus: '正在读取状态…', loadingRemoteStatus: '正在读取远程状态…',
-  generateCopyKey: '生成并复制密钥', copyPairLink: '复制配对链接', managePairedDevices: '管理配对设备', clearAllDevices: '清除所有设备', pairingQr: '配对二维码', remoteIntro: '选择更适合你的远程通道。切换或关闭远程访问不会影响局域网。', chooseProvider: '选择连接方式', providerInfoAria: '查看远程连接安全与网络说明', providerGroupAria: '远程连接方式', providerSafeTitle: '你始终可以放心', providerSafeText: '只有已配对设备能进入 DSH。cpolar 按需安装并可彻底清理；Tailscale 在中国大陆网络下可能连接缓慢、中断或无法使用，国内网络建议优先尝试 cpolar。', builtIn: '内置', mainlandPreferred: '国内网络优先', tailscaleDescription: '覆盖更广；中国大陆网络可能不稳定，首次需登录并允许 Funnel。', cpolarDescription: '按需安装官方组件，适合国内网络环境。',
-  prepareCpolar: '准备 cpolar', checkingComponent: '正在检查组件…', installOfficial: '安装官方组件', cpolarAccountNote: '登录 cpolar 官网后复制 Authtoken。令牌只保存在本机插件私有目录，不会显示在页面或日志中。', registerCpolar: '注册 cpolar', openDashboard: '打开控制台获取令牌', tokenPlaceholder: '粘贴 cpolar Authtoken', saveConnect: '保存并连接', saving: '正在保存…', componentDetails: '组件来源与清理说明', componentDetailsText: '仅在你点击安装后从 cpolar 官网下载并校验固定版本。不会写入系统服务、开机启动、注册表或 PATH。', pluginPrivateDirectory: '插件私有目录', officialDownload: '官方下载安装页', terms: '服务条款', purgeCpolar: '彻底移除 cpolar 组件与配置', tailscaleHelp: 'Tailscale 使用说明', tailscaleHelpText: '运行组件已随插件提供。首次连接会打开 Tailscale 官方登录和 Funnel 授权页；插件不会接触你的账号密码。', funnelGuideAria: 'Tailscale Funnel 启用步骤', funnelGuideTitle: '远程访问设置 · 第 2 步', funnelGuideSummary: 'Tailscale 登录已完成。还需为这台电脑允许 Funnel，官方页面会同时启用 HTTPS。', funnelStep1: '打开当前节点的 Tailscale 官方授权页。', funnelStep2: '确认启用 Funnel；无需再次登录 DSH。', funnelStep3: '返回 DSH，插件会自动检查并建立连接。', funnelGuideNote: '需要使用 Owner、Admin 或 Network admin 账号。', continueFunnel: '继续完成 Funnel 授权', retryNow: '已完成，立即重试',
-  enableRemote: '启用远程访问', disableRemote: '关闭远程访问', continueLogin: '继续登录', reconnect: '重新连接', generateRemoteQr: '生成远程配对二维码', manageRemoteDevices: '管理远程设备', resetRemoteLogin: '退出并清除远程登录', resetRemoteDevices: '关闭并清除远程设备', lanOn: '局域网访问已开启。', lanOff: '局域网访问已关闭。', enableLan: '开启局域网访问', disableLan: '关闭局域网访问', extensionsLoaded: '扩展：{loaded} 个已加载', extensionsFailed: '扩展：{loaded} 个已加载，{failed} 个加载失败', keyGenerationFailed: '无法生成配对密钥。', keyCopied: '配对密钥已复制，请粘贴到 Android App。', linkCopied: '配对链接已复制，发给手机后 App 粘贴或浏览器打开即可配对。', copySecret: '请复制{kind}：{value}', pairingKey: '配对密钥', pairingLink: '配对链接', noDevices: '暂无配对设备。', noRemoteDevices: '暂无远程配对设备。', device: '设备', expires: '到期 {time}', revoke: '撤销', confirmResetDevices: '确定要移除所有配对设备吗？此操作会立即终止已连接设备。', ready: '已就绪', installed: '已安装', installWithSize: '安装官方组件 · {size} MB',
-  cpolarUnsupported: '当前仅支持 Windows x64。你仍可选择内置的 Tailscale Funnel。', cpolarNotInstalled: '尚未安装。只有点击下方按钮后，才会从 cpolar 官网下载固定版本。', cpolarNeedsToken: '官方组件 {version} 已校验，下一步只需保存账号令牌。', cpolarReady: '官方组件 {version} 与本机账号配置已就绪。', remoteOff: '远程访问未启用。局域网访问不受影响。', remoteUnavailableCpolar: 'cpolar 尚未安装或未完成本机账号配置。', remoteUnavailableTailscale: '当前电脑缺少 Funnel 运行组件，请重新安装完整插件包。', remoteStartingCpolar: '正在连接 cpolar 国内节点…', remoteStartingTailscale: '正在启动 Tailscale 安全通道…', remoteNeedsLogin: '需要在浏览器完成一次 Tailscale 登录。插件不会读取你的密码。', remoteConnectingCpolar: '公网地址已分配，正在启动 DSH 认证网关…', remoteConnectingTailscale: '登录完成，正在建立公开 HTTPS 地址…', remoteReady: '远程访问已就绪。只有已配对设备可以进入 DSH。', remoteError: '远程连接未建立。可重新连接，局域网访问仍可正常使用。',
-  funnelPermission: '登录已完成。请继续授权 Funnel，完成后会自动建立远程连接。', funnelHttps: '登录已完成。请继续授权 Funnel，官方页面会同时启用 HTTPS。', funnelStart: '登录已完成。请继续完成 Tailscale Funnel 的首次授权。', tailscaleDnsMissing: 'Tailscale 暂未提供远程地址。请重新连接并确认已完成登录。', gatewayStartFailed: '远程网关启动失败。请重新连接，局域网访问不受影响。', controlChannelFailed: '远程组件连接中断。请重新连接。', cpolarMissing: 'cpolar 官方组件尚未安装。请先完成上方准备步骤。', cpolarInvalid: 'cpolar 组件校验失败。请彻底移除后重新安装。', cpolarConfigMissing: 'cpolar 尚未保存账号令牌。请先完成上方准备步骤。', cpolarConfigInvalid: 'cpolar 本机配置无效。请重新保存账号令牌。', cpolarPortUnavailable: '无法分配本机远程网关端口，请重试。', cpolarLaunchFailed: 'cpolar 客户端未能启动。', cpolarTimeout: '连接 cpolar 国内节点超时，请重新连接。', cpolarStopped: 'cpolar 连接已停止。', cpolarExited: 'cpolar 连接意外退出，请重新连接。', cpolarOutputInvalid: 'cpolar 返回了无法识别的状态。', cpolarOriginInvalid: 'cpolar 返回的公网地址未通过校验。', setupOpened: 'Tailscale 官方页面已打开。完成启用后返回 DSH，这里会自动重新连接。',
-  switchProviderConfirm: '切换连接方式会先关闭当前远程通道。局域网和配对设备不会受影响，是否继续？', switchingCpolar: '正在切换到 cpolar…', switchingTailscale: '正在切换到 Tailscale Funnel…', installConfirm: '将从 cpolar 官方网站下载并校验固定版本（约 7.3 MB），仅解压到 DSH Mobile 私有目录。不会安装系统服务、写入 PATH/注册表或设置开机启动。是否继续？', downloading: '正在下载并校验…', installingCpolar: '正在安装 cpolar 官方组件。完成前请保持 DSH 运行。', installFailed: '组件安装失败：{error}', invalidToken: '请粘贴 cpolar 控制台提供的完整 Authtoken。', configuredConnecting: '账号配置已保存，正在建立 cpolar 远程通道…', configureFailed: '配置失败：{error}', purgeConfirm: '彻底移除 DSH Mobile 私有目录中的 cpolar 组件、令牌配置和运行日志？不会影响局域网、DSH 数据或系统中的其他程序。', purging: '正在关闭通道并清理 DSH Mobile 管理的 cpolar 文件…', purgeFailed: '清理失败：{error}', reconnectingCpolar: '正在重新连接 cpolar 国内节点…', reconnectingTailscale: '正在确认 Tailscale 设置并重新连接…', remoteQrReady: '远程配对二维码已生成。请在 App 的“远程访问”中扫描。', resetCpolarConfirm: '关闭 cpolar 远程通道并移除所有远程配对设备？不会修改你的 cpolar 账号或其他隧道。', resetTailscaleConfirm: '退出电脑上的 Tailscale 登录并移除所有远程配对设备？局域网配置不会改变。', requestFailed: '请求失败：{error}',
-})
-
-Object.assign(MOBILE_CONTROL_MESSAGES.en, {
-  requestTimeout: 'The operation timed out. Confirm that DSH is still running, then try again.',
-  diagnostics: 'Diagnostics', openDiagnostics: 'Open connection diagnostics', back: 'Back', backToMobile: 'Back to Mobile access', connectionDiagnostics: 'Connection diagnostics',
-  diagnosticsIntro: 'Check versions, gateway, network adapter, firewall, and remote channel. The report is automatically redacted and never reads conversations or credentials.',
-  diagnosticsNotRun: 'Not checked yet', diagnosticsStartHint: 'Select the button below to begin.', diagnosticsIdleMeta: 'Waiting to run · connection status only', diagnosticsStart: 'Start check', diagnosticsCopy: 'Copy redacted report', diagnosticsAdvanced: 'Advanced diagnostic details',
-  diagnosticsComplete: 'Check complete', diagnosticsAttention: 'Some items need attention', diagnosticsProblem: 'Connection problems found', diagnosticsCompleteFallback: 'The check is complete.',
-  diagnosticStatusOk: 'OK', diagnosticStatusWarning: 'Attention', diagnosticStatusError: 'Problem', diagnosticStatusInfo: 'Info', diagnosticItems: '{count} items', diagnosticCheck: 'Check', diagnosticAction: 'Suggested action',
-  diagnosticNeedsAction: 'Needs action', diagnosticDetails: 'Check details', diagnosticOther: 'Other checks', diagnosticNoBlockers: '{count} checks · no blocking issues found', diagnosticNeedsCount: '{count} checks · {issues} need attention',
-  diagnosticsChecking: 'Checking…', diagnosticsCheckingTitle: 'Checking connection', diagnosticsCheckingText: 'This usually takes a few seconds. The remote channel performs a real reachability test.', diagnosticsRunningMeta: 'Running · keep DSH online',
-  diagnosticsIncomplete: 'Check not completed', diagnosticsReadFailed: 'Could not read diagnostics: {error}', diagnosticsUnavailable: 'Diagnostics service unavailable · try again later', diagnosticsRetry: 'Check again', diagnosticsCopied: 'Redacted report copied. You can paste it directly into an issue.', diagnosticsCopyManual: 'Clipboard access was denied. Details are expanded for manual copying.',
-  diagnosticLabelVersions: 'Version compatibility', diagnosticLabelNetwork: 'Local network adapter', diagnosticLabelLan: 'Local network gateway', diagnosticLabelFirewall: 'Windows Firewall', diagnosticLabelRemote: 'Remote channel', diagnosticLabelPhone: 'Phone network',
-  funnelTimeout: 'The Tailscale component timed out while starting. Check the network, then reconnect.',
-})
-Object.assign(MOBILE_CONTROL_MESSAGES.it, {
-  requestTimeout: 'Operazione scaduta. Verifica che DSH sia ancora in esecuzione e riprova.',
-  diagnostics: 'Diagnostica', openDiagnostics: 'Apri diagnostica connessione', back: 'Indietro', backToMobile: 'Torna ad Accesso mobile', connectionDiagnostics: 'Diagnostica connessione',
-  diagnosticsIntro: 'Controlla versioni, gateway, scheda di rete, firewall e canale remoto. Il report viene anonimizzato automaticamente e non legge conversazioni o credenziali.',
-  diagnosticsNotRun: 'Controllo non eseguito', diagnosticsStartHint: 'Premi il pulsante sotto per iniziare.', diagnosticsIdleMeta: 'In attesa · solo stato connessione', diagnosticsStart: 'Avvia controllo', diagnosticsCopy: 'Copia report anonimizzato', diagnosticsAdvanced: 'Dettagli diagnostici avanzati',
-  diagnosticsComplete: 'Controllo completato', diagnosticsAttention: 'Alcuni elementi richiedono attenzione', diagnosticsProblem: 'Rilevati problemi di connessione', diagnosticsCompleteFallback: 'Controllo completato.',
-  diagnosticStatusOk: 'OK', diagnosticStatusWarning: 'Attenzione', diagnosticStatusError: 'Problema', diagnosticStatusInfo: 'Informazione', diagnosticItems: '{count} elementi', diagnosticCheck: 'Controllo', diagnosticAction: 'Suggerimento',
-  diagnosticNeedsAction: 'Da risolvere', diagnosticDetails: 'Dettagli controllo', diagnosticOther: 'Altri controlli', diagnosticNoBlockers: '{count} controlli · nessun problema bloccante', diagnosticNeedsCount: '{count} controlli · {issues} richiedono attenzione',
-  diagnosticsChecking: 'Controllo…', diagnosticsCheckingTitle: 'Controllo connessione', diagnosticsCheckingText: 'Di solito richiede pochi secondi. Il canale remoto esegue un test reale di raggiungibilità.', diagnosticsRunningMeta: 'In esecuzione · mantieni DSH online',
-  diagnosticsIncomplete: 'Controllo non completato', diagnosticsReadFailed: 'Impossibile leggere la diagnostica: {error}', diagnosticsUnavailable: 'Servizio diagnostico non disponibile · riprova più tardi', diagnosticsRetry: 'Ripeti controllo', diagnosticsCopied: 'Report anonimizzato copiato. Puoi incollarlo direttamente in una issue.', diagnosticsCopyManual: 'Il browser ha negato la copia. I dettagli sono stati aperti per la copia manuale.',
-  diagnosticLabelVersions: 'Compatibilità versioni', diagnosticLabelNetwork: 'Scheda rete locale', diagnosticLabelLan: 'Gateway rete locale', diagnosticLabelFirewall: 'Windows Firewall', diagnosticLabelRemote: 'Canale remoto', diagnosticLabelPhone: 'Rete telefono',
-  funnelTimeout: 'Avvio del componente Tailscale scaduto. Controlla la rete e riconnettiti.',
-})
-Object.assign(MOBILE_CONTROL_MESSAGES.zh, {
-  requestTimeout: '操作超时，请确认 DSH 仍在运行后重试。',
-  diagnostics: '诊断', openDiagnostics: '打开连接诊断', back: '返回', backToMobile: '返回移动访问', connectionDiagnostics: '连接诊断',
-  diagnosticsIntro: '检查版本、网关、网卡、防火墙和远程通道。报告自动脱敏，不读取对话或凭据。', diagnosticsNotRun: '尚未检查', diagnosticsStartHint: '点击下方按钮开始。', diagnosticsIdleMeta: '等待运行 · 仅收集连接状态', diagnosticsStart: '开始检查', diagnosticsCopy: '复制脱敏报告', diagnosticsAdvanced: '高级诊断详情',
-  diagnosticsComplete: '检查完成', diagnosticsAttention: '有项目需要留意', diagnosticsProblem: '发现连接问题', diagnosticsCompleteFallback: '检查已完成。', diagnosticStatusOk: '正常', diagnosticStatusWarning: '注意', diagnosticStatusError: '问题', diagnosticStatusInfo: '说明', diagnosticItems: '{count} 项', diagnosticCheck: '检查项', diagnosticAction: '建议', diagnosticNeedsAction: '需要处理', diagnosticDetails: '检查详情', diagnosticOther: '其他检查', diagnosticNoBlockers: '{count} 项检查 · 未发现阻断问题', diagnosticNeedsCount: '{count} 项检查 · {issues} 项需要处理',
-  diagnosticsChecking: '正在检查…', diagnosticsCheckingTitle: '正在检查连接', diagnosticsCheckingText: '通常几秒内完成。远程通道会执行一次真实可达性测试。', diagnosticsRunningMeta: '正在运行 · 请保持 DSH 在线', diagnosticsIncomplete: '检查未完成', diagnosticsReadFailed: '无法读取诊断结果：{error}', diagnosticsUnavailable: '诊断服务暂不可用 · 请稍后重试', diagnosticsRetry: '重新检查', diagnosticsCopied: '脱敏报告已复制，可直接粘贴到 Issue。', diagnosticsCopyManual: '浏览器未允许复制，已展开详情，请手动复制。',
-  diagnosticLabelVersions: '版本兼容', diagnosticLabelNetwork: '局域网网卡', diagnosticLabelLan: '局域网网关', diagnosticLabelFirewall: 'Windows 防火墙', diagnosticLabelRemote: '远程通道', diagnosticLabelPhone: '手机网络', funnelTimeout: 'Tailscale 组件启动超时，请检查网络后重新连接。',
-})
-
-export function selectMobileControlLocale(documentLanguage = '', navigatorLanguages: readonly string[] = [], preference = ''): MobileControlLocale {
-  for (const value of [preference, documentLanguage, ...navigatorLanguages]) {
+export function selectMobileControlLocale(documentLanguage = '', navigatorLanguages: readonly string[] = []): MobileControlLocale {
+  for (const value of [documentLanguage, ...navigatorLanguages]) {
     const language = value.trim().toLowerCase().split(/[-_]/u)[0]
     if (language === 'it' || language === 'en' || language === 'zh') return language
   }
@@ -166,9 +100,25 @@ export function selectMobileControlLocale(documentLanguage = '', navigatorLangua
 }
 
 export function selectedMobileControlLocale(): MobileControlLocale {
-  let preference = ''
-  try { preference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage can be unavailable in hardened browser contexts. */ }
-  return selectMobileControlLocale(document.documentElement.lang, navigator.languages?.length ? navigator.languages : [navigator.language], preference)
+  return selectMobileControlLocale(document.documentElement.lang, navigator.languages?.length ? navigator.languages : [navigator.language])
+}
+
+/** Remount one plugin-owned surface when DSH changes the document language. */
+export function installDshLanguageBoundSurface(install: () => () => void): () => void {
+  let locale = selectedMobileControlLocale()
+  let dispose = install()
+  const observer = new MutationObserver(() => {
+    const next = selectedMobileControlLocale()
+    if (next === locale) return
+    dispose()
+    locale = next
+    dispose = install()
+  })
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
+  return () => {
+    observer.disconnect()
+    dispose()
+  }
 }
 
 function controlTranslator(locale = selectedMobileControlLocale()): (key: string, values?: Readonly<Record<string, string | number>>) => string {
@@ -178,91 +128,6 @@ function controlTranslator(locale = selectedMobileControlLocale()): (key: string
     return template.replace(/\{(\w+)\}/gu, (_match: string, name: string) => String(values[name] ?? `{${name}}`))
   }
 }
-
-const LOCALIZED_DIAGNOSTIC_COPY = {
-  en: {
-    versions: 'Installed plugin, DSH, and minimum Android app versions are shown.',
-    networkOk: 'The configured local network adapter is available.', networkError: 'The saved local network adapter is unavailable.', networkInfo: 'A fixed local network configuration is in use.', networkAction: 'Run dsh-mobile setup again.',
-    lanOk: 'The local gateway is listening and pairing is available.', lanInfo: 'Local network access is currently off.', lanAction: 'Enable local network access when the phone must connect directly.',
-    firewallOk: 'Local TCP and discovery firewall rules are enabled.', firewallWarning: 'The complete local network firewall rules were not found.', firewallInfo: 'The system did not allow the plugin to read firewall status.', firewallAction: 'Run dsh-mobile setup as administrator and check the firewall rules.',
-    remoteOk: 'The remote public address passed the reachability check.', remoteWarning: 'The remote channel needs attention or is still connecting.', remoteError: 'The remote connection is not currently reachable.', remoteInfo: 'Remote access is currently off.', remoteAction: 'Return to Remote access, follow the provider guidance, and reconnect.',
-    phone: 'The computer cannot determine whether the router isolates the phone.', phoneAction: 'Confirm the phone and computer use the same network, then disable guest-network or AP isolation.',
-    reportTitle: 'DSH Mobile diagnostic report', generated: 'Generated',
-  },
-  it: {
-    versions: 'Sono indicate le versioni installate di plugin e DSH e la versione minima dell’app Android.',
-    networkOk: 'La scheda di rete locale configurata è disponibile.', networkError: 'La scheda di rete locale salvata non è disponibile.', networkInfo: 'È in uso una configurazione di rete locale fissa.', networkAction: 'Esegui di nuovo dsh-mobile setup.',
-    lanOk: 'Il gateway locale è in ascolto e l’abbinamento è disponibile.', lanInfo: 'L’accesso dalla rete locale è disattivato.', lanAction: 'Attiva l’accesso locale quando il telefono deve collegarsi direttamente.',
-    firewallOk: 'Le regole firewall TCP locale e di rilevamento sono attive.', firewallWarning: 'Le regole firewall complete per la rete locale non sono state trovate.', firewallInfo: 'Il sistema non ha consentito al plugin di leggere lo stato del firewall.', firewallAction: 'Esegui dsh-mobile setup come amministratore e controlla le regole firewall.',
-    remoteOk: 'L’indirizzo pubblico remoto ha superato il test di raggiungibilità.', remoteWarning: 'Il canale remoto richiede attenzione o è ancora in connessione.', remoteError: 'La connessione remota non è al momento raggiungibile.', remoteInfo: 'L’accesso remoto è disattivato.', remoteAction: 'Torna ad Accesso remoto, segui le indicazioni del provider e riconnettiti.',
-    phone: 'Il computer non può stabilire se il router isola il telefono.', phoneAction: 'Verifica che telefono e computer usino la stessa rete, poi disattiva rete ospiti o isolamento AP.',
-    reportTitle: 'Report diagnostico DSH Mobile', generated: 'Generato',
-  },
-  zh: { reportTitle: 'DSH Mobile 诊断报告', generated: '生成时间' },
-} as const
-
-export const DIAGNOSTIC_REASON_MESSAGES = {
-  en: {
-    'versions-current': ['Installed plugin, DSH, and minimum Android app versions are shown.', ''],
-    'network-unavailable': ['The saved local network adapter is unavailable.', 'Run dsh-mobile setup again.'],
-    'network-interface': ['Using network interface {interfaceName}.', ''],
-    'network-fixed': ['A fixed local network configuration is in use.', ''],
-    'lan-ready': ['The local gateway is listening at {endpointSuffix}; pairing is available.', ''],
-    'lan-off': ['Local network access is currently off.', 'Enable local network access when the phone must connect directly.'],
-    'firewall-ready': ['Local TCP and discovery firewall rules are enabled.', ''],
-    'firewall-missing': ['The complete local network firewall rules were not found.', 'Run dsh-mobile setup as administrator and check the firewall rules.'],
-    'firewall-unknown': ['The system did not allow the plugin to read firewall status.', 'If the phone cannot find this computer, run setup as administrator.'],
-    'remote-off': ['Remote access through {provider} is currently off.', ''],
-    'remote-ready': ['{provider} endpoint {endpointSuffix} is reachable in about {latencyMs} ms.', ''],
-    'remote-rate-limited': ['{provider} endpoint {endpointSuffix} is reachable, but this check observed rate limiting.', 'Try again later; older sessions load on demand to reduce traffic.'],
-    'remote-fake-ip': ['The Tailscale address is intercepted by the current VPN or DNS proxy, so TLS was not established.', 'Switch VPN node or proxy mode; if it still fails, use cpolar.'],
-    'remote-unreachable': ['{provider} reports ready, but endpoint {endpointSuffix} is not reachable.', 'Reconnect, then check the provider status if it still fails.'],
-    'remote-needs-login': ['Tailscale is waiting for login to finish.', 'Return to Remote access and continue login.'],
-    'remote-connecting': ['The {provider} remote channel is still connecting.', 'Wait briefly, then check again.'],
-    'remote-controller-error': ['The {provider} controller reported {controllerCode}.', 'Return to Remote access and reconnect.'],
-    'phone-network-unknown': ['The computer cannot determine whether the router isolates the phone.', 'Confirm the phone and computer use the same network, then disable guest-network or AP isolation.'],
-  },
-  it: {
-    'versions-current': ['Sono indicate le versioni installate di plugin e DSH e la versione minima dell’app Android.', ''],
-    'network-unavailable': ['La scheda di rete locale salvata non è disponibile.', 'Esegui di nuovo dsh-mobile setup.'],
-    'network-interface': ['È in uso l’interfaccia di rete {interfaceName}.', ''],
-    'network-fixed': ['È in uso una configurazione di rete locale fissa.', ''],
-    'lan-ready': ['Il gateway locale è in ascolto su {endpointSuffix}; l’abbinamento è disponibile.', ''],
-    'lan-off': ['L’accesso dalla rete locale è disattivato.', 'Attiva l’accesso locale quando il telefono deve collegarsi direttamente.'],
-    'firewall-ready': ['Le regole firewall TCP locale e di rilevamento sono attive.', ''],
-    'firewall-missing': ['Le regole firewall complete per la rete locale non sono state trovate.', 'Esegui dsh-mobile setup come amministratore e controlla le regole firewall.'],
-    'firewall-unknown': ['Il sistema non ha consentito al plugin di leggere lo stato del firewall.', 'Se il telefono non trova il computer, esegui setup come amministratore.'],
-    'remote-off': ['L’accesso remoto tramite {provider} è disattivato.', ''],
-    'remote-ready': ['L’endpoint {provider} {endpointSuffix} è raggiungibile in circa {latencyMs} ms.', ''],
-    'remote-rate-limited': ['L’endpoint {provider} {endpointSuffix} è raggiungibile, ma il controllo ha rilevato una limitazione temporanea.', 'Riprova più tardi; le sessioni precedenti vengono caricate su richiesta per ridurre il traffico.'],
-    'remote-fake-ip': ['L’indirizzo Tailscale è intercettato dalla VPN o dal proxy DNS corrente e TLS non è stato stabilito.', 'Cambia nodo VPN o modalità proxy; se il problema continua, usa cpolar.'],
-    'remote-unreachable': ['{provider} risulta pronto, ma l’endpoint {endpointSuffix} non è raggiungibile.', 'Riconnettiti; se il problema continua, controlla lo stato del provider.'],
-    'remote-needs-login': ['Tailscale attende il completamento dell’accesso.', 'Torna ad Accesso remoto e continua l’accesso.'],
-    'remote-connecting': ['Il canale remoto {provider} è ancora in connessione.', 'Attendi qualche istante e ripeti il controllo.'],
-    'remote-controller-error': ['Il controller {provider} ha segnalato {controllerCode}.', 'Torna ad Accesso remoto e riconnettiti.'],
-    'phone-network-unknown': ['Il computer non può stabilire se il router isola il telefono.', 'Verifica che telefono e computer usino la stessa rete, poi disattiva rete ospiti o isolamento AP.'],
-  },
-  zh: {
-    'versions-current': ['已显示插件、DSH 和 Android App 最低版本。', ''],
-    'network-unavailable': ['已保存的局域网网卡当前不可用。', '重新运行 dsh-mobile setup。'],
-    'network-interface': ['正在使用网卡 {interfaceName}。', ''],
-    'network-fixed': ['当前使用固定局域网配置。', ''],
-    'lan-ready': ['局域网网关正在监听 {endpointSuffix}，配对入口可用。', ''],
-    'lan-off': ['局域网访问当前未开启。', '手机需要直连时开启局域网访问。'],
-    'firewall-ready': ['局域网 TCP 与发现防火墙规则已启用。', ''],
-    'firewall-missing': ['未找到完整的局域网防火墙规则。', '以管理员身份运行 dsh-mobile setup 并检查防火墙规则。'],
-    'firewall-unknown': ['系统未允许插件读取防火墙状态。', '若手机找不到电脑，请以管理员身份运行 setup。'],
-    'remote-off': ['{provider} 远程访问当前未启用。', ''],
-    'remote-ready': ['{provider} 端点 {endpointSuffix} 可达，往返约 {latencyMs} ms。', ''],
-    'remote-rate-limited': ['{provider} 端点 {endpointSuffix} 可达，但本次检查观察到服务限流。', '稍后重试；旧会话会按需加载以减少流量。'],
-    'remote-fake-ip': ['Tailscale 地址被当前 VPN 或 DNS 代理接管，TLS 链路未建立。', '切换 VPN 节点或代理模式；仍失败时改用 cpolar。'],
-    'remote-unreachable': ['{provider} 显示已就绪，但端点 {endpointSuffix} 暂不可达。', '点击重新连接；仍失败时检查提供方状态。'],
-    'remote-needs-login': ['Tailscale 正在等待完成登录。', '返回远程访问并继续登录。'],
-    'remote-connecting': ['{provider} 远程通道仍在连接。', '等待片刻后重新检查。'],
-    'remote-controller-error': ['{provider} 控制器报告 {controllerCode}。', '返回远程访问并重新连接。'],
-    'phone-network-unknown': ['电脑无法判断路由器是否隔离了手机。', '确认手机与电脑使用同一网络，并关闭访客网络或 AP 隔离。'],
-  },
-} as const
 
 export function normalizeDiagnosticOverall(value: unknown): 'ok' | 'attention' | 'error' {
   return value === 'ok' ? 'ok' : value === 'attention' ? 'attention' : 'error'
@@ -1120,6 +985,135 @@ function mobileRequest(path: string, init: RequestInit = {}): Promise<Response> 
   return fetch(target, { ...init, headers, credentials: 'same-origin', cache: 'no-store', redirect: 'error' })
 }
 
+export interface CombinedClientSignal {
+  readonly signal: AbortSignal
+  readonly cleanup: () => void
+}
+
+/** Combine extension and caller abort lifetimes and expose deterministic listener cleanup. */
+export function combineClientSignalLifetime(first: AbortSignal, second: AbortSignal): CombinedClientSignal {
+  if (first.aborted || second.aborted) {
+    const aborted = new AbortController()
+    aborted.abort(first.aborted ? first.reason : second.reason)
+    return { signal: aborted.signal, cleanup: () => undefined }
+  }
+  const controller = new AbortController()
+  const cleanup = (): void => {
+    first.removeEventListener('abort', abortFirst)
+    second.removeEventListener('abort', abortSecond)
+  }
+  const abortFirst = (): void => { cleanup(); controller.abort(first.reason) }
+  const abortSecond = (): void => { cleanup(); controller.abort(second.reason) }
+  first.addEventListener('abort', abortFirst, { once: true })
+  second.addEventListener('abort', abortSecond, { once: true })
+  return { signal: controller.signal, cleanup }
+}
+
+/** Combine extension and caller abort lifetimes on WebViews without AbortSignal.any. */
+export function combineClientSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+  return combineClientSignalLifetime(first, second).signal
+}
+
+/** Keep a combined request lifetime until a streamed response is consumed or cancelled. */
+export function bindClientResponseLifetime(response: Response, cleanup: () => void): Response {
+  if (response.body === null) {
+    cleanup()
+    return response
+  }
+  const reader = response.body.getReader()
+  let released = false
+  const release = (): void => {
+    if (released) return
+    released = true
+    cleanup()
+  }
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read()
+        if (result.done) {
+          release()
+          controller.close()
+        } else controller.enqueue(result.value)
+      } catch (error) {
+        release()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason) } finally { release() }
+    },
+  })
+  try {
+    const retained = new Response(body, { headers: response.headers, status: response.status, statusText: response.statusText })
+    Object.defineProperties(retained, {
+      redirected: { configurable: true, value: response.redirected },
+      type: { configurable: true, value: response.type },
+      url: { configurable: true, value: response.url },
+    })
+    return retained
+  } catch (error) {
+    void reader.cancel(error)
+    release()
+    throw error
+  }
+}
+
+/** Dispose an old UI when its replacement Host generation cannot be activated. */
+export function failClosedExtensionGenerationReplacement(
+  hasActive: boolean,
+  activeGeneration: string | undefined,
+  replacementGeneration: string | undefined,
+  dispose: () => void,
+): boolean {
+  if (!hasActive || activeGeneration === replacementGeneration) return false
+  dispose()
+  return true
+}
+
+/** Resolve one SDK route and prove its normalized path remains in the current extension namespace. */
+export function extensionRouteUrl(id: string, path: string, baseUrl: string): URL {
+  const rawPathname = path.split(/[?#]/u, 1)[0] ?? ''
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(id) || !path.startsWith('/') || path.startsWith('//')
+    || rawPathname.includes('\\') || rawPathname.includes('\0') || /%(?:2f|5c)/iu.test(rawPathname)) {
+    throw new TypeError('extension routes must be relative')
+  }
+  const origin = new URL(baseUrl).origin
+  const prefix = `/mobile-access/extensions/${id}/routes`
+  let target: URL
+  try { target = new URL(`${prefix}${path}`, origin) } catch { throw new TypeError('extension routes must be relative') }
+  let decodedPathname: string
+  try { decodedPathname = decodeURIComponent(target.pathname) } catch { throw new TypeError('extension routes must be relative') }
+  if (target.origin !== origin || target.hash !== '' || decodedPathname.includes('\\')
+    || decodedPathname !== prefix && !decodedPathname.startsWith(`${prefix}/`)) {
+    throw new TypeError('extension routes must be relative')
+  }
+  const relative = decodedPathname.slice(prefix.length)
+  if (relative.split('/').some(part => part === '.' || part === '..')) throw new TypeError('extension routes must be relative')
+  return target
+}
+
+/** Resolve one generation-pinned static asset URL in the current extension namespace. */
+export function extensionAssetUrl(id: string, generation: string | undefined, path: string, baseUrl: string): URL {
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(id) || generation !== undefined && !/^[a-f\d]{64}$/u.test(generation)) {
+    throw new TypeError('extension asset path is invalid')
+  }
+  const normalized = path.replaceAll('\\', '/')
+  if (normalized.length === 0 || normalized.startsWith('/') || normalized.split('/').some(part => part === '' || part === '.' || part === '..')) {
+    throw new TypeError('extension asset path is invalid')
+  }
+  const target = new URL(`/mobile-access/extensions/${id}/assets/${normalized.split('/').map(encodeURIComponent).join('/')}`, new URL(baseUrl).origin)
+  if (generation !== undefined) target.searchParams.set('generation', generation)
+  return target
+}
+
+/** Add the immutable Host generation selected for one activated mobile UI. */
+export function extensionGenerationHeaders(generation: string | undefined, headers?: HeadersInit): Headers {
+  const result = new Headers(headers)
+  if (generation !== undefined) result.set('x-dsh-mobile-extension-generation', generation)
+  return result
+}
+
 export function registerUniqueDisposable<T extends { readonly dispose: () => void }>(
   entries: Map<string, T>,
   claimedIds: Set<string>,
@@ -1149,7 +1143,7 @@ export function reconcileRemovedExtensions(currentIds: Iterable<string>, seen: R
   for (const id of new Set(currentIds)) if (!seen.has(id)) dispose(id)
 }
 
-/** Publish validated authority before resource loading can hang or time out. */
+/** Reconcile managed resources against one validated authoritative id set. */
 export function publishAuthoritativeExtensionIds(
   authoritativeIds: Set<string>,
   seen: ReadonlySet<string>,
@@ -1165,8 +1159,10 @@ export function publishAuthoritativeExtensionIds(
 
 interface MobileExtensionManifestEntry {
   readonly id: string
+  readonly generation?: string
   readonly scriptUrl?: string
   readonly styleUrl?: string
+  readonly assetsUrl?: string
 }
 interface MobileExtensionManifest {
   readonly extensions: readonly MobileExtensionManifestEntry[]
@@ -1189,12 +1185,20 @@ export function parseMobileExtensionManifest(payload: unknown): MobileExtensionM
   const extensions: MobileExtensionManifestEntry[] = []
   for (const value of candidate.extensions) {
     if (typeof value !== 'object' || value === null) return undefined
-    const entry = value as { id?: unknown; scriptUrl?: unknown; styleUrl?: unknown }
+    const entry = value as { id?: unknown; generation?: unknown; scriptUrl?: unknown; styleUrl?: unknown; assetsUrl?: unknown }
     if (typeof entry.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(entry.id) || ids.has(entry.id)) return undefined
+    if (entry.generation !== undefined && (typeof entry.generation !== 'string' || !/^[a-f\d]{64}$/u.test(entry.generation))) return undefined
     if (entry.scriptUrl !== undefined && !validManifestResourceUrl(entry.scriptUrl)) return undefined
     if (entry.styleUrl !== undefined && !validManifestResourceUrl(entry.styleUrl)) return undefined
+    if (entry.assetsUrl !== undefined && !validManifestResourceUrl(entry.assetsUrl)) return undefined
     ids.add(entry.id)
-    extensions.push({ id: entry.id, ...(entry.scriptUrl === undefined ? {} : { scriptUrl: entry.scriptUrl }), ...(entry.styleUrl === undefined ? {} : { styleUrl: entry.styleUrl }) })
+    extensions.push({
+      id: entry.id,
+      ...(entry.generation === undefined ? {} : { generation: entry.generation }),
+      ...(entry.scriptUrl === undefined ? {} : { scriptUrl: entry.scriptUrl }),
+      ...(entry.styleUrl === undefined ? {} : { styleUrl: entry.styleUrl }),
+      ...(entry.assetsUrl === undefined ? {} : { assetsUrl: entry.assetsUrl }),
+    })
   }
   return { extensions, legacy: { scriptRevision: legacy.scriptRevision, styleRevision: legacy.styleRevision } }
 }
@@ -1215,6 +1219,11 @@ interface LifecycleSchedulerRuntime {
   readonly window: Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout' | 'clearTimeout'>
 }
 
+export interface LifecycleRefreshController {
+  (): void
+  refresh(): void
+}
+
 function refreshAborted(signal: AbortSignal): boolean { return signal.aborted }
 
 /** Run one coalesced refresh cycle, slowing down when the page is hidden. */
@@ -1222,7 +1231,7 @@ export function startLifecycleRefreshScheduler(
   refresh: (signal: AbortSignal) => void | Promise<void>,
   options: { readonly visibleIntervalMs?: number; readonly hiddenIntervalMs?: number; readonly cycleTimeoutMs?: number } = {},
   runtime: LifecycleSchedulerRuntime = { document, window },
-): () => void {
+): LifecycleRefreshController {
   const visibleIntervalMs = options.visibleIntervalMs ?? 45_000
   const hiddenIntervalMs = options.hiddenIntervalMs ?? 300_000
   const cycleTimeoutMs = options.cycleTimeoutMs ?? 30_000
@@ -1280,7 +1289,7 @@ export function startLifecycleRefreshScheduler(
   runtime.window.addEventListener('focus', run)
   runtime.window.addEventListener('online', run)
   run()
-  return () => {
+  const stop = (): void => {
     disposed = true
     queued = false
     controller?.abort()
@@ -1290,6 +1299,64 @@ export function startLifecycleRefreshScheduler(
     runtime.document.removeEventListener('visibilitychange', onVisibilityChange)
     runtime.window.removeEventListener('focus', run)
     runtime.window.removeEventListener('online', run)
+  }
+  return Object.assign(stop, { refresh: run })
+}
+
+interface ExtensionEventRuntime {
+  readonly window: Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout' | 'clearTimeout'>
+  readonly create: (url: string) => Pick<EventSource, 'close' | 'onopen' | 'onerror' | 'addEventListener'>
+}
+
+/** Maintain one authenticated same-origin extension event stream with bounded reconnect backoff. */
+export function startExtensionChangeStream(
+  changed: () => void,
+  runtime: ExtensionEventRuntime = {
+    window,
+    create: url => new EventSource(url, { withCredentials: true }),
+  },
+): () => void {
+  let source: ReturnType<ExtensionEventRuntime['create']> | undefined
+  let timer: number | undefined
+  let disposed = false
+  let retryMs = 1_000
+  const clearTimer = (): void => {
+    if (timer === undefined) return
+    runtime.window.clearTimeout(timer)
+    timer = undefined
+  }
+  const connect = (): void => {
+    if (disposed || source !== undefined) return
+    clearTimer()
+    const next = runtime.create('/mobile-access/extensions/events')
+    source = next
+    next.onopen = () => { retryMs = 1_000 }
+    next.addEventListener('extensions-changed', changed)
+    next.onerror = () => {
+      if (source !== next) return
+      next.close()
+      source = undefined
+      if (disposed) return
+      const delay = retryMs
+      retryMs = Math.min(30_000, retryMs * 2)
+      timer = runtime.window.setTimeout(connect, delay)
+    }
+  }
+  const reconnectNow = (): void => {
+    if (disposed) return
+    source?.close()
+    source = undefined
+    retryMs = 1_000
+    connect()
+  }
+  runtime.window.addEventListener('online', reconnectNow)
+  connect()
+  return () => {
+    disposed = true
+    clearTimer()
+    source?.close()
+    source = undefined
+    runtime.window.removeEventListener('online', reconnectNow)
   }
 }
 
@@ -1431,6 +1498,8 @@ function installCustomAssets(): () => void {
   const styleNodes = new Map<string, HTMLStyleElement>()
   const styleEtags = new Map<string, string>()
   const scriptDigests = new Map<string, string>()
+  const activeHostGenerations = new Map<string, string | undefined>()
+  const activationKeys = new Map<string, { readonly definition: MobileClientDefinition; readonly generation?: string }>()
   const manifestExtensionIds = new Set<string>()
   const managedDefinitionIds = new Set<string>()
   let manifestEtag = ''
@@ -1536,11 +1605,11 @@ function installCustomAssets(): () => void {
     }
     throw new Error('native capability is unavailable')
   }
-  const makeApi = (id: string, controller: AbortController, surfaces: Map<string, ExtensionSurfaceEntry>, surfaceIds: Set<string>): MobileClientApi => {
+  const makeApi = (id: string, hostGeneration: string | undefined, controller: AbortController, surfaces: Map<string, ExtensionSurfaceEntry>, surfaceIds: Set<string>): MobileClientApi => {
     const ensureCurrent = (): void => { if (controller.signal.aborted) throw controller.signal.reason }
-    const requestSignal = (signal?: AbortSignal | null): AbortSignal => signal === undefined || signal === null
-      ? controller.signal
-      : AbortSignal.any([controller.signal, signal])
+    const requestSignal = (signal?: AbortSignal | null): CombinedClientSignal => signal === undefined || signal === null
+      ? { signal: controller.signal, cleanup: () => undefined }
+      : combineClientSignalLifetime(controller.signal, signal)
     const mountSurface = (surface: MobileSurface): (() => void) => {
       ensureCurrent()
       if (!/^[a-z][a-z0-9-]{0,63}$/u.test(surface.id) || surface.label.length > 120) throw new Error('invalid mobile surface')
@@ -1556,14 +1625,19 @@ function installCustomAssets(): () => void {
       host: {
         invoke: (action: string, input: unknown) => {
           ensureCurrent()
-          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, { method: 'POST', body: JSON.stringify(input ?? {}), signal: controller.signal }).then(async response => { const value = await response.json() as unknown; if (!response.ok) throw new Error(typeof value === 'object' && value !== null && 'error' in value ? String((value as { error: unknown }).error) : `HTTP ${String(response.status)}`); return value })
+          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, { method: 'POST', headers: extensionGenerationHeaders(hostGeneration), body: JSON.stringify(input ?? {}), signal: controller.signal }).then(async response => { const value = await response.json() as unknown; if (!response.ok) throw new Error(typeof value === 'object' && value !== null && 'error' in value ? String((value as { error: unknown }).error) : `HTTP ${String(response.status)}`); return value })
         },
         fetch: (path: string, init?: RequestInit) => {
           ensureCurrent()
-          if (!path.startsWith('/') || path.startsWith('//') || path.includes('://')
-            || path.split('/').some(part => part === '..' || part === '.')) throw new TypeError('extension routes must be relative')
-          return mobileRequest(`/mobile-access/extensions/${encodeURIComponent(id)}/routes${path}`, { ...init, signal: requestSignal(init?.signal) })
+          const target = extensionRouteUrl(id, path, location.href)
+          const headers = extensionGenerationHeaders(hostGeneration, init?.headers)
+          const lifetime = requestSignal(init?.signal)
+          return mobileRequest(target.href, { ...init, headers, signal: lifetime.signal }).then(
+            response => bindClientResponseLifetime(response, lifetime.cleanup),
+            error => { lifetime.cleanup(); throw error },
+          )
         },
+        assetUrl: path => { ensureCurrent(); return extensionAssetUrl(id, hostGeneration, path, location.href).href },
       },
       ui: {
         registerSurface: mountSurface,
@@ -1578,9 +1652,15 @@ function installCustomAssets(): () => void {
       signal: controller.signal, document, window,
     }
   }
-  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal): Promise<boolean> => activations.activate(
+  const activateDefinition = (definition: MobileClientDefinition, cycleSignal?: AbortSignal, commitGeneration?: () => void, hostGeneration?: string): Promise<boolean> => {
+    const previousKey = activationKeys.get(definition.id)
+    const key = previousKey?.definition === definition && previousKey.generation === hostGeneration
+      ? previousKey
+      : { definition, ...(hostGeneration === undefined ? {} : { generation: hostGeneration }) }
+    activationKeys.set(definition.id, key)
+    return activations.activate(
     definition.id,
-    definition,
+    key,
     cycleSignal,
     controller => {
       const surfaces = new Map<string, ExtensionSurfaceEntry>()
@@ -1595,7 +1675,7 @@ function installCustomAssets(): () => void {
         surfaces.clear()
         surfaceIds.clear()
       }
-      const result = Promise.resolve().then(() => definition.activate(makeApi(definition.id, controller, surfaces, surfaceIds))).then(cleanup => ({
+      const result = Promise.resolve().then(() => definition.activate(makeApi(definition.id, hostGeneration, controller, surfaces, surfaceIds))).then(cleanup => ({
         controller,
         surfaces,
         ...(typeof cleanup === 'function' ? { cleanup } : {}),
@@ -1606,6 +1686,8 @@ function installCustomAssets(): () => void {
         commit: value => {
           if (definitions.get(definition.id) !== definition || controller.signal.aborted) throw new Error('stale mobile extension activation')
           for (const surface of value.surfaces.values()) surface.host().append(surface.container)
+          activeHostGenerations.set(definition.id, hostGeneration)
+          commitGeneration?.()
         },
         dispose: value => {
           controller.abort(new DOMException('mobile extension disposed', 'AbortError'))
@@ -1613,7 +1695,8 @@ function installCustomAssets(): () => void {
         },
       }
     },
-  )
+    )
+  }
   const define = (definition: MobileClientDefinition): void => {
     if (disposed || definition.apiVersion !== 1 || !/^[a-z][a-z0-9-]{0,63}$/u.test(definition.id) || typeof definition.activate !== 'function') return
     if (expectedDefinitionId !== undefined && definition.id !== expectedDefinitionId) return
@@ -1662,7 +1745,7 @@ function installCustomAssets(): () => void {
   let legacyStyleRevision = ''
   const disposeManifestExtension = (id: string): void => {
     activations.remove(id)
-    styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id)
+    styleNodes.get(id)?.remove(); styleNodes.delete(id); styleEtags.delete(id); scriptDigests.delete(id); activeHostGenerations.delete(id); activationKeys.delete(id)
     if (managedDefinitionIds.delete(id)) definitions.delete(id)
   }
   const managedManifestIdSources = (): readonly Iterable<string>[] => [styleNodes.keys(), styleEtags.keys(), scriptDigests.keys(), managedDefinitionIds]
@@ -1691,7 +1774,6 @@ function installCustomAssets(): () => void {
       if (refreshAborted(signal) || payload === undefined) return false
       const entries = payload.extensions
       const seen = new Set(entries.map(entry => entry.id))
-      publishAuthoritativeExtensionIds(manifestExtensionIds, seen, managedManifestIdSources(), disposeManifestExtension)
       const scriptRevision = payload.legacy.scriptRevision
       const styleRevision = payload.legacy.styleRevision
       let refreshComplete = true
@@ -1703,15 +1785,27 @@ function installCustomAssets(): () => void {
         if (await refreshCssLegacy(legacyStyle, signal, legacyCssState)) legacyStyleRevision = styleRevision
         else refreshComplete = false
       }
+      const commitStyle = (id: string, change: 'retain' | 'remove' | 'replace', css?: string, etag?: string): void => {
+        if (change === 'retain') return
+        const oldStyle = styleNodes.get(id)
+        if (change === 'remove') {
+          oldStyle?.remove()
+          styleNodes.delete(id)
+          styleEtags.delete(id)
+          return
+        }
+        if (oldStyle?.textContent !== css) {
+          const node = element('style'); node.dataset.dshMobileExtensionStyle = id; node.textContent = css ?? ''; document.head.append(node); styleNodes.set(id, node); oldStyle?.remove()
+        }
+        if (etag !== undefined && etag !== '') styleEtags.set(id, etag)
+      }
       for (const entry of entries) {
-        if (entry.styleUrl === undefined) {
-          styleNodes.get(entry.id)?.remove(); styleNodes.delete(entry.id); styleEtags.delete(entry.id)
-        }
-        if (entry.scriptUrl === undefined) {
-          activations.remove(entry.id); scriptDigests.delete(entry.id)
-          if (managedDefinitionIds.delete(entry.id)) definitions.delete(entry.id)
-        }
+        const hadActiveGeneration = activations.hasActive(entry.id)
+        const previousHostGeneration = activeHostGenerations.get(entry.id)
+        let previousDefinition: MobileClientDefinition | undefined
+        let evaluatedDefinition = false
         try {
+          let styleChange: 'retain' | 'remove' | 'replace' = entry.styleUrl === undefined ? 'remove' : 'retain'
           let pendingCss: string | undefined
           let pendingStyleEtag: string | undefined
           const cssUrl = typeof entry.styleUrl === 'string' ? entry.styleUrl : undefined
@@ -1724,16 +1818,25 @@ function installCustomAssets(): () => void {
               if (!cssResponse.ok) throw new Error('mobile extension style failed to load')
               pendingStyleEtag = cssResponse.headers.get('etag') ?? undefined
               pendingCss = await cssResponse.text()
+              styleChange = 'replace'
               if (refreshAborted(signal)) return false
             }
           }
 
           const scriptUrl = typeof entry.scriptUrl === 'string' ? entry.scriptUrl : undefined
-          if (scriptUrl !== undefined) {
+          if (scriptUrl === undefined) {
+            if (refreshAborted(signal)) return false
+            commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag)
+            activations.remove(entry.id)
+            activeHostGenerations.delete(entry.id)
+            scriptDigests.delete(entry.id)
+            if (managedDefinitionIds.delete(entry.id)) definitions.delete(entry.id)
+          } else {
             const scriptHeaders: Record<string, string> = {}
             const storedDigest = scriptDigests.get(entry.id)
             if (storedDigest !== undefined) scriptHeaders['if-none-match'] = storedDigest
             const scriptResponse = await fetch(scriptUrl, { credentials: 'same-origin', cache: 'no-store', headers: scriptHeaders, signal })
+            let nextDigest: string | undefined
             if (scriptResponse.status !== 304) {
               if (!scriptResponse.ok) throw new Error('mobile extension script failed to load')
               const source = await scriptResponse.text()
@@ -1742,7 +1845,7 @@ function installCustomAssets(): () => void {
               if (refreshAborted(signal)) return false
               const key = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
               if (scriptDigests.get(entry.id) !== key) {
-                const previousDefinition = definitions.get(entry.id)
+                previousDefinition = definitions.get(entry.id)
                 try {
                   expectedDefinitionId = entry.id
                   try {
@@ -1750,10 +1853,8 @@ function installCustomAssets(): () => void {
                   } finally { expectedDefinitionId = undefined }
                   const nextDefinition = definitions.get(entry.id)
                   if (nextDefinition === undefined || nextDefinition === previousDefinition) throw new Error('mobile extension did not define its manifest id')
-                  if (!await activateDefinition(nextDefinition, signal)) throw new Error('mobile extension activation failed')
-                  if (refreshAborted(signal)) return false
-                  managedDefinitionIds.add(entry.id)
-                  scriptDigests.set(entry.id, key)
+                  evaluatedDefinition = true
+                  nextDigest = key
                 } catch (error) {
                   if (previousDefinition === undefined) definitions.delete(entry.id)
                   else definitions.set(entry.id, previousDefinition)
@@ -1762,23 +1863,36 @@ function installCustomAssets(): () => void {
               }
             }
             const definition = definitions.get(entry.id)
-            if (definition !== undefined && !activations.hasActive(entry.id) && !await activateDefinition(definition, signal)) throw new Error('mobile extension activation failed')
-          }
-
-          if (refreshAborted(signal)) return false
-          if (pendingCss !== undefined) {
-            const oldStyle = styleNodes.get(entry.id)
-            if (oldStyle?.textContent !== pendingCss) {
-              const node = element('style'); node.dataset.dshMobileExtensionStyle = entry.id; node.textContent = pendingCss; document.head.append(node); styleNodes.set(entry.id, node); oldStyle?.remove()
+            const commitGeneration = (): void => { commitStyle(entry.id, styleChange, pendingCss, pendingStyleEtag) }
+            if (definition === undefined) throw new Error('mobile extension definition is unavailable')
+            if (evaluatedDefinition || !activations.hasActive(entry.id) || activeHostGenerations.get(entry.id) !== entry.generation) {
+              if (!await activateDefinition(definition, signal, commitGeneration, entry.generation)) throw new Error('mobile extension activation failed')
+            } else {
+              if (refreshAborted(signal)) return false
+              commitGeneration()
             }
-            if (pendingStyleEtag !== undefined && pendingStyleEtag !== '') styleEtags.set(entry.id, pendingStyleEtag)
+            managedDefinitionIds.add(entry.id)
+            if (nextDigest !== undefined) scriptDigests.set(entry.id, nextDigest)
           }
         } catch {
+          if (evaluatedDefinition) {
+            if (previousDefinition === undefined) definitions.delete(entry.id)
+            else definitions.set(entry.id, previousDefinition)
+          }
+          failClosedExtensionGenerationReplacement(
+            hadActiveGeneration,
+            previousHostGeneration,
+            entry.generation,
+            () => { disposeManifestExtension(entry.id) },
+          )
           refreshComplete = false
         }
       }
       if (refreshAborted(signal)) return false
-      manifestEtag = refreshComplete ? nextManifestEtag : ''
+      if (refreshComplete) {
+        publishAuthoritativeExtensionIds(manifestExtensionIds, seen, managedManifestIdSources(), disposeManifestExtension)
+        manifestEtag = nextManifestEtag
+      } else manifestEtag = ''
       return refreshComplete
     } catch { return false }
   }
@@ -1787,7 +1901,8 @@ function installCustomAssets(): () => void {
   const stopRefresh = startLifecycleRefreshScheduler(async signal => {
     await refreshExtensions(signal)
   })
-  return () => { disposed = true; stopRefresh(); started = false; legacyDispose?.(); legacyDispose = undefined; legacyRoot?.remove(); legacyRoot = undefined; legacyStyle.remove(); activations.dispose(); for (const node of styleNodes.values()) node.remove(); styleNodes.clear(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
+  const stopEvents = startExtensionChangeStream(() => { stopRefresh.refresh() })
+  return () => { disposed = true; stopEvents(); stopRefresh(); started = false; legacyDispose?.(); legacyDispose = undefined; legacyRoot?.remove(); legacyRoot = undefined; legacyStyle.remove(); activations.dispose(); for (const node of styleNodes.values()) node.remove(); styleNodes.clear(); const layer = document.querySelector('[data-dsh-mobile-extension-layer]'); layer?.remove(); for (const host of document.querySelectorAll('[data-dsh-mobile-surface-host]')) host.remove(); if (previous === undefined) delete window.dshMobile; else window.dshMobile = previous }
 }
 
 interface LegacyCssState { etag: string; modified: string }
@@ -1857,22 +1972,25 @@ export function apply(ctx: ClientContext): void {
     document.head.append(style)
     if (!loopback) {
       const removeCustom = installCustomAssets()
-      const removeSurface = installNativeMobileSurface()
+      const removeSurface = installDshLanguageBoundSurface(installNativeMobileSurface)
       return () => { removeCustom(); removeSurface(); style.remove() }
     }
-    const control = installControl()
-    const triggerLocale = selectedMobileControlLocale()
-    const t = controlTranslator(triggerLocale)
-    const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register<{ wide: boolean }>({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
-      'aria-expanded': false,
-      'aria-label': t('mobileAccess'),
-      className: `dsh-mobile-control__trigger${wide ? '' : ' is-rail'}`,
-      lang: triggerLocale,
-      type: 'button',
-      title: t('mobileAccess'),
-      onClick: control.toggle,
-    }, createElement('span', { 'aria-hidden': true, className: 'dsh-mobile-control__trigger-icon' }), wide ? createElement('span', { className: 'dsh-mobile-control__trigger-label' }, t('mobileAccess')) : undefined)))
-    return () => { disposeSlot(); control.remove(); style.remove() }
+    const removeControl = installDshLanguageBoundSurface(() => {
+      const control = installControl()
+      const triggerLocale = selectedMobileControlLocale()
+      const t = controlTranslator(triggerLocale)
+      const disposeSlot = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register<{ wide: boolean }>({ name: 'sidebar.footer.action', id: 'dsh-mobile' }, ({ wide }) => createElement('button', {
+        'aria-expanded': false,
+        'aria-label': t('mobileAccess'),
+        className: `dsh-mobile-control__trigger${wide ? '' : ' is-rail'}`,
+        lang: triggerLocale,
+        type: 'button',
+        title: t('mobileAccess'),
+        onClick: control.toggle,
+      }, createElement('span', { 'aria-hidden': true, className: 'dsh-mobile-control__trigger-icon' }), wide ? createElement('span', { className: 'dsh-mobile-control__trigger-label' }, t('mobileAccess')) : undefined)))
+      return () => { disposeSlot(); control.remove() }
+    })
+    return () => { removeControl(); style.remove() }
   }, 'dsh-mobile: stock mobile adaptation and local control')
 }
 

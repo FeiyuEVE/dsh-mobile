@@ -56,6 +56,26 @@ internal class CameraCleanupOwnership<T> {
     }
 }
 
+/** Single temporary provider grant owned by the active file-picker result. */
+internal class TemporaryGrantOwnership<T> {
+    private var grant: T? = null
+
+    fun claim(value: T?) {
+        if (value == null) return
+        check(grant == null) { "temporary grant is already owned" }
+        grant = value
+    }
+
+    /** Releases only the expected grant, so stale callbacks cannot revoke a newer result. */
+    fun release(expected: T): T? {
+        if (grant != expected) return null
+        return grant.also { grant = null }
+    }
+
+    /** Releases the active grant when its request is abandoned without a matching callback. */
+    fun releaseAny(): T? = grant.also { grant = null }
+}
+
 internal enum class RestoredOperationDisposition {
     CLEANUP_ONLY,
 }
@@ -85,7 +105,16 @@ internal object NativeBridgePolicy {
     const val MAX_BINARY_BYTES = 8 * 1024 * 1024
     const val MAX_CLIPBOARD_BYTES = 256 * 1024
     const val MAX_REPLY_BYTES = 12 * 1024 * 1024
+    const val ACTIVITY_REQUEST_TIMEOUT_MS = 5L * 60L * 1000L
+    const val PAGE_ACTIVITY_TIMEOUT_MS = ACTIVITY_REQUEST_TIMEOUT_MS + 5_000L
     const val CAMERA_ORPHAN_MAX_AGE_MS = 24L * 60L * 60L * 1000L
+
+    /** Keep the original deadline across recreation; old snapshots without one receive a fresh bound. */
+    fun resolveActivityDeadline(storedDeadlineMillis: Long, nowMillis: Long): Long =
+        storedDeadlineMillis.takeIf { it > 0L } ?: nowMillis + ACTIVITY_REQUEST_TIMEOUT_MS
+
+    fun remainingActivityTimeout(deadlineMillis: Long, nowMillis: Long): Long =
+        (deadlineMillis - nowMillis).coerceAtLeast(0L)
 
     /** Counts UTF-8 bytes without allocating another potentially large byte array. */
     fun isMessageWithinLimit(raw: String, limit: Int = MAX_MESSAGE_BYTES): Boolean {

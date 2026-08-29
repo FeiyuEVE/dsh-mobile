@@ -54,6 +54,7 @@ const packages = [
   'packages/client/ui-layout/package.json',
   'packages/client/ui-sidebar/package.json',
   'packages/client/ui-conversation/package.json',
+  'packages/client/ui-input-trigger/package.json',
   'packages/client/ui-settings/package.json',
   'packages/client/ui-user-questions/package.json',
   ...(clientArchitecture === 'runtime-v1'
@@ -100,6 +101,15 @@ for (const declaration of [
 const conversation = await text('packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx')
 if (!conversation.includes('data-conversation-scroll')) {
   throw new Error('DSH conversation no longer exposes data-conversation-scroll')
+}
+
+const composer = await text('packages/client/ui-conversation/src/client/skeleton/InputBar.tsx')
+for (const marker of ['data-composer-card', 'data-input-scroll', 'aria-haspopup="listbox"']) {
+  if (!composer.includes(marker)) throw new Error(`DSH composer command contract changed: missing ${marker}`)
+}
+const triggerMenu = await text('packages/client/ui-input-trigger/src/client/MenuView.tsx')
+if (!triggerMenu.includes('data-trigger-menu=""')) {
+  throw new Error('DSH command menu no longer exposes data-trigger-menu')
 }
 
 const connectionSource = await text('packages/client/connection/src/client/index.ts')

@@ -40,6 +40,17 @@ class NativeBridgePolicyTest {
     }
 
     @Test
+    fun activityDeadlineIsBoundedAndSurvivesRecreation() {
+        val now = 1_000_000L
+        val initial = NativeBridgePolicy.resolveActivityDeadline(0L, now)
+        assertEquals(now + 5L * 60L * 1000L, initial)
+        assertEquals(initial, NativeBridgePolicy.resolveActivityDeadline(initial, now + 20_000L))
+        assertEquals(280_000L, NativeBridgePolicy.remainingActivityTimeout(initial, now + 20_000L))
+        assertEquals(0L, NativeBridgePolicy.remainingActivityTimeout(initial, initial + 1L))
+        assertTrue(NativeBridgePolicy.PAGE_ACTIVITY_TIMEOUT_MS > NativeBridgePolicy.ACTIVITY_REQUEST_TIMEOUT_MS)
+    }
+
+    @Test
     fun webMessagesRequireTheExactOriginAndMainFrame() {
         val origin = GatewayOrigin.parse("https://trusted.example:3443")!!
         assertTrue(NativeBridgePolicy.isTrustedMessage(origin, "https://trusted.example:3443", true))
@@ -78,6 +89,7 @@ class NativeBridgePolicyTest {
 
         assertEquals("reading", registry.remove("one"))
         assertNull(registry["one"])
+        assertNull(registry.remove("one"))
         assertTrue(registry.reserve("three", "accepted after terminal reply"))
     }
 
@@ -130,6 +142,28 @@ class NativeBridgePolicyTest {
         ownership.markSnapshotExported()
         assertNull(ownership.onTerminal("camera.jpg"))
         assertEquals(listOf("camera.jpg"), ownership.onDispose(null, preserveForConfiguration = false))
+    }
+
+    @Test
+    fun temporaryGrantIsReleasedExactlyOnceByItsOwningResult() {
+        val ownership = TemporaryGrantOwnership<String>()
+        ownership.claim("content://provider/selected")
+
+        assertNull(ownership.release("content://provider/stale"))
+        assertEquals("content://provider/selected", ownership.release("content://provider/selected"))
+        assertNull(ownership.release("content://provider/selected"))
+        assertNull(ownership.releaseAny())
+    }
+
+    @Test
+    fun abandonedTemporaryGrantCanBeDrainedWithoutAResultCallback() {
+        val ownership = TemporaryGrantOwnership<String>()
+        ownership.claim(null)
+        assertNull(ownership.releaseAny())
+
+        ownership.claim("content://provider/late")
+        assertEquals("content://provider/late", ownership.releaseAny())
+        assertNull(ownership.releaseAny())
     }
 
     @Test

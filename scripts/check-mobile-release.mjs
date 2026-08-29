@@ -27,6 +27,21 @@ function singleMatch(source, pattern, label) {
   return matches[0][1]
 }
 
+function androidResourceNames(source, element) {
+  return [...source.matchAll(new RegExp(`<${element}\\s+name="([^"]+)"`, 'gu'))]
+    .map(match => match[1])
+    .filter(value => value !== undefined)
+    .sort()
+}
+
+function requireSameResourceNames(referenceSource, candidateSource, element, candidateLabel) {
+  const reference = androidResourceNames(referenceSource, element)
+  const candidate = androidResourceNames(candidateSource, element)
+  if (reference.length === 0 || JSON.stringify(candidate) !== JSON.stringify(reference)) {
+    fail(`${candidateLabel} must define the same Android ${element} resources as the default locale`)
+  }
+}
+
 function pngMetadata(buffer, label) {
   if (buffer.length < 33 || !buffer.subarray(0, pngSignature.length).equals(pngSignature)) {
     fail(`${label} is not a valid PNG`)
@@ -80,7 +95,7 @@ async function checkBrandAndStoreIcon() {
 }
 
 async function checkAndroid() {
-  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder, nativeBridge] = await Promise.all([
+  const [gradle, manifest, networkSecurity, packageManifest, discovery, nativeAuth, nsdDiscovery, credentialStore, webViewClient, scanActivity, qrDecoder, nativeBridge, defaultStrings, chineseStrings, italianStrings, clientSource, mobileLayoutSource, nativeMobileSource] = await Promise.all([
     read('apps/mobile/android/app/build.gradle.kts', 'utf8'),
     read('apps/mobile/android/app/src/main/AndroidManifest.xml', 'utf8'),
     read('apps/mobile/android/app/src/main/res/xml/network_security_config.xml', 'utf8'),
@@ -93,6 +108,12 @@ async function checkAndroid() {
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/ScanActivity.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/QrDecoder.kt', 'utf8'),
     read('apps/mobile/android/app/src/main/java/io/github/sayach/dshmobile/NativeBridge.kt', 'utf8'),
+    read('apps/mobile/android/app/src/main/res/values/strings.xml', 'utf8'),
+    read('apps/mobile/android/app/src/main/res/values-zh-rCN/strings.xml', 'utf8'),
+    read('apps/mobile/android/app/src/main/res/values-it/strings.xml', 'utf8'),
+    read('src/client.ts', 'utf8'),
+    read('src/mobile-layout.ts', 'utf8'),
+    read('src/native-mobile.ts', 'utf8'),
   ])
   const packageVersion = asString(JSON.parse(packageManifest).version, 'package.version')
   const compileSdk = singleMatch(gradle, /^\s*compileSdk\s*=\s*(\d+)\s*$/gm, 'Android compileSdk')
@@ -138,6 +159,13 @@ async function checkAndroid() {
   }
   for (const marker of ['addJavascriptInterface', '@JavascriptInterface', 'MAX_MESSAGE_BYTES', 'MAX_PENDING', 'files.pick', 'camera.capture']) {
     if (!nativeBridge.includes(marker)) fail(`Android native bridge is missing ${marker}`)
+  }
+  for (const [source, label] of [[chineseStrings, 'Chinese'], [italianStrings, 'Italian']]) {
+    requireSameResourceNames(defaultStrings, source, 'string', label)
+    requireSameResourceNames(defaultStrings, source, 'plurals', label)
+  }
+  if (![clientSource, mobileLayoutSource, nativeMobileSource].every(source => !source.includes('dsh-mobile-control-locale'))) {
+    fail('Web plugin language must follow DSH and must not persist an independent locale preference')
   }
   if (!webViewClient.includes('error.primaryError == SslError.SSL_UNTRUSTED')
     || !webViewClient.includes('PinnedTls.acceptsWebViewLeaf')

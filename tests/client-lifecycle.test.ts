@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
+  bindClientResponseLifetime,
+  combineClientSignalLifetime,
+  combineClientSignals,
   diagnosticEntriesForRender,
   diagnosticOverallForChecks,
   diagnosticServerCopy,
   DIAGNOSTIC_REASON_MESSAGES,
+  extensionAssetUrl,
+  extensionGenerationHeaders,
+  extensionRouteUrl,
+  failClosedExtensionGenerationReplacement,
   handleMissingExtensionManifest,
+  installDshLanguageBoundSurface,
   MOBILE_CONTROL_MESSAGES,
   normalizeDiagnosticOverall,
   normalizeDiagnosticStatus,
@@ -16,6 +24,7 @@ import {
   registerUniqueDisposable,
   renderDiagnosticPayloadSafely,
   selectMobileControlLocale,
+  startExtensionChangeStream,
   startLifecycleRefreshScheduler,
   validateDiagnosticChecks,
 } from '../src/client.js'
@@ -31,15 +40,16 @@ class FakeWindow extends EventTarget {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('mobile-control localization', () => {
-  it('selects a deterministic supported locale and honors the stored preference first', () => {
+  it('follows the DSH document language before the browser fallback', () => {
     expect(selectMobileControlLocale('it-IT', ['en-US'])).toBe('it')
     expect(selectMobileControlLocale('', ['zh-Hant', 'en-US'])).toBe('zh')
     expect(selectMobileControlLocale('de-DE', ['fr-FR'])).toBe('en')
-    expect(selectMobileControlLocale('en-US', ['zh-CN'], '  IT_it ')).toBe('it')
-    expect(selectMobileControlLocale('zh-CN', ['it-IT'], 'unsupported')).toBe('zh')
+    expect(selectMobileControlLocale('en-US', ['it-IT'])).toBe('en')
+    expect(selectMobileControlLocale('zh-CN', ['it-IT'])).toBe('zh')
   })
 
   it('keeps Italian, English, and Chinese catalogs in parity including v0.3 diagnostics', () => {
@@ -57,6 +67,34 @@ describe('mobile-control localization', () => {
     const englishReasons = Object.keys(DIAGNOSTIC_REASON_MESSAGES.en).sort()
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.it).sort()).toEqual(englishReasons)
     expect(Object.keys(DIAGNOSTIC_REASON_MESSAGES.zh).sort()).toEqual(englishReasons)
+  })
+
+  it('remounts plugin-owned UI only when the DSH document language changes', () => {
+    const documentElement = { lang: 'en-US' }
+    let observer: { callback: MutationCallback, disconnect: ReturnType<typeof vi.fn> } | undefined
+    class FakeMutationObserver {
+      readonly disconnect = vi.fn()
+      constructor(readonly callback: MutationCallback) { observer = this }
+      observe = vi.fn()
+    }
+    vi.stubGlobal('document', { documentElement })
+    vi.stubGlobal('navigator', { language: 'zh-CN', languages: ['zh-CN'] })
+    vi.stubGlobal('MutationObserver', FakeMutationObserver)
+    const disposers = [vi.fn(), vi.fn()]
+    const install = vi.fn(() => disposers[install.mock.calls.length - 1] ?? vi.fn())
+
+    const stop = installDshLanguageBoundSurface(install)
+    expect(install).toHaveBeenCalledTimes(1)
+    documentElement.lang = 'it-IT'
+    observer?.callback([], observer as unknown as MutationObserver)
+    expect(disposers[0]).toHaveBeenCalledOnce()
+    expect(install).toHaveBeenCalledTimes(2)
+    observer?.callback([], observer as unknown as MutationObserver)
+    expect(install).toHaveBeenCalledTimes(2)
+
+    stop()
+    expect(observer?.disconnect).toHaveBeenCalledOnce()
+    expect(disposers[1]).toHaveBeenCalledOnce()
   })
 
   it('fails closed for malformed diagnostic states and preserves unknown server copy', () => {
@@ -174,6 +212,157 @@ describe('custom asset refresh lifecycle', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(refresh).toHaveBeenCalledTimes(2)
     stop()
+  })
+
+  it('accepts a push refresh without starting a parallel cycle', async () => {
+    const fakeDocument = new FakeDocument()
+    const fakeWindow = new FakeWindow()
+    let release: (() => void) | undefined
+    const refresh = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+    const stop = startLifecycleRefreshScheduler(refresh, {}, { document: fakeDocument, window: fakeWindow })
+    await Promise.resolve()
+    stop.refresh()
+    stop.refresh()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    release?.()
+    await vi.waitFor(() => { expect(refresh).toHaveBeenCalledTimes(2) })
+    stop()
+  })
+
+  it('keeps one event stream and reconnects with bounded exponential backoff', async () => {
+    vi.useFakeTimers()
+    class FakeEventSource {
+      onopen: ((event: Event) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+      readonly listeners = new Map<string, EventListener>()
+      readonly close = vi.fn()
+      addEventListener(name: string, listener: EventListener): void { this.listeners.set(name, listener) }
+    }
+    const fakeWindow = new FakeWindow()
+    const sources: FakeEventSource[] = []
+    const changed = vi.fn()
+    const stop = startExtensionChangeStream(changed, {
+      window: fakeWindow,
+      create: () => { const source = new FakeEventSource(); sources.push(source); return source as unknown as EventSource },
+    })
+    expect(sources).toHaveLength(1)
+    sources[0]?.listeners.get('extensions-changed')?.(new Event('extensions-changed'))
+    expect(changed).toHaveBeenCalledTimes(1)
+    sources[0]?.onerror?.(new Event('error'))
+    expect(sources[0]?.close).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(sources).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(sources).toHaveLength(2)
+    sources[1]?.onerror?.(new Event('error'))
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(sources).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(sources).toHaveLength(3)
+    fakeWindow.dispatchEvent(new Event('online'))
+    expect(sources[2]?.close).toHaveBeenCalledTimes(1)
+    expect(sources).toHaveLength(4)
+    stop()
+    expect(sources[3]?.close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('extension request isolation', () => {
+  it('combines abort lifetimes without AbortSignal.any', () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const combined = combineClientSignals(extension.signal, caller.signal)
+    caller.abort('caller stopped')
+    expect(combined.aborted).toBe(true)
+    expect(combined.reason).toBe('caller stopped')
+  })
+
+  it('detaches combined signal listeners after a normal request completes', () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const removeExtension = vi.spyOn(extension.signal, 'removeEventListener')
+    const removeCaller = vi.spyOn(caller.signal, 'removeEventListener')
+    const combined = combineClientSignalLifetime(extension.signal, caller.signal)
+    combined.cleanup()
+    expect(removeExtension).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(removeCaller).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(combined.signal.aborted).toBe(false)
+  })
+
+  it('retains request abort wiring until a streamed response finishes', async () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const removeExtension = vi.spyOn(extension.signal, 'removeEventListener')
+    const removeCaller = vi.spyOn(caller.signal, 'removeEventListener')
+    const lifetime = combineClientSignalLifetime(extension.signal, caller.signal)
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined
+    const response = bindClientResponseLifetime(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller },
+    }), { headers: { 'content-type': 'text/plain' }, status: 200 }), lifetime.cleanup)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain')
+    expect(removeExtension).not.toHaveBeenCalled()
+    expect(removeCaller).not.toHaveBeenCalled()
+
+    const reader = response.body?.getReader()
+    expect(reader).toBeDefined()
+    source?.enqueue(new TextEncoder().encode('chunk'))
+    await expect(reader?.read()).resolves.toMatchObject({ done: false })
+    expect(removeExtension).not.toHaveBeenCalled()
+    const finished = reader?.read()
+    source?.close()
+    await expect(finished).resolves.toEqual({ done: true, value: undefined })
+    expect(removeExtension).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(removeCaller).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
+  it('keeps a streamed response abortable after fetch has returned its headers', async () => {
+    const extension = new AbortController()
+    const caller = new AbortController()
+    const lifetime = combineClientSignalLifetime(extension.signal, caller.signal)
+    let source: ReadableStreamDefaultController<Uint8Array> | undefined
+    const response = bindClientResponseLifetime(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller },
+    })), lifetime.cleanup)
+    const pending = response.body?.getReader().read()
+    caller.abort(new DOMException('extension request cancelled', 'AbortError'))
+    source?.error(caller.signal.reason)
+    expect(lifetime.signal.aborted).toBe(true)
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('fails closed when a replacement Host generation cannot activate', () => {
+    const dispose = vi.fn()
+    expect(failClosedExtensionGenerationReplacement(true, 'old', 'new', dispose)).toBe(true)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(failClosedExtensionGenerationReplacement(true, 'new', 'new', dispose)).toBe(false)
+    expect(failClosedExtensionGenerationReplacement(false, 'old', 'new', dispose)).toBe(false)
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('normalizes route URLs before enforcing the current extension namespace', () => {
+    const origin = 'https://dsh.example/'
+    expect(extensionRouteUrl('demo', '/status?full=1', origin).href).toBe('https://dsh.example/mobile-access/extensions/demo/routes/status?full=1')
+    expect(extensionRouteUrl('demo', '/status?path=%2Ftmp%2Fimage.png', origin).searchParams.get('path')).toBe('/tmp/image.png')
+    for (const path of ['/../other/routes/status', '/%2e%2e/other/routes/status', '/safe/%2f../other', '//evil.test/x', '/ok#fragment']) {
+      expect(() => extensionRouteUrl('demo', path, origin)).toThrowError('extension routes must be relative')
+    }
+  })
+
+  it('builds generation-pinned asset URLs without path escape', () => {
+    const generation = 'a'.repeat(64)
+    expect(extensionAssetUrl('demo', generation, 'icons/photo.png', 'https://dsh.example/').href)
+      .toBe(`https://dsh.example/mobile-access/extensions/demo/assets/icons/photo.png?generation=${generation}`)
+    for (const path of ['', '/absolute.png', '../secret', 'safe/../secret']) {
+      expect(() => extensionAssetUrl('demo', generation, path, 'https://dsh.example/')).toThrowError('extension asset path is invalid')
+    }
+  })
+
+  it('pins SDK requests to the activated Host generation', () => {
+    const generation = 'c'.repeat(64)
+    const headers = extensionGenerationHeaders(generation, { accept: 'application/json', 'x-dsh-mobile-extension-generation': 'stale' })
+    expect(headers.get('accept')).toBe('application/json')
+    expect(headers.get('x-dsh-mobile-extension-generation')).toBe(generation)
   })
 })
 
@@ -294,7 +483,7 @@ describe('client extension manifest reconciliation', () => {
     await expect(pending).resolves.toBe(false)
   })
 
-  it('publishes authority before a later hang so omission and 404 remove earlier managed resources', async () => {
+  it('updates authoritative ids and clears managed resources on manifest removal', async () => {
     const lifecycle = new PerIdActivationLifecycle<string>()
     const authoritative = new Set<string>()
     const managedStyles = new Set<string>()
@@ -335,18 +524,20 @@ describe('client extension manifest reconciliation', () => {
   })
 
   it('validates protocol, schema, ids, duplicates, and resource URLs before authority', () => {
+    const generation = 'b'.repeat(64)
     expect(parseMobileExtensionManifest({
       protocol: 1,
-      extensions: [{ id: 'demo', scriptUrl: '/mobile-access/extensions/demo/mobile.js' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
+      extensions: [{ id: 'demo', generation, scriptUrl: `/mobile-access/extensions/demo/mobile.js?generation=${generation}`, assetsUrl: '/mobile-access/extensions/demo/assets/' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
       legacy: { scriptRevision: 'js-1', styleRevision: 'css-1' },
     })).toEqual({
-      extensions: [{ id: 'demo', scriptUrl: '/mobile-access/extensions/demo/mobile.js' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
+      extensions: [{ id: 'demo', generation, scriptUrl: `/mobile-access/extensions/demo/mobile.js?generation=${generation}`, assetsUrl: '/mobile-access/extensions/demo/assets/' }, { id: 'theme', styleUrl: '/mobile-access/extensions/theme/mobile.css' }],
       legacy: { scriptRevision: 'js-1', styleRevision: 'css-1' },
     })
     expect(parseMobileExtensionManifest({ protocol: 2, extensions: [], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: {}, legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo' }, { id: 'demo' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
     expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo', scriptUrl: 'https://evil.test/x.js' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
+    expect(parseMobileExtensionManifest({ protocol: 1, extensions: [{ id: 'demo', generation: 'stale' }], legacy: { scriptRevision: '', styleRevision: '' } })).toBeUndefined()
   })
 
   it('can reconcile script and style presence independently', () => {

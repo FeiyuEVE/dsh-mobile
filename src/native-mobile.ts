@@ -128,11 +128,13 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [role="dialog"][aria-label*="Context"] :is(dt,dd) { white-space:nowrap !important; word-break:keep-all !important; }
   .dsh-mobile-branch-toast,.dsh-mobile-media-toast { position:fixed; z-index:330; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
   .dsh-mobile-branch-toast[data-visible="true"],.dsh-mobile-media-toast[data-visible="true"] { opacity:1; transform:translate(-50%,0); }
-  .dsh-mobile-media-button { box-sizing:border-box; display:grid; place-items:center; width:36px; min-width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:999px; background:transparent; color:inherit; font-size:20px; line-height:1; }
-  .dsh-mobile-media-button:disabled { opacity:.38; }
-  .dsh-mobile-media-menu { position:fixed; z-index:325; right:12px; bottom:max(92px,calc(env(safe-area-inset-bottom) + 84px)); left:12px; box-sizing:border-box; display:grid; gap:8px; max-width:420px; margin:0 auto; padding:12px; border:1px solid var(--dsw-alias-border-subtle,rgb(148 163 184 / 28%)); border-radius:18px; background:var(--dsw-bg,#171a21); box-shadow:0 16px 48px rgb(0 0 0 / 28%); }
-  .dsh-mobile-media-menu[hidden] { display:none; }
-  .dsh-mobile-media-menu button { box-sizing:border-box; width:100%; min-height:48px; padding:10px 14px; border:1px solid var(--dsw-alias-border-subtle,rgb(148 163 184 / 24%)); border-radius:14px; background:var(--dsw-alias-interactive-bg-hover,rgb(148 163 184 / 12%)); color:inherit; font:inherit; text-align:left; }
+  .dsh-mobile-media-shortcuts { box-sizing:border-box; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; padding:4px 4px 8px; margin-bottom:4px; border-bottom:1px solid var(--dsw-alias-border-inverted,var(--dsw-alias-border-subtle,rgb(148 163 184 / 28%))); }
+  .dsh-mobile-media-action { box-sizing:border-box; display:flex; align-items:center; justify-content:flex-start; gap:8px; width:100%; min-width:0; min-height:44px; padding:8px 10px; border:0; border-radius:10px; background:var(--dsw-alias-interactive-bg-hover,rgb(148 163 184 / 12%)); color:var(--dsw-alias-label-primary,inherit); cursor:pointer; font:inherit; font-size:14px; line-height:22px; text-align:left; touch-action:manipulation; }
+  .dsh-mobile-media-action:active { opacity:.72; }
+  .dsh-mobile-media-action:focus-visible { outline:2px solid var(--dsw-alias-interactive-border-focus,#4c82f7); outline-offset:1px; }
+  .dsh-mobile-media-action:disabled { cursor:default; opacity:.38; }
+  .dsh-mobile-media-action svg { flex:none; width:16px; height:16px; color:var(--dsw-alias-label-tertiary,currentColor); }
+  .dsh-mobile-media-action span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
   /* The desktop composer intentionally wraps whole toolbar groups. On a phone,
      dynamic model and status labels made that row alternate between one and
@@ -216,11 +218,10 @@ export function applyNativeMobileLanguageMarker(root: Pick<HTMLElement, 'dataset
 
 /** Resolve the supported language used by native-mobile controls. */
 export function resolveNativeMobileLanguage(
-  preference: string,
   documentLanguage: string,
   browserLanguages: readonly string[],
 ): NativeMobileLanguage {
-  return [preference, documentLanguage, ...browserLanguages]
+  return [documentLanguage, ...browserLanguages]
     .map(value => value.trim().toLowerCase().split(/[-_]/u)[0])
     .find((value): value is NativeMobileLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
 }
@@ -258,12 +259,48 @@ export function isComposerMediaOriginCurrent(
 /** Add mobile semantics without replacing feature trees. */
 export function installNativeMobileSurface(): () => void {
   document.documentElement.classList.add('dsh-native-mobile-active')
-  let localePreference = ''
-  try { localePreference = window.localStorage.getItem('dsh-mobile-control-locale') ?? '' } catch { /* Storage may be unavailable. */ }
   const browserLanguages = navigator.languages.length > 0 ? navigator.languages : [navigator.language]
-  const language = resolveNativeMobileLanguage(localePreference, document.documentElement.lang, browserLanguages)
+  const language = resolveNativeMobileLanguage(document.documentElement.lang, browserLanguages)
   const restoreLanguageMarker = applyNativeMobileLanguageMarker(document.documentElement, language)
   const label = (italian: string, english: string, chinese: string): string => language === 'it' ? italian : language === 'zh' ? chinese : english
+  const mediaIcon = (kind: 'attachment' | 'camera'): SVGSVGElement => {
+    const namespace = 'http://www.w3.org/2000/svg'
+    const icon = document.createElementNS(namespace, 'svg')
+    icon.setAttribute('viewBox', '0 0 16 16')
+    icon.setAttribute('fill', 'none')
+    icon.setAttribute('aria-hidden', 'true')
+    if (kind === 'attachment') {
+      const path = document.createElementNS(namespace, 'path')
+      // DSH IconPaperclipOutline16, kept in the same currentColor icon language as the composer.
+      path.setAttribute('d', 'M5.5498 9.75V5H6.9502V9.75C6.9502 10.3299 7.4201 10.7998 8 10.7998C8.5799 10.7998 9.0498 10.3299 9.0498 9.75V4.5C9.0498 2.9536 7.7964 1.7002 6.25 1.7002C4.7036 1.7002 3.4502 2.9536 3.4502 4.5V9.75C3.4502 12.2629 5.4871 14.2998 8 14.2998C10.5129 14.2998 12.5498 12.2629 12.5498 9.75V4H13.9502V9.75C13.9502 13.0361 11.2861 15.7002 8 15.7002C4.71391 15.7002 2.0498 13.0361 2.0498 9.75V4.5C2.04981 2.1804 3.9304 0.299806 6.25 0.299805C8.5696 0.299805 10.4502 2.1804 10.4502 4.5V9.75C10.4502 11.1031 9.3531 12.2002 8 12.2002C6.6469 12.2002 5.5498 11.1031 5.5498 9.75Z')
+      path.setAttribute('fill', 'currentColor')
+      icon.append(path)
+      return icon
+    }
+    const body = document.createElementNS(namespace, 'path')
+    body.setAttribute('d', 'M5.15 3.2 6.05 2h3.9l.9 1.2h1.45c1.05 0 1.9.85 1.9 1.9v6c0 1.05-.85 1.9-1.9 1.9H3.7a1.9 1.9 0 0 1-1.9-1.9v-6c0-1.05.85-1.9 1.9-1.9h1.45Zm-1.45 1.3a.6.6 0 0 0-.6.6v6c0 .33.27.6.6.6h8.6a.6.6 0 0 0 .6-.6v-6a.6.6 0 0 0-.6-.6h-2.1l-.9-1.2H6.7l-.9 1.2H3.7Z')
+    body.setAttribute('fill', 'currentColor')
+    const lens = document.createElementNS(namespace, 'circle')
+    lens.setAttribute('cx', '8')
+    lens.setAttribute('cy', '8.1')
+    lens.setAttribute('r', '2.15')
+    lens.setAttribute('stroke', 'currentColor')
+    lens.setAttribute('stroke-width', '1.3')
+    icon.append(body, lens)
+    return icon
+  }
+  const createMediaAction = (kind: 'attachment' | 'camera', text: string): HTMLButtonElement => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'dsh-mobile-media-action'
+    button.lang = language
+    button.dataset.dshMobileMediaAction = kind
+    button.append(mediaIcon(kind))
+    const caption = document.createElement('span')
+    caption.textContent = text
+    button.append(caption)
+    return button
+  }
   const setInputMode = (mode: 'keyboard' | 'touch'): void => {
     document.documentElement.dataset.dshMobileInput = mode
   }
@@ -294,31 +331,17 @@ export function installNativeMobileSurface(): () => void {
   mediaToast.setAttribute('role', 'status')
   mediaToast.setAttribute('aria-live', 'polite')
   document.body.append(mediaToast)
-  const mediaButton = document.createElement('button')
-  mediaButton.type = 'button'
-  mediaButton.className = 'dsh-mobile-media-button'
-  mediaButton.lang = language
-  mediaButton.textContent = '📎'
-  mediaButton.setAttribute('aria-label', label('Allega immagine', 'Attach image', '附加图片'))
-  mediaButton.setAttribute('aria-haspopup', 'dialog')
-  mediaButton.setAttribute('aria-expanded', 'false')
-  mediaButton.disabled = true
-  const mediaMenu = document.createElement('div')
-  mediaMenu.id = 'dsh-mobile-media-menu'
-  mediaMenu.className = 'dsh-mobile-media-menu'
-  mediaMenu.lang = language
-  mediaMenu.setAttribute('role', 'dialog')
-  mediaMenu.setAttribute('aria-label', label('Aggiungi immagine', 'Add image', '添加图片'))
-  mediaMenu.hidden = true
-  mediaButton.setAttribute('aria-controls', mediaMenu.id)
-  const fileButton = document.createElement('button')
-  fileButton.type = 'button'
-  fileButton.textContent = label('Scegli screenshot o immagine', 'Choose screenshot or image', '选择截图或图片')
-  const cameraButton = document.createElement('button')
-  cameraButton.type = 'button'
-  cameraButton.textContent = label('Scatta una foto', 'Take a photo', '拍摄照片')
-  mediaMenu.append(fileButton, cameraButton)
-  document.body.append(mediaMenu)
+  const mediaActions = document.createElement('div')
+  mediaActions.className = 'dsh-mobile-media-shortcuts'
+  mediaActions.lang = language
+  mediaActions.dataset.dshMobileMediaShortcuts = 'true'
+  mediaActions.setAttribute('role', 'group')
+  mediaActions.setAttribute('aria-label', label('Aggiungi immagine', 'Add image', '添加图片'))
+  const fileButton = createMediaAction('attachment', label('Scegli immagine', 'Choose image', '选择图片'))
+  const cameraButton = createMediaAction('camera', label('Scatta foto', 'Take photo', '拍照'))
+  fileButton.disabled = true
+  cameraButton.disabled = true
+  mediaActions.append(fileButton, cameraButton)
   let branchToastTimer = 0
   let mediaToastTimer = 0
   const showMediaToast = (message: string): void => {
@@ -330,14 +353,11 @@ export function installNativeMobileSurface(): () => void {
       mediaToastTimer = 0
     }, 2200)
   }
-  const closeMediaMenu = (restoreFocus = false): void => {
-    const wasOpen = !mediaMenu.hidden
-    mediaMenu.hidden = true
-    mediaButton.setAttribute('aria-expanded', 'false')
-    if (restoreFocus && wasOpen && mediaButton.isConnected && !mediaButton.disabled) mediaButton.focus({ preventScroll: true })
-  }
   let mediaRequestGeneration = 0
   let disposed = false
+  let boundComposer: Element | null = null
+  let boundSessionRoot: Element | null = null
+  let boundSessionId: string | null = null
   const preflightFile = new File([], 'dsh-mobile-preflight.png', { type: 'image/png' })
   const canAcceptComposerDrop = (): boolean => preflightComposerImageDrop(document, [preflightFile])
   const mediaPickerAbortController = new AbortController()
@@ -346,7 +366,7 @@ export function installNativeMobileSurface(): () => void {
   let nextSessionToken = 0
   type MediaRequestContext = ComposerMediaOrigin & { readonly composer: Element | null; readonly sessionRoot: Element | null }
   const currentSessionOrigin = (): { readonly sessionRoot: Element | null; readonly sessionId: string | null } => {
-    const dedicatedRoot = mediaButton.closest('[data-dsh-mobile-session]')
+    const dedicatedRoot = boundComposer?.closest('[data-dsh-mobile-session]') ?? null
     const dedicatedId = dedicatedRoot?.getAttribute('data-dsh-mobile-session')
     if (dedicatedRoot !== null && typeof dedicatedId === 'string' && dedicatedId !== '') {
       return { sessionRoot: dedicatedRoot, sessionId: dedicatedId }
@@ -366,13 +386,13 @@ export function installNativeMobileSurface(): () => void {
     return {
       generation: ++mediaRequestGeneration,
       href: window.location.href,
-      composer: mediaButton.closest('[data-composer-card]'),
+      composer: boundComposer,
       ...session,
     }
   }
   const mediaRequestIsCurrent = (context: MediaRequestContext): boolean => {
     const session = currentSessionOrigin()
-    const composer = mediaButton.closest('[data-composer-card]')
+    const composer = boundComposer
     return isComposerMediaOriginCurrent(context, {
       generation: mediaRequestGeneration,
       href: window.location.href,
@@ -440,14 +460,30 @@ export function installNativeMobileSurface(): () => void {
       if (mediaRequestIsCurrent(context)) showMediaToast(label('Impossibile aprire il selettore immagini', 'Could not open the image picker', '无法打开图片选择器'))
     }
   }
+  const dismissCommandMenu = (): void => {
+    const trigger = boundComposer?.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"][aria-expanded="true"]')
+    trigger?.click()
+  }
+  const setMediaActionsDisabled = (disabled: boolean, title: string): void => {
+    for (const button of [fileButton, cameraButton]) {
+      if (button.disabled !== disabled) button.disabled = disabled
+      if (button.title !== title) button.title = title
+    }
+  }
+  const quietMediaPointer = (event: PointerEvent): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const active = document.activeElement
+    if (active instanceof HTMLElement && (active.matches('input,textarea') || active.isContentEditable)) active.blur()
+  }
   const pickImage = (camera: boolean): void => {
     if (!canAcceptComposerDrop()) {
-      mediaButton.disabled = true
-      closeMediaMenu(true)
+      setMediaActionsDisabled(true, label('Allegati immagine non disponibili', 'Image attachments are unavailable', '图片附件不可用'))
+      dismissCommandMenu()
       return
     }
-    closeMediaMenu(true)
     const context = mediaRequestContext()
+    dismissCommandMenu()
     const bridge = window.__DSH_MOBILE_NATIVE__
     if (bridge === undefined) {
       launchBrowserPicker(camera, context)
@@ -468,44 +504,12 @@ export function installNativeMobileSurface(): () => void {
         : label('Impossibile aggiungere l’immagine', 'Could not attach the image', '无法附加图片'))
     })
   }
-  mediaButton.addEventListener('click', event => {
-    event.stopPropagation()
-    if (mediaMenu.hidden) {
-      if (!canAcceptComposerDrop()) { mediaButton.disabled = true; closeMediaMenu(); return }
-      mediaMenu.hidden = false
-      mediaButton.setAttribute('aria-expanded', 'true')
-      fileButton.focus({ preventScroll: true })
-    } else {
-      closeMediaMenu(true)
-    }
-  })
-  fileButton.addEventListener('click', () => { pickImage(false) })
-  cameraButton.addEventListener('click', () => { pickImage(true) })
-  const closeMediaMenuOnOutsideClick = (event: MouseEvent): void => {
-    if (mediaMenu.hidden || !(event.target instanceof Node)) return
-    if (!mediaMenu.contains(event.target) && !mediaButton.contains(event.target)) closeMediaMenu()
-  }
-  const handleMediaMenuKeyboard = (event: KeyboardEvent): void => {
-    if (mediaMenu.hidden) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      closeMediaMenu(true)
-      return
-    }
-    if (event.key !== 'Tab') return
-    const first = fileButton
-    const last = cameraButton
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last.focus({ preventScroll: true })
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus({ preventScroll: true })
-    }
-  }
-  document.addEventListener('click', closeMediaMenuOnOutsideClick)
-  document.addEventListener('keydown', handleMediaMenuKeyboard, true)
+  const chooseImage = (): void => { pickImage(false) }
+  const takePhoto = (): void => { pickImage(true) }
+  fileButton.addEventListener('pointerdown', quietMediaPointer)
+  cameraButton.addEventListener('pointerdown', quietMediaPointer)
+  fileButton.addEventListener('click', chooseImage)
+  cameraButton.addEventListener('click', takePhoto)
   const showBranchToast = (): void => {
     const header = document.querySelector<HTMLElement>('[data-dsh-mobile-header]')
     const title = header === null ? undefined : header.querySelector<HTMLElement>('[class*="_crumbCurrent"]')?.textContent?.trim()
@@ -593,17 +597,14 @@ export function installNativeMobileSurface(): () => void {
     })
   }
   document.addEventListener('click', animateNavigation)
-  let boundComposer: Element | null = null
-  let boundSessionRoot: Element | null = null
-  let boundSessionId: string | null = null
   const syncMediaBinding = (composer: Element | null): void => {
-    const session = currentSessionOrigin()
-    if (composer === boundComposer && session.sessionRoot === boundSessionRoot && session.sessionId === boundSessionId) return
+    const previousComposer = boundComposer
     boundComposer = composer
+    const session = currentSessionOrigin()
+    if (composer === previousComposer && session.sessionRoot === boundSessionRoot && session.sessionId === boundSessionId) return
     boundSessionRoot = session.sessionRoot
     boundSessionId = session.sessionId
     mediaRequestGeneration += 1
-    closeMediaMenu()
   }
 
   const sync = (): void => {
@@ -619,9 +620,9 @@ export function installNativeMobileSurface(): () => void {
     const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
     if (center === undefined) {
       bindHistoryScroller(undefined)
-      mediaButton.disabled = true
-      closeMediaMenu()
-      mediaButton.remove()
+      syncMediaBinding(null)
+      setMediaActionsDisabled(true, label('Apri prima una sessione', 'Open a session first', '请先打开会话'))
+      mediaActions.remove()
       return
     }
     if (center !== undefined) {
@@ -660,10 +661,8 @@ export function installNativeMobileSurface(): () => void {
       const composerRow = composerCard?.querySelector<HTMLElement>(':scope > [data-input-scroll]')?.nextElementSibling
       if (!(composerRow instanceof HTMLElement)) {
         syncMediaBinding(null)
-        mediaButton.disabled = true
-        mediaButton.title = label('Apri prima una sessione', 'Open a session first', '请先打开会话')
-        closeMediaMenu()
-        mediaButton.remove()
+        setMediaActionsDisabled(true, label('Apri prima una sessione', 'Open a session first', '请先打开会话'))
+        mediaActions.remove()
       }
       if (composerRow instanceof HTMLElement) {
         composerRow.dataset.dshMobileComposerRow = 'true'
@@ -672,22 +671,27 @@ export function installNativeMobileSurface(): () => void {
         const composerTrailing = groups.at(-1)
         if (composerTools !== undefined) {
           composerTools.dataset.dshMobileComposerTools = 'true'
-          if (mediaButton.parentElement !== composerTools) composerTools.append(mediaButton)
           syncMediaBinding(composerCard ?? null)
           const composerInput = composerCard?.querySelector<HTMLTextAreaElement>('textarea')
+          const composerEditor = composerCard?.querySelector<HTMLElement>('[contenteditable="true"],[contenteditable="plaintext-only"]')
           const composerBusy = composerCard?.getAttribute('aria-busy') === 'true'
             || composerInput?.disabled === true
             || composerInput?.readOnly === true
+            || composerEditor?.getAttribute('aria-disabled') === 'true'
           const attachmentBlocked = !canAcceptComposerDrop()
-          mediaButton.disabled = conversation === null || currentSessionOrigin().sessionId === null || composerBusy || attachmentBlocked
-          mediaButton.title = composerBusy
+          const mediaDisabled = conversation === null || currentSessionOrigin().sessionId === null || composerBusy || attachmentBlocked
+          const mediaTitle = composerBusy
             ? label('Attendi il completamento della risposta', 'Wait for the response to finish', '请等待回复完成')
             : attachmentBlocked
               ? label('Allegati immagine non disponibili', 'Image attachments are unavailable', '图片附件不可用')
-              : mediaButton.disabled
+              : mediaDisabled
                 ? label('Apri prima una sessione', 'Open a session first', '请先打开会话')
                 : label('Allega screenshot, immagine o foto', 'Attach screenshot, image, or photo', '附加截图、图片或照片')
-          if (mediaButton.disabled) closeMediaMenu()
+          setMediaActionsDisabled(mediaDisabled, mediaTitle)
+          const commandMenu = composerCard?.querySelector<HTMLElement>('[data-trigger-menu]') ?? null
+          if (commandMenu !== null && (mediaActions.parentElement !== commandMenu || commandMenu.firstElementChild !== mediaActions)) {
+            commandMenu.prepend(mediaActions)
+          }
         }
         if (composerTrailing !== undefined && composerTrailing !== composerTools) {
           composerTrailing.dataset.dshMobileComposerTrailing = 'true'
@@ -753,14 +757,15 @@ export function installNativeMobileSurface(): () => void {
     for (const cleanup of [...browserPickerCleanups]) cleanup()
     observer.disconnect()
     document.removeEventListener('click', onBranchClick, true)
-    document.removeEventListener('click', closeMediaMenuOnOutsideClick)
-    document.removeEventListener('keydown', handleMediaMenuKeyboard, true)
+    fileButton.removeEventListener('pointerdown', quietMediaPointer)
+    cameraButton.removeEventListener('pointerdown', quietMediaPointer)
+    fileButton.removeEventListener('click', chooseImage)
+    cameraButton.removeEventListener('click', takePhoto)
     if (branchToastTimer !== 0) window.clearTimeout(branchToastTimer)
     if (mediaToastTimer !== 0) window.clearTimeout(mediaToastTimer)
     branchToast.remove()
     mediaToast.remove()
-    mediaMenu.remove()
-    mediaButton.remove()
+    mediaActions.remove()
     if (scheduled !== 0) cancelAnimationFrame(scheduled)
     if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
     if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)

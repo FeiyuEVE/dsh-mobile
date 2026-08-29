@@ -101,6 +101,8 @@ const UPSTREAM_AUTH_REFRESH_MARGIN_MS = 60_000
 const UPSTREAM_COOKIE_PAIR = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+=[\x21-\x3A\x3C-\x7E]*$/u
 const CUSTOM_STYLE_FALLBACK = '/* Add mobile overrides in the DSH home mobile-access/mobile.css file. */\n'
 const CUSTOM_SCRIPT_FALLBACK = 'window.dshMobile?.register(() => undefined)\n'
+const EXTENSION_CHANGE_POLL_MS = 2_000
+const EXTENSION_EVENT_HEARTBEAT_MS = 15_000
 const MOBILE_CLIENT_MODULE = 'dsh-mobile'
 const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
 const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
@@ -667,12 +669,14 @@ function discoveryBroadcastTargets(cidrs: readonly ParsedCidr[]): readonly strin
 
 function extensionTarget(pathname: string):
   | { readonly kind: 'manifest' }
+  | { readonly kind: 'events' }
   | { readonly kind: 'script' | 'style' | 'asset'; readonly id: string; readonly path?: string }
   | { readonly kind: 'action'; readonly id: string; readonly action: string }
   | { readonly kind: 'route'; readonly id: string; readonly path: string }
   | undefined {
   const prefix = `${AUTH_PREFIX}/extensions`
   if (pathname === prefix || pathname === `${prefix}/` || pathname === `${prefix}/manifest`) return { kind: 'manifest' }
+  if (pathname === `${prefix}/events`) return { kind: 'events' }
   if (!pathname.startsWith(`${prefix}/`)) return undefined
   const parts = pathname.slice(prefix.length + 1).split('/')
   const id = parts.shift()
@@ -684,6 +688,14 @@ function extensionTarget(pathname: string):
   if (leaf === 'actions' && parts.length === 1 && /^[a-z][a-z0-9-]{0,63}$/u.test(parts[0]!)) return { kind: 'action', id, action: parts[0]! }
   if (leaf === 'routes') return { kind: 'route', id, path: `/${parts.join('/')}`.replace(/\/{2,}/gu, '/') }
   return undefined
+}
+
+const EXTENSION_GENERATION_HEADER = 'x-dsh-mobile-extension-generation'
+
+function extensionGeneration(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (!/^[a-f\d]{64}$/u.test(value)) throw new HttpError(400, 'invalid_extension_generation')
+  return value
 }
 
 function mobileBootBatchKey(pathname: string): string | undefined {
@@ -754,6 +766,11 @@ export class MobileAccessGateway {
   private readonly activeRequests = new Map<number, ActiveRequest>()
   private readonly activeWebSockets = new Map<number, ActiveWebSocket>()
   private readonly mobileBootBatches = new Map<string, StoredMobileBootBatch>()
+  private readonly extensionEventListeners = new Set<(revision: number) => void>()
+  private extensionEventRevision = 0
+  private extensionChangeTimer: NodeJS.Timeout | undefined
+  private extensionChangeTask: Promise<void> | undefined
+  private legacyCustomDigest = ''
   private upstreamCookie: string | undefined
   private upstreamCookieExpiresAt = 0
   private upstreamCookieTask: Promise<string> | undefined
@@ -763,6 +780,7 @@ export class MobileAccessGateway {
   private started = false
   private closeTask: Promise<void> | undefined
   private readonly removeSessionListener: () => void
+  private readonly removeExtensionContentListener: () => void
   private readonly renewLimiter: BoundedRateLimiter
 
   constructor(
@@ -791,6 +809,9 @@ export class MobileAccessGateway {
     this.removeSessionListener = this.access.onSessionEnded(authorization => {
       this.abortSessionResources(authorization.sessionKey)
     })
+    this.removeExtensionContentListener = this.extensions?.onContentChanged(() => {
+      this.broadcastExtensionChange()
+    }) ?? (() => undefined)
   }
 
   /** Initialize durable state, validate TLS, and bind the externally reachable listener. */
@@ -859,6 +880,9 @@ export class MobileAccessGateway {
         this.tlsEnabled,
       )
       if (this.config.discovery) await this.startDiscovery(address.port)
+      await this.pollLegacyCustomChanges()
+      this.extensionChangeTimer = setInterval(() => { void this.pollLegacyCustomChanges() }, EXTENSION_CHANGE_POLL_MS)
+      this.extensionChangeTimer.unref()
     } catch (error) {
       await this.closeFailedStart()
       throw error
@@ -924,6 +948,9 @@ export class MobileAccessGateway {
   }
 
   private async closeFailedStart(): Promise<void> {
+    if (this.extensionChangeTimer !== undefined) clearInterval(this.extensionChangeTimer)
+    this.extensionChangeTimer = undefined
+    this.removeExtensionContentListener()
     if (this.discoveryTimer !== undefined) clearInterval(this.discoveryTimer)
     this.discoveryTimer = undefined
     await this.closeBonjour()
@@ -1330,6 +1357,11 @@ export class MobileAccessGateway {
   ): Promise<void> {
     const extensions = this.extensions
     if (extensions === undefined) throw new HttpError(404, 'not_found')
+    if (targetInfo.kind === 'events') {
+      if (request.method !== 'GET' || target.search !== '') throw new HttpError(request.method === 'GET' ? 400 : 405, request.method === 'GET' ? 'bad_request' : 'method_not_allowed')
+      this.openExtensionEventStream(request, response, authorization)
+      return
+    }
     if (targetInfo.kind === 'manifest') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
       const operation = this.allocateRequest(authorization, response, {})
@@ -1371,13 +1403,14 @@ export class MobileAccessGateway {
     }
     if (targetInfo.kind === 'script' || targetInfo.kind === 'style' || targetInfo.kind === 'asset') {
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new HttpError(405, 'method_not_allowed')
+      const generation = extensionGeneration(new URLSearchParams(target.search).get('generation') ?? undefined)
       const operation = this.allocateRequest(authorization, response, {})
       try {
         const file = targetInfo.kind === 'script'
-          ? await extensions.readClientFile(targetInfo.id, 'script', operation.signal)
+          ? await extensions.readClientFile(targetInfo.id, 'script', operation.signal, generation)
           : targetInfo.kind === 'style'
-            ? await extensions.readClientFile(targetInfo.id, 'style', operation.signal)
-            : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '', operation.signal)
+            ? await extensions.readClientFile(targetInfo.id, 'style', operation.signal, generation)
+            : await extensions.readAsset(targetInfo.id, targetInfo.path ?? '', operation.signal, generation)
         if (headerValue(request.headers, 'if-none-match') === file.digest) {
           setSecurityHeaders(response, this.tlsEnabled); response.writeHead(304); response.end(); return
         }
@@ -1396,15 +1429,16 @@ export class MobileAccessGateway {
       if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
       const maximum = 1024 * 1024
       assertBoundedContentLength(request, maximum)
+      const generation = extensionGeneration(headerValue(request.headers, EXTENSION_GENERATION_HEADER))
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
-      const generationSignal = extensions.signal(targetInfo.id)
+      const generationSignal = extensions.signal(targetInfo.id, generation)
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
         const body = await readJsonObject(request, maximum)
-        const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId })
+        const result = await extensions.invoke(targetInfo.id, targetInfo.action, body, { signal: abort.signal, deviceId: authorization.deviceId }, generation)
         let serialized: Buffer
         try { serialized = Buffer.from(JSON.stringify(result)) } catch { throw new MobileExtensionError('extension_failed', 'extension action failed', 500) }
         if (serialized.byteLength > 4 * 1024 * 1024) throw new MobileExtensionError('extension_result_too_large', 'extension result is too large', 500)
@@ -1420,10 +1454,11 @@ export class MobileAccessGateway {
       if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new HttpError(405, 'method_not_allowed')
       const hasBody = method !== 'GET' && method !== 'HEAD'
       if (hasBody) assertBoundedContentLength(request, this.config.maxBodyBytes)
+      const generation = extensionGeneration(headerValue(request.headers, EXTENSION_GENERATION_HEADER))
       const operation = this.allocateRequest(authorization, response, {})
       const abort = new AbortController()
       response.once('close', () => { abort.abort() })
-      const generationSignal = extensions.signal(targetInfo.id)
+      const generationSignal = extensions.signal(targetInfo.id, generation)
       const onGenerationAbort = (): void => { abort.abort(); if (!response.destroyed) response.destroy() }
       generationSignal?.addEventListener('abort', onGenerationAbort, { once: true })
       try {
@@ -1433,7 +1468,7 @@ export class MobileAccessGateway {
           method, pathname: targetInfo.path, query: parsed.searchParams,
           headers: extensionRequestHeaders(request.headers), body, signal: abort.signal, deviceId: authorization.deviceId,
         }
-        const result = await extensions.route(targetInfo.id, method, targetInfo.path, routeRequest)
+        const result = await extensions.route(targetInfo.id, method, targetInfo.path, routeRequest, generation)
         await this.sendExtensionResponse(response, result, request.method === 'HEAD')
       } finally {
         generationSignal?.removeEventListener('abort', onGenerationAbort)
@@ -1855,6 +1890,76 @@ export class MobileAccessGateway {
     }
   }
 
+  private broadcastExtensionChange(): void {
+    if (this.closing) return
+    this.extensionEventRevision += 1
+    for (const listener of this.extensionEventListeners) listener(this.extensionEventRevision)
+  }
+
+  private pollLegacyCustomChanges(): Promise<void> {
+    if (this.extensionChangeTask !== undefined) return this.extensionChangeTask
+    const digestFile = async (path: string, fallback: string): Promise<string> => {
+      try {
+        const info = await stat(path)
+        if (!info.isFile() || info.size > 256 * 1024) return `invalid:${String(info.size)}:${String(info.mtimeMs)}`
+        return createHash('sha256').update(await readFile(path)).digest('hex')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return createHash('sha256').update(fallback).digest('hex')
+        return `error:${String((error as NodeJS.ErrnoException).code ?? 'unknown')}`
+      }
+    }
+    const task = Promise.all([
+      digestFile(this.config.customScriptFile, CUSTOM_SCRIPT_FALLBACK),
+      digestFile(this.config.customCssFile, CUSTOM_STYLE_FALLBACK),
+    ]).then(parts => {
+      const next = createHash('sha256').update(parts.join('|')).digest('hex')
+      if (this.legacyCustomDigest !== '' && next !== this.legacyCustomDigest) this.broadcastExtensionChange()
+      this.legacyCustomDigest = next
+    }).finally(() => {
+      if (this.extensionChangeTask === task) this.extensionChangeTask = undefined
+    })
+    this.extensionChangeTask = task
+    return task
+  }
+
+  private openExtensionEventStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    authorization: SessionAuthorization,
+  ): void {
+    const operation = this.allocateRequest(authorization, response, {})
+    let closed = false
+    let heartbeat: NodeJS.Timeout | undefined
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      if (heartbeat !== undefined) clearInterval(heartbeat)
+      this.extensionEventListeners.delete(send)
+      request.removeListener('aborted', close)
+      response.removeListener('close', close)
+      operation.release()
+    }
+    const send = (revision: number): void => {
+      if (closed || response.destroyed || response.writableEnded) return
+      response.write(`id: ${String(revision)}\nevent: extensions-changed\ndata: {\"revision\":${String(revision)}}\n\n`)
+    }
+    setSecurityHeaders(response, this.tlsEnabled)
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    response.write('retry: 2000\n: ready\n\n')
+    this.extensionEventListeners.add(send)
+    heartbeat = setInterval(() => {
+      if (!closed && !response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
+    }, EXTENSION_EVENT_HEARTBEAT_MS)
+    heartbeat.unref()
+    request.once('aborted', close)
+    response.once('close', close)
+  }
+
   private async readUpgradeResponse(upstream: Socket, expectedAccept: string): Promise<{ header: string; remainder: Buffer }> {
     return new Promise((resolve, reject) => {
       let buffer = Buffer.alloc(0)
@@ -2103,6 +2208,9 @@ export class MobileAccessGateway {
 
   private async performClose(): Promise<void> {
     this.closing = true
+    if (this.extensionChangeTimer !== undefined) clearInterval(this.extensionChangeTimer)
+    this.extensionChangeTimer = undefined
+    this.removeExtensionContentListener()
     this.upstreamAuthRequest?.destroy()
     this.upstreamAuthRequest = undefined
     this.removeSessionListener()
