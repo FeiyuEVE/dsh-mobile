@@ -2,6 +2,10 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## Unreleased
+
+- Inject `AbortSignal.any` and `Promise.withResolvers` boot polyfills into gateway documents, so old Android System WebView releases (e.g. Chrome 114 on Android 12) can start the DSH connection instead of failing before the client bundle runs.
+
 ## 0.3.2 - 2026-08-29
 
 - Special thanks to @JackRushante for [#16](https://github.com/saya-ch/dsh-mobile/pull/16): the secure Android media bridge, image attachments, localization foundation, bounded extension requests, and Funnel lifecycle hardening. This release retains all four original commits and their author metadata.
