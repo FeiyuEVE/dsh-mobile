@@ -26,12 +26,18 @@ internal enum class RestoreFailureDisposition {
 
 /** Selects valid cold-start restore targets without depending on Android lifecycle state. */
 internal object ConnectionRestorePolicy {
+    /**
+     * Whether a persisted device credential may renew its short session instead of
+     * pairing again. Applies to both LAN and REMOTE transports: once a device is
+     * paired, its deviceToken stays valid across gateway restarts (the digest is
+     * persisted in the plugin's devices.json), so renewing beats re-pairing.
+     */
     fun shouldRenewBeforePairing(
         mode: AccessMode,
         credential: DeviceCredential?,
         instanceId: String,
         now: Long,
-    ): Boolean = mode == AccessMode.REMOTE && credential != null && credential.expiresAt > now
+    ): Boolean = credential != null && credential.expiresAt > now
         && credential.instanceId == instanceId
 
     fun mayPairAfterRenewFailure(failure: Throwable): Boolean =

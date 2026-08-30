@@ -90,9 +90,15 @@ class ConnectionRestorePolicyTest {
     }
 
     @Test
-    fun reusesRemoteDeviceTrustWhenAProviderChangesItsPublicAddress() {
+    fun renewsValidPersistedCredentialsBeforePairingOnAnyTransport() {
         assertTrue(ConnectionRestorePolicy.shouldRenewBeforePairing(
             AccessMode.REMOTE,
+            remoteCredential,
+            remoteCredential.instanceId,
+            now,
+        ))
+        assertTrue(ConnectionRestorePolicy.shouldRenewBeforePairing(
+            AccessMode.LAN,
             remoteCredential,
             remoteCredential.instanceId,
             now,
@@ -100,8 +106,17 @@ class ConnectionRestorePolicyTest {
         assertEquals(
             false,
             ConnectionRestorePolicy.shouldRenewBeforePairing(
-                AccessMode.LAN,
+                AccessMode.REMOTE,
                 remoteCredential,
+                "c".repeat(64),
+                now,
+            ),
+        )
+        assertEquals(
+            false,
+            ConnectionRestorePolicy.shouldRenewBeforePairing(
+                AccessMode.REMOTE,
+                credential("b", now - 1),
                 remoteCredential.instanceId,
                 now,
             ),
