@@ -163,6 +163,10 @@ Tailscale Funnel 覆盖范围广，但在中国大陆网络下可能不稳定。
 
 Android App 只是 Kotlin WebView 薄壳，不内置另一份网页；手机浏览器访问的是同一页面。需要排查兼容性时，可在浏览器地址后追加 `?frontend=stock`，临时回到旧的桌面页面适配模式。
 
+### 自救按钮
+
+当电脑端 DSH 无法启动（或远程通道不可达）时，App 的连接失败对话框会显示「自救」按钮（仅远程访问模式）。点击后 App 直接请求电脑侧自救服务（frps nginx → frp 隧道 → dsh-web-supervisor，与 DSH 网页进程完全解耦），电脑会启动修复代理并在完成后重启 DSH。该链路不依赖 DSH 前端或网页，因此 DSH 后端启动失败时依然可用。
+
 ## 工作原理
 
 ```mermaid

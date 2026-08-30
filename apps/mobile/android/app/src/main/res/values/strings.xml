@@ -107,4 +107,12 @@
     <string name="dsh_unavailable_message">Keep DSH and the remote transport running on the computer, then retry.</string>
     <string name="remote_unreachable">Remote transport is unreachable</string>
     <string name="remote_unreachable_message">The provider may be offline or the network may be unstable. Reconnect the selected remote transport in desktop DSH.</string>
+    <string name="self_rescue">Self-rescue</string>
+    <string name="self_rescue_triggered">Self-rescue requested. The computer will try to repair and restart DSH; retry connecting in a moment.</string>
+    <string name="self_rescue_active">A self-rescue is already in progress.</string>
+    <string name="self_rescue_failed">Self-rescue request failed. Check that the computer and its remote transport are online.</string>
+    <string name="self_rescue_unavailable">No remote connection configured for self-rescue.</string>
+    <string name="self_rescue_confirm_title">Trigger self-rescue?</string>
+    <string name="self_rescue_confirm_message">This starts a repair agent on the computer and consumes model quota. Continue?</string>
+    <string name="self_rescue_confirm_yes">Confirm</string>
 </resources>

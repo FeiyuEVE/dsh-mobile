@@ -107,4 +107,12 @@
     <string name="dsh_unavailable_message">Mantieni in esecuzione DSH e il trasporto remoto sul computer, quindi riprova.</string>
     <string name="remote_unreachable">Trasporto remoto non raggiungibile</string>
     <string name="remote_unreachable_message">Il provider potrebbe essere offline oppure la rete potrebbe essere instabile. Riconnetti il trasporto remoto selezionato in DSH sul computer.</string>
+    <string name="self_rescue">Auto-ripristino</string>
+    <string name="self_rescue_triggered">Auto-ripristino richiesto. Il computer tenterà di riparare e riavviare DSH; riprova a connetterti tra poco.</string>
+    <string name="self_rescue_active">Un auto-ripristino è già in corso.</string>
+    <string name="self_rescue_failed">Richiesta di auto-ripristino non riuscita. Verifica che il computer e il trasporto remoto siano online.</string>
+    <string name="self_rescue_unavailable">Nessuna connessione remota configurata per l\'auto-ripristino.</string>
+    <string name="self_rescue_confirm_title">Avviare l\'auto-ripristino?</string>
+    <string name="self_rescue_confirm_message">Verrà avviato un agente di riparazione sul computer, consumando quota del modello. Continuare?</string>
+    <string name="self_rescue_confirm_yes">Conferma</string>
 </resources>

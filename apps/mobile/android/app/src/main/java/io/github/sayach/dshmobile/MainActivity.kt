@@ -1344,6 +1344,9 @@ class MainActivity : Activity() {
         val initialUrl = requestedInitialUrl.takeIf { GatewayUrlPolicy.isSameOrigin(origin, it) }
             ?: origin.serialized
         retryUrl = initialUrl
+        // Old system WebViews lack AbortSignal.any / Promise.withResolvers; the
+        // client bundle needs them before its first script runs.
+        installWebCompatPolyfills(browser, origin)
         browser.loadUrl(initialUrl)
     }
 
@@ -1550,11 +1553,50 @@ class MainActivity : Activity() {
             .setNegativeButton(R.string.edit_connection) { _, _ ->
                 showConnectionCenter()
             }
+            .apply {
+                // Remote rescue stays reachable even when the DSH web profile
+                // is down (frps -> frp tunnel -> supervisor), so offer it on
+                // the failure dialog for remote access.
+                if (accessMode == AccessMode.REMOTE) {
+                    setNeutralButton(R.string.self_rescue) { _, _ -> requestSelfRescue() }
+                }
+            }
             .create()
             .also { dialog ->
                 dialog.setOnDismissListener { failureDialog = null }
                 dialog.show()
             }
+    }
+
+    private fun requestSelfRescue() {
+        // Confirm before spending model tokens on a rescue agent.
+        AlertDialog.Builder(this)
+            .setTitle(R.string.self_rescue_confirm_title)
+            .setMessage(R.string.self_rescue_confirm_message)
+            .setPositiveButton(R.string.self_rescue_confirm_yes) { _, _ -> actuallyRequestSelfRescue() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun actuallyRequestSelfRescue() {
+        val origin = gatewayOrigin ?: GatewayOrigin.parse(
+            preferences.getString(originPreference(AccessMode.REMOTE), "").orEmpty(),
+        )
+        if (origin == null) {
+            toastError(R.string.self_rescue_unavailable)
+            return
+        }
+        ioExecutor.execute {
+            val outcome = runCatching { SelfRescueClient.trigger(origin) }.getOrDefault(SelfRescueOutcome.FAILED)
+            runOnUiThread {
+                val message = when (outcome) {
+                    SelfRescueOutcome.TRIGGERED -> R.string.self_rescue_triggered
+                    SelfRescueOutcome.ALREADY_ACTIVE -> R.string.self_rescue_active
+                    SelfRescueOutcome.FAILED -> R.string.self_rescue_failed
+                }
+                toast(message)
+            }
+        }
     }
 
     private fun destroyWebView(changingConfigurations: Boolean = false) {

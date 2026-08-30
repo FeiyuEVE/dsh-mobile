@@ -155,6 +155,10 @@ The examples above, applied:
 
 The Android app is a thin Kotlin WebView shell and contains no frontend copy; mobile browsers load the same page. For compatibility diagnosis, append `?frontend=stock` to the browser URL to temporarily use the previous desktop-page adaptation.
 
+### Self-rescue button
+
+When computer-side DSH cannot start (or the remote transport is unreachable), the app's connection-failure dialog offers a Self-rescue button (remote access only). Tapping it requests the computer's self-rescue service directly (frps nginx → frp tunnel → dsh-web-supervisor, fully decoupled from the DSH web process); the computer starts a repair agent and restarts DSH when it finishes. The path does not depend on the DSH frontend or web page, so it works even when the DSH backend failed to start.
+
 ## How it works
 
 ```mermaid

@@ -106,4 +106,12 @@
     <string name="dsh_unavailable_message">请保持电脑端 DSH 与远程通道运行，然后重试。</string>
     <string name="remote_unreachable">远程通道不可达</string>
     <string name="remote_unreachable_message">提供方可能离线或当前网络不稳定。请在电脑端 DSH 重新连接所选远程通道。</string>
+    <string name="self_rescue">自救</string>
+    <string name="self_rescue_triggered">已请求自救。电脑将尝试修复并重启 DSH，请稍后重新连接。</string>
+    <string name="self_rescue_active">自救正在进行中。</string>
+    <string name="self_rescue_failed">自救请求失败。请确认电脑与远程通道在线。</string>
+    <string name="self_rescue_unavailable">未配置远程连接，无法发起自救。</string>
+    <string name="self_rescue_confirm_title">确定触发自救？</string>
+    <string name="self_rescue_confirm_message">将在电脑端启动修复代理并消耗模型额度，是否继续？</string>
+    <string name="self_rescue_confirm_yes">确认</string>
 </resources>
