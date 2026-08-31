@@ -154,12 +154,13 @@ export const NATIVE_MOBILE_STYLES = `
   /* Session stats strip under the composer: a tappable pill by default.
      Collapsed keeps only the first group (e.g. "88 轮 · 1489 步") by hiding
      the remaining spans — no line-height math, no overlap. Tap expands.
-     Scoped to the FIRST dock child: the dock slot also holds peer floaters
-     (cost-meter, energy dock) that must keep their own rhythm; the old
-     '> div' selector clamped every sibling to 21px, whose padding-top then
-     interleaved the two rows (6px overlap). */
+     The pill clamp applies to EVERY dock child (the slot also carries peer
+     floaters like the cost meter and the power dock), so those collapse to a
+     single centered line as well. The rows used to interleave by 6px only
+     because the stats row carried margin-bottom:-6px, which is gone — the
+     clamp itself does not shift following siblings. */
   [data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div:first-child {
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div {
     box-sizing:border-box !important;
     max-height:21px !important;
     height:auto !important;
@@ -177,10 +178,10 @@ export const NATIVE_MOBILE_STYLES = `
     overflow:hidden !important;
     text-overflow:ellipsis !important;
   }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div:first-child > span:not(:first-child) {
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div > span:not(:first-child) {
     display:none !important;
   }
-  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div:first-child {
+  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div {
     height:auto !important;
     width:100% !important;
     max-width:var(--dsh-chat-content-width,calc(100vw - 24px)) !important;
