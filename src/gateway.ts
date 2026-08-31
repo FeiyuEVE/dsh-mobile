@@ -93,6 +93,9 @@ const SESSION_HISTORY_PATH = '/api/session.history'
  * 仅返回低敏日志字段。轮换需同步 dsh-mobile-flutter 与 tests。
  */
 export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
+/** 日志查询豁免会话的存活时长：仅覆盖单次反代请求，取有限值避免
+ *  setTimeout 溢出（Node 32 位毫秒上限 ≈24.8 天，溢出被截断为 1ms）。 */
+const LOG_QUERY_SESSION_TTL_MS = 60 * 60 * 1000
 const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
@@ -517,6 +520,9 @@ function sanitizeRequestHeaders(
   const allowed = [
     'accept', 'accept-encoding', 'accept-language', 'content-encoding', 'content-length', 'content-type',
     'if-match', 'if-modified-since', 'if-none-match', 'if-unmodified-since', 'range', 'user-agent',
+    // 日志查看豁免会话：X-Log-Query 是凭据而非会话状态，需转发给 upstream
+    // 3080 的插件路由做二次校验（值不匹配会被拒），放行无安全损失。
+    'x-log-query',
   ] as const
   for (const name of allowed) {
     const value = request.headers[name]
@@ -1247,12 +1253,14 @@ export class MobileAccessGateway {
     }
     // App 日志查看（GET /api/mobile-logs）：X-Log-Query 令牌即授权，免移动
     // 会话直接反代 upstream（dsh-web 3080 的插件路由校验同一令牌）。
+    // expiresAt 必须是有限值：allocateRequest 的 setTimeout 需 32 位有符号
+    // 毫秒内（>24.8 天会被 Node 截断为 1ms，连接被立即销毁）。
     if (request.method === 'GET' && target.decodedPathname === '/api/mobile-logs'
       && request.headers['x-log-query'] === LOG_QUERY_TOKEN) {
       const synthetic: SessionAuthorization = {
         sessionKey: 'mobile-logs-query',
         deviceId: 'mobile-logs-query',
-        expiresAt: Number.MAX_SAFE_INTEGER,
+        expiresAt: Date.now() + LOG_QUERY_SESSION_TTL_MS,
       }
       await this.proxyHttp(request, response, synthetic)
       return
