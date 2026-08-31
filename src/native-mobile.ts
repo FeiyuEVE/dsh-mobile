@@ -147,6 +147,40 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
+  /* Session stats strip under the composer: a tappable pill by default.
+     Tap expands the full line; the strip's own ellipsis handles overflow. */
+  [data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }
+  [data-slot="conversation.composer.dock"] > div {
+    box-sizing:border-box !important;
+    height:21px !important;
+    width:max-content !important;
+    max-width:calc(100vw - 28px) !important;
+    padding:0 10px !important;
+    border-radius:999px !important;
+    background:var(--dsw-alias-interactive-bg-hover,rgb(148 163 184 / 12%)) !important;
+    cursor:pointer !important;
+    touch-action:manipulation !important;
+    -webkit-tap-highlight-color:transparent !important;
+    text-align:center !important;
+    line-height:21px !important;
+    overflow:hidden !important;
+    text-overflow:ellipsis !important;
+    white-space:nowrap !important;
+  }
+  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div {
+    height:auto !important;
+    width:100% !important;
+    max-width:var(--dsh-chat-content-width,calc(100vw - 24px)) !important;
+    padding:4px 12px !important;
+    border-radius:8px !important;
+    background:transparent !important;
+    cursor:default !important;
+    text-align:left !important;
+    line-height:20px !important;
+    white-space:normal !important;
+    overflow:visible !important;
+    text-overflow:clip !important;
+  }
 }
 @keyframes dsh-mobile-fade-in { from { opacity:0; } }
 @keyframes dsh-mobile-panel-in { from { opacity:.72; transform:translateY(6px); } }
@@ -597,6 +631,22 @@ export function installNativeMobileSurface(): () => void {
     })
   }
   document.addEventListener('click', animateNavigation)
+  // Session stats strip ("X 轮 · Y 步 | LLM … | 首 token …") rides the
+  // conversation.composer.dock slot under the composer. On phones it is
+  // collapsed to a small pill by CSS; a tap expands the full line.
+  let statsDock: HTMLElement | null = null
+  const onStatsDockClick = (): void => {
+    if (statsDock === null) return
+    if (statsDock.dataset.dshMobileStats === 'expanded') delete statsDock.dataset.dshMobileStats
+    else statsDock.dataset.dshMobileStats = 'expanded'
+  }
+  const bindStatsDock = (): void => {
+    const dock = document.querySelector<HTMLElement>('[data-slot="conversation.composer.dock"]')
+    if (dock === null || dock.dataset.dshMobileStatsBound === 'true') return
+    dock.dataset.dshMobileStatsBound = 'true'
+    statsDock = dock
+    dock.addEventListener('click', onStatsDockClick)
+  }
   const syncMediaBinding = (composer: Element | null): void => {
     const previousComposer = boundComposer
     boundComposer = composer
@@ -609,6 +659,7 @@ export function installNativeMobileSurface(): () => void {
 
   const sync = (): void => {
     scheduled = 0
+    bindStatsDock()
     frame = firstByClassSuffix(document, '_frame')
     const dedicatedCenter = document.querySelector<HTMLElement>('.dshm-main') ?? undefined
     if (frame !== undefined) frame.dataset.dshMobileFrame = 'true'
@@ -756,6 +807,7 @@ export function installNativeMobileSurface(): () => void {
     restoreLanguageMarker()
     for (const cleanup of [...browserPickerCleanups]) cleanup()
     observer.disconnect()
+    if (statsDock !== null) statsDock.removeEventListener('click', onStatsDockClick)
     document.removeEventListener('click', onBranchClick, true)
     fileButton.removeEventListener('pointerdown', quietMediaPointer)
     cameraButton.removeEventListener('pointerdown', quietMediaPointer)

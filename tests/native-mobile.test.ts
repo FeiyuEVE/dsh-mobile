@@ -164,4 +164,16 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('@media (prefers-reduced-motion:reduce)')
     expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-sheet')
   })
+
+  it('collapses the composer dock stats strip into a tappable pill on mobile', () => {
+    const source = installNativeMobileSurface.toString()
+    expect(source).toContain('[data-slot=\\"conversation.composer.dock\\"]')
+    expect(source).toContain('bindStatsDock()')
+    expect(source).toContain('dock.dataset.dshMobileStatsBound = "true"')
+    expect(source).toContain('statsDock.dataset.dshMobileStats === "expanded"')
+    expect(source).toContain('statsDock.removeEventListener("click", onStatsDockClick)')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"] > div')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div')
+    expect(NATIVE_MOBILE_STYLES).toContain('border-radius:999px')
+  })
 })
