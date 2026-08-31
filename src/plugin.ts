@@ -18,7 +18,7 @@ import {
   MobileAccessGatewayController,
   type MobileAccessRuntime,
 } from './control.js'
-import { MobileAccessGateway } from './gateway.js'
+import { LOG_QUERY_TOKEN, MobileAccessGateway } from './gateway.js'
 import { createMobileAccessService, type MobileAccessService } from './extensions.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
@@ -50,7 +50,8 @@ export const name = 'dsh-mobile'
  * App 日志查询令牌（GET /api/mobile-logs）：App 内置常量，与上报令牌分离。
  * 仅返回低敏日志字段（无 token/凭据），泄露面有限；轮换需同步 dsh-mobile-flutter。
  */
-export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
+// 与网关共用（gateway.ts 免会话放行同令牌）；测试 import 自本模块保持兼容。
+export { LOG_QUERY_TOKEN } from './gateway.js'
 
 /** The stock WebServer serves the control card; Connection authenticates the loopback DSH origin. */
 export const inject = ['webServer', 'commands', 'connection']
@@ -546,7 +547,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
           if (!es.ok) throw new HttpError(502, `es_search_${es.status}`)
           const doc = await es.json() as { hits?: { hits?: Array<{ _source?: Record<string, unknown> }> } }
           const logs = (doc.hits?.hits ?? []).map(hit => hit._source ?? {})
-          sendJson(response, 200, { ok: true, logs, total: logs.length })
+          sendJson(response, 200, { ok: true, logs, total: logs.length }, false)
         } catch (error) {
           if (response.headersSent) { response.destroy(); return }
           const mapped = mapAdminError(error)

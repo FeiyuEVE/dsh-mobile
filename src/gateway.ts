@@ -87,6 +87,12 @@ const MAX_CONTROL_BODY_BYTES = 16 * 1024
 const MAX_HEADER_BYTES = 16 * 1024
 const MOBILE_HISTORY_PAGE_MESSAGES = 10
 const SESSION_HISTORY_PATH = '/api/session.history'
+
+/** App 日志查看令牌（GET /api/mobile-logs）：网关据此放行免移动会话的
+ * 日志查询反代，dsh-web 3080 侧插件校验同一值。App 内置常量，与上报令牌分离；
+ * 仅返回低敏日志字段。轮换需同步 dsh-mobile-flutter 与 tests。
+ */
+export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
 const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
@@ -1238,6 +1244,18 @@ export class MobileAccessGateway {
     if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST'
       && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
+    }
+    // App 日志查看（GET /api/mobile-logs）：X-Log-Query 令牌即授权，免移动
+    // 会话直接反代 upstream（dsh-web 3080 的插件路由校验同一令牌）。
+    if (request.method === 'GET' && target.decodedPathname === '/api/mobile-logs'
+      && request.headers['x-log-query'] === LOG_QUERY_TOKEN) {
+      const synthetic: SessionAuthorization = {
+        sessionKey: 'mobile-logs-query',
+        deviceId: 'mobile-logs-query',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      }
+      await this.proxyHttp(request, response, synthetic)
+      return
     }
     let authorization: SessionAuthorization
     try {
