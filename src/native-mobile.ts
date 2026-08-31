@@ -151,18 +151,19 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-composer-model] { flex:1 1 auto !important; width:auto !important; min-width:0 !important; max-width:none !important; }
   [data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
   [data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
-  [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
+  [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 4px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
-  /* Session stats strip under the composer: a tappable pill by default.
-     Collapsed keeps only the first group (e.g. "88 轮 · 1489 步") by hiding
-     the remaining spans — no line-height math, no overlap. Tap expands.
-     The pill clamp applies to EVERY dock child (the slot also carries peer
-     floaters like the cost meter and the power dock), so those collapse to a
-     single centered line as well. The rows used to interleave by 6px only
-     because the stats row carried margin-bottom:-6px, which is gone — the
-     clamp itself does not shift following siblings. */
+  /* Give the chat room back: the composer keeps its stable two toolbar rows
+     (left tools / model+send), but the send button drops from the desktop
+     34px chrome to the 30px control floor and the row gutter tightens so the
+     seat costs less height. The stats strip itself now collapses to
+     "X 轮 · Y 步" inside the StatsLine component (matchMedia ≤640px, tap to
+     expand) — the dock rules below only keep peer floaters (cost meter,
+     power dock) collapsed as pills and leave the stats row alone. */
+  [data-dsh-mobile-composer-row] { gap:2px 8px !important; }
+  [data-dsh-mobile-composer-row] [class*="_primary"] { box-sizing:border-box !important; width:30px !important; height:30px !important; min-height:30px !important; }
   [data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div {
+  [data-slot="conversation.composer.dock"] > div:not([class*="_root"]) {
     box-sizing:border-box !important;
     max-height:21px !important;
     height:auto !important;
@@ -179,23 +180,6 @@ export const NATIVE_MOBILE_STYLES = `
     white-space:nowrap !important;
     overflow:hidden !important;
     text-overflow:ellipsis !important;
-  }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div > span:not(:first-child) {
-    display:none !important;
-  }
-  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div {
-    height:auto !important;
-    width:100% !important;
-    max-width:var(--dsh-chat-content-width,calc(100vw - 24px)) !important;
-    padding:4px 12px !important;
-    border-radius:8px !important;
-    background:transparent !important;
-    cursor:default !important;
-    text-align:left !important;
-    line-height:20px !important;
-    white-space:normal !important;
-    overflow:visible !important;
-    text-overflow:clip !important;
   }
 }
 @keyframes dsh-mobile-fade-in { from { opacity:0; } }
@@ -647,22 +631,6 @@ export function installNativeMobileSurface(): () => void {
     })
   }
   document.addEventListener('click', animateNavigation)
-  // Session stats strip ("X 轮 · Y 步 | LLM … | 首 token …") rides the
-  // conversation.composer.dock slot under the composer. On phones it is
-  // collapsed to a small pill by CSS; a tap expands the full line.
-  let statsDock: HTMLElement | null = null
-  const onStatsDockClick = (): void => {
-    if (statsDock === null) return
-    if (statsDock.dataset.dshMobileStats === 'expanded') delete statsDock.dataset.dshMobileStats
-    else statsDock.dataset.dshMobileStats = 'expanded'
-  }
-  const bindStatsDock = (): void => {
-    const dock = document.querySelector<HTMLElement>('[data-slot="conversation.composer.dock"]')
-    if (dock === null || dock.dataset.dshMobileStatsBound === 'true') return
-    dock.dataset.dshMobileStatsBound = 'true'
-    statsDock = dock
-    dock.addEventListener('click', onStatsDockClick)
-  }
   const syncMediaBinding = (composer: Element | null): void => {
     const previousComposer = boundComposer
     boundComposer = composer
@@ -675,7 +643,6 @@ export function installNativeMobileSurface(): () => void {
 
   const sync = (): void => {
     scheduled = 0
-    bindStatsDock()
     frame = firstByClassSuffix(document, '_frame')
     const dedicatedCenter = document.querySelector<HTMLElement>('.dshm-main') ?? undefined
     if (frame !== undefined) frame.dataset.dshMobileFrame = 'true'
@@ -823,7 +790,6 @@ export function installNativeMobileSurface(): () => void {
     restoreLanguageMarker()
     for (const cleanup of [...browserPickerCleanups]) cleanup()
     observer.disconnect()
-    if (statsDock !== null) statsDock.removeEventListener('click', onStatsDockClick)
     document.removeEventListener('click', onBranchClick, true)
     fileButton.removeEventListener('pointerdown', quietMediaPointer)
     cameraButton.removeEventListener('pointerdown', quietMediaPointer)
