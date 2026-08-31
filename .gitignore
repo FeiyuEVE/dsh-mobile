@@ -16,3 +16,10 @@ apps/mobile/android/**/build/
 # The iOS experiment is intentionally outside the Android-only alpha.
 apps/mobile/ios/
 apps/mobile/store/ios/
+
+# tsc -b 在包根运行的编译副产品（防再次污染工作树）
+vitest.config.js
+vitest.config.js.map
+vitest.config.d.ts
+vitest.config.d.ts.map
+tsconfig.tsbuildinfo
