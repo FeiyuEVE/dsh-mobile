@@ -148,11 +148,13 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
   /* Session stats strip under the composer: a tappable pill by default.
-     Tap expands the full line; the strip's own ellipsis handles overflow. */
+     Collapsed keeps only the first group (e.g. "88 轮 · 1489 步") by hiding
+     the remaining spans — no line-height math, no overlap. Tap expands. */
   [data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }
-  [data-slot="conversation.composer.dock"] > div {
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div {
     box-sizing:border-box !important;
-    height:21px !important;
+    max-height:21px !important;
+    height:auto !important;
     width:max-content !important;
     max-width:calc(100vw - 28px) !important;
     padding:0 10px !important;
@@ -163,9 +165,12 @@ export const NATIVE_MOBILE_STYLES = `
     -webkit-tap-highlight-color:transparent !important;
     text-align:center !important;
     line-height:21px !important;
+    white-space:nowrap !important;
     overflow:hidden !important;
     text-overflow:ellipsis !important;
-    white-space:nowrap !important;
+  }
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div > span:not(:first-child) {
+    display:none !important;
   }
   [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div {
     height:auto !important;
