@@ -102,7 +102,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-message-column] [class*="_ioSection"] { grid-template-columns:1fr !important; row-gap:4px !important; }
   [data-dsh-mobile-message-column] [class*="_body"] { max-width:100% !important; overflow-wrap:anywhere; }
   [data-dsh-mobile-center] [data-composer-card] ~ [class*="_root"],
-  [data-dsh-mobile-center] [data-composer-card] ~ * [class*="_root"] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; margin-bottom:-6px !important; padding:3px 4px 0 !important; font-size:11px !important; line-height:18px !important; white-space:normal !important; overflow:visible !important; text-overflow:clip !important; }
+  [data-dsh-mobile-center] [data-composer-card] ~ * [class*="_root"] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; padding:3px 4px 0 !important; font-size:11px !important; line-height:18px !important; white-space:normal !important; overflow:visible !important; text-overflow:clip !important; }
   [data-dsh-mobile-center] [data-composer-card] ~ [class*="_root"] [class*="_sep"],
   [data-dsh-mobile-center] [data-composer-card] ~ * [class*="_root"] [class*="_sep"] { margin:0 6px !important; }
   /* Message runtime details are inline on desktop. Give the clock/runtime
@@ -153,9 +153,13 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
   /* Session stats strip under the composer: a tappable pill by default.
      Collapsed keeps only the first group (e.g. "88 轮 · 1489 步") by hiding
-     the remaining spans — no line-height math, no overlap. Tap expands. */
+     the remaining spans — no line-height math, no overlap. Tap expands.
+     Scoped to the FIRST dock child: the dock slot also holds peer floaters
+     (cost-meter, energy dock) that must keep their own rhythm; the old
+     '> div' selector clamped every sibling to 21px, whose padding-top then
+     interleaved the two rows (6px overlap). */
   [data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div {
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div:first-child {
     box-sizing:border-box !important;
     max-height:21px !important;
     height:auto !important;
@@ -173,10 +177,10 @@ export const NATIVE_MOBILE_STYLES = `
     overflow:hidden !important;
     text-overflow:ellipsis !important;
   }
-  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div > span:not(:first-child) {
+  [data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div:first-child > span:not(:first-child) {
     display:none !important;
   }
-  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div {
+  [data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div:first-child {
     height:auto !important;
     width:100% !important;
     max-width:var(--dsh-chat-content-width,calc(100vw - 24px)) !important;
