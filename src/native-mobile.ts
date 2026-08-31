@@ -136,13 +136,17 @@ export const NATIVE_MOBILE_STYLES = `
   .dsh-mobile-media-action svg { flex:none; width:16px; height:16px; color:var(--dsw-alias-label-tertiary,currentColor); }
   .dsh-mobile-media-action span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
-  /* The desktop composer intentionally wraps whole toolbar groups. On a phone,
-     dynamic model and status labels made that row alternate between one and
-     two lines. Keep two stable columns and let only the model label shrink. */
-  [data-dsh-mobile-composer-row] { display:grid !important; grid-template-columns:max-content minmax(0,1fr) !important; align-items:center !important; gap:4px 8px !important; }
-  [data-dsh-mobile-composer-tools] { display:flex !important; flex-wrap:nowrap !important; width:max-content !important; min-width:0 !important; max-width:max-content !important; gap:6px !important; }
-  [data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important; min-width:0 !important; max-width:100% !important; gap:6px !important; margin-left:0 !important; justify-content:flex-end !important; }
-  [data-dsh-mobile-composer-model] { flex:1 1 0 !important; width:auto !important; min-width:0 !important; max-width:none !important; }
+  /* The desktop composer wraps whole toolbar groups only when the row runs
+     out of room, which a dynamic model label would flip between one and two
+     lines on a phone. Keep a stable two-row layout instead: the left tools on
+     row one, the model/usage/send group as a full right-aligned row two, so
+     the model name gets the remaining width instead of collapsing to a few
+     characters (the old grid kept the tools unshrinkable and squeezed the
+     model trigger to "De…"). */
+  [data-dsh-mobile-composer-row] { display:flex !important; flex-wrap:wrap !important; align-items:center !important; gap:4px 8px !important; }
+  [data-dsh-mobile-composer-tools] { display:flex !important; flex-wrap:nowrap !important; width:auto !important; min-width:0 !important; max-width:100% !important; gap:6px !important; }
+  [data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:1 1 100% !important; width:auto !important; min-width:0 !important; max-width:100% !important; gap:6px !important; margin-left:0 !important; justify-content:flex-end !important; }
+  [data-dsh-mobile-composer-model] { flex:1 1 auto !important; width:auto !important; min-width:0 !important; max-width:none !important; }
   [data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
   [data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 8px !important; }
