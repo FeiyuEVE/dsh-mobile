@@ -46,6 +46,12 @@ import {
 /** Stable Cordis plugin name. */
 export const name = 'dsh-mobile'
 
+/**
+ * App 日志查询令牌（GET /api/mobile-logs）：App 内置常量，与上报令牌分离。
+ * 仅返回低敏日志字段（无 token/凭据），泄露面有限；轮换需同步 dsh-mobile-flutter。
+ */
+export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
+
 /** The stock WebServer serves the control card; Connection authenticates the loopback DSH origin. */
 export const inject = ['webServer', 'commands', 'connection']
 
@@ -510,6 +516,45 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
 
   await ctx.effect(async () => {
     const unregister = ctx.webServer.register(adminRoute)
+    // App 日志查看：后端代理读 ES（logstash-mobile 索引，见 logging-stack
+    // PLUGIN-LOG-INGEST.md）。查询令牌与上报令牌分离，App 内置、低敏；ES
+    // 只读 _search，字段白名单，limit 上限 200。
+    const logsQueryRoute: WebRoute = {
+      kind: 'prefix',
+      path: '/api/mobile-logs',
+      handler: async (request, response) => {
+        try {
+          if (request.headers['x-log-query'] !== LOG_QUERY_TOKEN) throw new HttpError(401, 'unauthorized')
+          const target = new URL(request.url ?? '/', 'http://localhost')
+          const limit = Math.min(Number(target.searchParams.get('limit') ?? '100') || 100, 200)
+          const since = target.searchParams.get('since') ?? '2h'
+          const rawLevel = target.searchParams.get('level') ?? ''
+          const levels = rawLevel.split(',').map(s => s.trim()).filter(Boolean)
+          const must: unknown[] = [{ range: { '@timestamp': { gte: `now-${since}` } } }]
+          if (levels.length > 0) must.push({ terms: { level: levels } })
+          const es = await fetch('http://10.43.239.195:9200/logstash-mobile/_search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              size: limit,
+              sort: [{ '@timestamp': { order: 'desc' } }],
+              _source: ['@timestamp', 'level', 'message', 'tag', 'service', 'app_version', 'build'],
+              query: { bool: { must } },
+            }),
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!es.ok) throw new HttpError(502, `es_search_${es.status}`)
+          const doc = await es.json() as { hits?: { hits?: Array<{ _source?: Record<string, unknown> }> } }
+          const logs = (doc.hits?.hits ?? []).map(hit => hit._source ?? {})
+          sendJson(response, 200, { ok: true, logs, total: logs.length })
+        } catch (error) {
+          if (response.headersSent) { response.destroy(); return }
+          const mapped = mapAdminError(error)
+          sendFailure(response, mapped.status, mapped.code, false)
+        }
+      },
+    }
+    const unregisterLogs = ctx.webServer.register(logsQueryRoute)
     const disposeMobileCommand = ctx.commands.register({
       name: 'mobile',
       description: '按需求修改 DSH Mobile 的手机端界面或添加电脑端能力',
@@ -541,6 +586,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       await remoteControllers.cpolar.initialize()
     } catch (error) {
       unregister()
+      unregisterLogs()
       disposeMobileCommand()
       await Promise.all([remoteControllers.tailscale.close(), remoteControllers.cpolar.close()])
       await lanController.close()
@@ -550,6 +596,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     }
     return async () => {
       unregister()
+      unregisterLogs()
       disposeMobileCommand()
       await Promise.all([remoteControllers.tailscale.close(), remoteControllers.cpolar.close()])
       await lanController.close()

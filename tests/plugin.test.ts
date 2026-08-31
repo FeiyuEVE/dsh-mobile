@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { LOG_QUERY_TOKEN } from '../src/plugin.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Config, parseGatewayConfig } from '../src/config.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
@@ -20,7 +21,7 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, body = ''): Promise<{ status: number; body: string }> {
+async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, body = '', extraHeaders: Record<string, string> = {}): Promise<{ status: number; body: string }> {
   const server = createServer((request, response) => { void route.handler(request, response) })
   await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
   const port = (server.address() as AddressInfo).port
@@ -33,6 +34,7 @@ async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, bod
         path,
         headers: {
           host: `127.0.0.1:${String(port)}`,
+          ...extraHeaders,
           ...(method === 'POST' ? {
             origin: `http://127.0.0.1:${String(port)}`,
             'sec-fetch-site': 'same-origin',
@@ -57,17 +59,17 @@ async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, bod
   }
 }
 
-async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute; command: CommandDefinition }> {
+async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute; logsRoute: WebRoute; command: CommandDefinition }> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
   temporaryDirectories.push(directory)
-  let route: WebRoute | undefined
   let command: CommandDefinition | undefined
+  const routes = new Map<string, WebRoute>()
   const context = new Context()
   contexts.push(context)
   context.provide('webServer', {
     register(candidate: WebRoute) {
-      route = candidate
-      return () => { if (route === candidate) route = undefined }
+      routes.set(candidate.path, candidate)
+      return () => { routes.delete(candidate.path) }
     },
   } as WebServer)
   context.provide('commands', {
@@ -90,9 +92,12 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
     initiallyEnabled,
     tls: { mode: 'disabled' },
   })
+  const route = routes.get('/api/mobile-access')
   if (route === undefined) throw new Error('plugin did not register its control route')
+  const logsRoute = routes.get('/api/mobile-logs')
+  if (logsRoute === undefined) throw new Error('plugin did not register its logs query route')
   if (command === undefined) throw new Error('plugin did not register its /mobile command')
-  return { context, route, command }
+  return { context, route, logsRoute, command }
 }
 
 describe('remote Funnel gateway configuration', () => {
@@ -248,5 +253,22 @@ describe('stock DSH lifecycle', () => {
       form: 'notice',
       summary: '/mobile 把手机端改成深色主题',
     })
+  })
+
+  it('registers the logs query route and requires its token', async () => {
+    const mounted = await mount()
+    // 无查询令牌 → 401；有令牌才进入 ES 代理分支（测试环境 ES 不可达，返回 5xx 而非 401）
+    const denied = await invoke(mounted.logsRoute, 'GET', '/api/mobile-logs?limit=10', '')
+    expect(denied.status).toBe(401)
+    const allowed = await invoke(
+      mounted.logsRoute,
+      'GET',
+      '/api/mobile-logs?limit=10',
+      '',
+      { 'x-log-query': LOG_QUERY_TOKEN },
+    )
+    expect(allowed.status).not.toBe(401)
+    // 本机测试环境 ES 可达时返回 200；异机返回 5xx。两条路径都证明令牌放行。
+    expect(allowed.status).toBeLessThan(500)
   })
 })
