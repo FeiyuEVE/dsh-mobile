@@ -526,7 +526,7 @@ function sanitizeRequestHeaders(
   ] as const
   for (const name of allowed) {
     const value = request.headers[name]
-    if (value !== undefined) headers[name] = value
+    if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
   return headers
 }
