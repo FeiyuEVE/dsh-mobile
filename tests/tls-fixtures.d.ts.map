@@ -1,0 +1,1 @@
+{"version":3,"file":"tls-fixtures.d.ts","sourceRoot":"","sources":["tls-fixtures.ts"],"names":[],"mappings":"AAEA,iFAAiF;AACjF,MAAM,WAAW,YAAY;IAC3B,QAAQ,CAAC,QAAQ,EAAE,MAAM,CAAA;IACzB,QAAQ,CAAC,gBAAgB,EAAE,MAAM,CAAA;IACjC,QAAQ,CAAC,QAAQ,EAAE,MAAM,CAAA;IACzB,QAAQ,CAAC,OAAO,EAAE,MAAM,CAAA;CACzB;AA2JD,kGAAkG;AAClG,wBAAgB,kBAAkB,IAAI,YAAY,CAsDjD"}
