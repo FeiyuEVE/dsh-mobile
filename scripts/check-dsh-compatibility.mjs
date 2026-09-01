@@ -125,7 +125,8 @@ if (clientArchitecture === 'renderer-v2' && !connectionSource.includes('transpor
 }
 
 const settingsSource = await text('packages/client/ui-settings/src/client/index.ts')
-if (!settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")) {
+if (!settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")
+  && !settingsSource.includes("ctx.remote.$host.isLoopback ? 'host' : 'memory'")) {
   throw new Error('DSH settings trust contract changed')
 }
 
