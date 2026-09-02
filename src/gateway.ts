@@ -221,11 +221,18 @@ function orderAuthenticatedSettings(entries: BootGraphEntry[], slotsProvider: st
     || !mobile[0].inject.includes(SIDEBAR_MODULE)) {
     throw new Error('dsh-mobile client has unsupported dependencies')
   }
-  if (!Array.isArray(settings[0]?.inject)
-    || !settings[0].inject.includes(CONNECTION_MODULE)) {
+  if (!Array.isArray(settings[0]?.inject)) {
     throw new Error('upstream DSH settings module has unsupported dependencies')
   }
   mobile[0].inject = [CONNECTION_MODULE, slotsProvider]
+  // dsh ≥0.1.2-alpha.4 的 settings 客户端改经 api-remotes 取数，其 inject 不再直接
+  // 依赖 dsh-client-connection；但移动设置页仍由 settings 装载 dsh-mobile 客户端
+  // （注入已改写为 connection + slots）。把 connection 一并补入 settings 依赖，使
+  // 新代次注入图与 alpha.3 时代（settings 自带 connection）结构一致；旧代次已含
+  // connection，此处不改变其行为。
+  if (!settings[0].inject.includes(CONNECTION_MODULE)) {
+    settings[0].inject = [...settings[0].inject, CONNECTION_MODULE]
+  }
   if (!settings[0].inject.includes(MOBILE_CLIENT_MODULE)) settings[0].inject = [...settings[0].inject, MOBILE_CLIENT_MODULE]
 }
 
