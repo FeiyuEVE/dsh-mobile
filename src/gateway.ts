@@ -1657,8 +1657,9 @@ export class MobileAccessGateway {
         const rewritten = rewriteMobileIndexWithBatch(Buffer.concat(chunks).toString('utf8'))
         if (rewritten.batch !== undefined) this.rememberMobileBootBatch(rewritten.batch)
         body = Buffer.from(rewritten.html)
-      } catch {
-        throw new HttpError(502, 'upstream_unavailable')
+      } catch (error) {
+        console.warn(`[dsh-mobile] mobile index rewrite failed (${(error as Error)?.message ?? String(error)}); serving raw upstream page`)
+        body = Buffer.concat(chunks)
       }
       const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
       delete headers['content-length']

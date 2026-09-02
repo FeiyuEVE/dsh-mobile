@@ -2,6 +2,11 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.10 - 2026-09-02
+
+- Support the DSH 0.1.2-alpha.4 web frontend on mobile: its settings module no longer injects the connection client, so the gateway now appends the connection client to the settings dependency graph instead of failing the mobile index rewrite (which previously surfaced as an `upstream_unavailable` 502 right after pairing).
+- When an upstream index rewrite still cannot be completed, relay the raw upstream page instead of answering 502, so a paired mobile session always lands on something usable and the failure stays visible in gateway logs.
+
 ## Unreleased
 
 - Inject `AbortSignal.any` and `Promise.withResolvers` boot polyfills into gateway documents, so old Android System WebView releases (e.g. Chrome 114 on Android 12) can start the DSH connection instead of failing before the client bundle runs.
