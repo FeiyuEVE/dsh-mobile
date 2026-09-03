@@ -2,6 +2,14 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.12 - 2026-09-03
+
+- Fix the stuck full-screen dim layer after switching sessions in the dedicated mobile layout ("grey overlay that blocks taps until the app is killed", watchdog-verified: `.dshm-scrim` open / `.dsh-native-mobile-backdrop` visible with nothing left to close it). Root cause: the native mobile surface's mutation-driven sync tagged the `dshm` drawer container as its own sidebar and re-wrote the drawer's `data-open` attribute from the core sidebar's collapse class, creating two competing state machines (React layout vs native CSS panel) that could desync and leave the backdrop/panel up after React had already closed the drawer. The sync also depended on an uninterrupted mutation → rAF chain.
+  - In the dedicated layout the sync no longer overwrites the drawer's `data-open` (the React layout owns it exclusively; the native panel CSS now follows React directly).
+  - The native backdrop now hides whenever React reports the drawer closed (`data-open` on the scrim), instead of waiting for the core sidebar's 150 ms collapse settle, and no longer depends on a continuously healthy observer chain (2 s safety heartbeat re-runs the idempotent sync).
+  - Tapping the backdrop now closes through the React path first (scrim click); the core-toggle fallback only applies on non-dedicated surfaces.
+- (unreleased items carried below)
+
 ## 0.3.11 - 2026-09-03
 
 - Relax the gateway CSP from `base-uri 'none'` to `base-uri 'self'`: the DSH core `frontend-static` injects a same-origin `<base href="/">` into the served index (SPA deep-link asset anchoring), so the old policy made every page load raise a `securitypolicyviolation`. The page error guard queued each violation and retried delivery every 5 s; on direct-gateway connections (no nginx relay) every attempt 403'd forever, flooding the mobile app's http-error log and losing client-error telemetry. A same-origin base adds no XSS surface.

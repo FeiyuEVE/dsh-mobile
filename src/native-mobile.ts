@@ -775,13 +775,36 @@ export function installNativeMobileSurface(): () => void {
     }
     if (toggle !== undefined) toggle.dataset.dshMobileToggle = 'true'
     const collapsed = classToken(sidebarRoot, '_collapsed')
-    sidebar.dataset.open = String(!collapsed)
-    backdrop.hidden = collapsed
+    // 遮罩卡死修复（0.3.12）：dedicated(dshm) 布局下 drawer 的 data-open 由
+    // mobile-layout 的 React 状态独占（scrim 的 data-open 即 React 真值）。native
+    // sync 若按 core 折叠类覆写该属性，会把两套状态机拉到失步——React 已关闭
+    // （scrim 收起）而 core 未折叠、或观察链中断时，backdrop(z235)/面板会残留
+    // 全屏灰层且点击无法关闭（用户只能杀 App）。改为：
+    //   1) dedicated 模式不再覆写 drawer data-open（面板完全跟随 React）；
+    //   2) backdrop 隐藏条件并入 React 真值——React 一关立即隐藏，不等 core
+    //      settle(150ms)，也不依赖观察链持续健康（另有 2s 心跳兜底）。
+    const scrim = document.querySelector<HTMLElement>('.dshm-scrim')
+    const reactOpen = scrim?.dataset.open === 'true'
+    const dedicated = sidebar.classList.contains('dshm-drawer')
+    if (!dedicated) sidebar.dataset.open = String(!collapsed)
+    backdrop.hidden = collapsed || (dedicated && !reactOpen)
   }
+  // 兜底心跳：mutation/rAF 链任一处异常中断后至多 2s 恢复 backdrop 收敛，
+  // 杜绝"杀 App 才能恢复"的永久残留（同步幂等，正常时 2s 一次开销可忽略）。
+  const safetyTimer = window.setInterval(() => { void sync() }, 2000)
   const schedule = (): void => { if (scheduled === 0) scheduled = requestAnimationFrame(sync) }
   const observer = new MutationObserver(schedule)
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'disabled', 'readonly', 'aria-busy', 'aria-selected', 'data-dsh-mobile-session'] })
-  backdrop.addEventListener('click', () => { if (sidebar?.dataset.open === 'true') toggle?.click() })
+  backdrop.addEventListener('click', () => {
+    // 优先走 React 权威关闭路径：dedicated 布局下 scrim 的 onClick 关闭
+    // sidebar/details。旧路径（依赖 core toggle 折叠）仅作非 dedicated 回退。
+    const scrim = document.querySelector<HTMLElement>('.dshm-scrim')
+    if (scrim !== null && scrim.dataset.open === 'true') {
+      scrim.click()
+      return
+    }
+    if (sidebar?.dataset.open === 'true') toggle?.click()
+  })
   sync()
   return () => {
     disposed = true
@@ -801,6 +824,7 @@ export function installNativeMobileSurface(): () => void {
     mediaToast.remove()
     mediaActions.remove()
     if (scheduled !== 0) cancelAnimationFrame(scheduled)
+    if (safetyTimer !== 0) window.clearInterval(safetyTimer)
     if (transitionFrame !== 0) cancelAnimationFrame(transitionFrame)
     if (transitionRestartFrame !== 0) cancelAnimationFrame(transitionRestartFrame)
     if (transitionTimer !== 0) clearTimeout(transitionTimer)
