@@ -1325,6 +1325,15 @@ export class MobileAccessGateway {
       await this.handleLogIngest(request, response)
       return
     }
+    // favicon：无会话引导请求（WebView/浏览器启动即拉取，不带 cookie）此前 401
+    // JSON → App onReceivedHttpError 每次加载刷一条 http-error warn。直接空响应,
+    // 任何 App 版本都不再产生该噪音（0.3.13）。
+    if (request.method === 'GET' && (target.decodedPathname === '/favicon.ico' || target.decodedPathname === '/favicon.png')) {
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(204, { 'Content-Length': 0 })
+      response.end()
+      return
+    }
     let authorization: SessionAuthorization
     try {
       authorization = this.authorize(request)

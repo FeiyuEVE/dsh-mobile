@@ -2,6 +2,14 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.13 - 2026-09-03
+
+- Follow-up on 0.3.12: the dedicated mobile layout could still leave the native backdrop up after React had closed the drawer. Two hardening changes make the stuck layer structurally impossible:
+  - Dedicated-layout detection now keys on the presence of the `dshm` main column instead of the *absence* of a core `_frame` element. The suffix matcher (`classToken` = `endsWith`) could match an unrelated `*_frame` class in some session views, which made the sync treat the dedicated page as the desktop layout, fail to find a sidebar, and return before ever converging the backdrop.
+  - In the dedicated layout the native backdrop (`z-235` full-screen dim button) is now always hidden; the drawer open/close and its dim are owned exclusively by the mobile-layout React scrim. The earlier "two state machines" desync class disappears entirely. Non-dedicated (mobile browser on the desktop layout) behaviour is unchanged.
+- The gateway now answers `GET /favicon.ico` / `/favicon.png` with 204 before session authorization, so browser/WebView boot-time favicon fetches no longer 401 (they previously surfaced as per-load http-error warnings in the app's log; app-side filtering remains as a second line of defence).
+- (unreleased items carried below)
+
 ## 0.3.12 - 2026-09-03
 
 - Fix the stuck full-screen dim layer after switching sessions in the dedicated mobile layout ("grey overlay that blocks taps until the app is killed", watchdog-verified: `.dshm-scrim` open / `.dsh-native-mobile-backdrop` visible with nothing left to close it). Root cause: the native mobile surface's mutation-driven sync tagged the `dshm` drawer container as its own sidebar and re-wrote the drawer's `data-open` attribute from the core sidebar's collapse class, creating two competing state machines (React layout vs native CSS panel) that could desync and leave the backdrop/panel up after React had already closed the drawer. The sync also depended on an uninterrupted mutation → rAF chain.

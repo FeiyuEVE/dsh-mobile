@@ -643,12 +643,20 @@ export function installNativeMobileSurface(): () => void {
 
   const sync = (): void => {
     scheduled = 0
-    frame = firstByClassSuffix(document, '_frame')
+    // dedicated(dshm) 布局判定必须优先于 core 帧: 会话视图里可能混入类名以
+    // _frame 结尾的元素(classToken 是 endsWith 匹配), 若先找 _frame 会把
+    // dedicated 页误判成 core 桌面布局 → sidebar 走 _sidebarCol 分支查不到 →
+    // sync 提前 return → backdrop/遮罩状态冻结(用户实测卡死路径之一)。
     const dedicatedCenter = document.querySelector<HTMLElement>('.dshm-main') ?? undefined
+    frame = dedicatedCenter === undefined ? firstByClassSuffix(document, '_frame') : undefined
     if (frame !== undefined) frame.dataset.dshMobileFrame = 'true'
     sidebar = frame === undefined
       ? document.querySelector<HTMLElement>('.dshm-drawer') ?? undefined
       : firstByClassSuffix(frame, '_sidebarCol')
+    // dedicated 布局由 mobile-layout 的 React scrim/drawer 单一权威管理,
+    // 原生 backdrop(z235) 永不显示 —— 把"React 已关仍残留全屏暗层且点不掉"
+    // 的卡死族从结构上消灭(drawer 开合只依赖 React, 见 sync 尾部)。
+    if (dedicatedCenter !== undefined) backdrop.hidden = true
     const center = frame === undefined ? dedicatedCenter : firstByClassSuffix(frame, '_centerCol')
     const details = frame === undefined ? undefined : firstByClassSuffix(frame, '_detailsCol')
     const handle = frame === undefined ? undefined : firstByClassSuffix(frame, '_handle')
@@ -775,19 +783,13 @@ export function installNativeMobileSurface(): () => void {
     }
     if (toggle !== undefined) toggle.dataset.dshMobileToggle = 'true'
     const collapsed = classToken(sidebarRoot, '_collapsed')
-    // 遮罩卡死修复（0.3.12）：dedicated(dshm) 布局下 drawer 的 data-open 由
-    // mobile-layout 的 React 状态独占（scrim 的 data-open 即 React 真值）。native
-    // sync 若按 core 折叠类覆写该属性，会把两套状态机拉到失步——React 已关闭
-    // （scrim 收起）而 core 未折叠、或观察链中断时，backdrop(z235)/面板会残留
-    // 全屏灰层且点击无法关闭（用户只能杀 App）。改为：
-    //   1) dedicated 模式不再覆写 drawer data-open（面板完全跟随 React）；
-    //   2) backdrop 隐藏条件并入 React 真值——React 一关立即隐藏，不等 core
-    //      settle(150ms)，也不依赖观察链持续健康（另有 2s 心跳兜底）。
-    const scrim = document.querySelector<HTMLElement>('.dshm-scrim')
-    const reactOpen = scrim?.dataset.open === 'true'
-    const dedicated = sidebar.classList.contains('dshm-drawer')
-    if (!dedicated) sidebar.dataset.open = String(!collapsed)
-    backdrop.hidden = collapsed || (dedicated && !reactOpen)
+    if (dedicatedCenter === undefined) {
+      // core 桌面布局(手机浏览器页): 保持原语义 —— native backdrop 镜像 core
+      // 折叠状态, sync 覆写 sidebarCol 的 data-open。dedicated 布局的 backdrop
+      // 已在 sync 开头强制隐藏、drawer data-open 由 React 独占, 此处不再触碰。
+      sidebar.dataset.open = String(!collapsed)
+      backdrop.hidden = collapsed
+    }
   }
   // 兜底心跳：mutation/rAF 链任一处异常中断后至多 2s 恢复 backdrop 收敛，
   // 杜绝"杀 App 才能恢复"的永久残留（同步幂等，正常时 2s 一次开销可忽略）。
