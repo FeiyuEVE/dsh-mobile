@@ -49,9 +49,13 @@ export function setSecurityHeaders(response: ServerResponse, tls: boolean): void
   response.setHeader('Cache-Control', 'no-store')
   // DSH emits inline boot code, revives Schemastery callbacks, and applies dynamic styles.
   // These allowances provide compatibility, not XSS isolation.
+  // base-uri 放行同源：core frontend-static 给 index 注入 <base href="/">（SPA 深链
+  // 资源锚定）。此前 'none' 使每次页面加载触发 securitypolicyviolation → 页面错误守卫
+  // 将违规入队并无限重试上报（直连网关无转发层时每 5s 403 刷屏，App http-error warn
+  // 泛滥）。同源 base 无 XSS 面，放行后违规消失、守卫队列自然清空。
   response.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "base-uri 'none'",
+    "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",

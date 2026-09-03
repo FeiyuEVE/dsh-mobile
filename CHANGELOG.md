@@ -2,12 +2,19 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.11 - 2026-09-03
+
+- Relax the gateway CSP from `base-uri 'none'` to `base-uri 'self'`: the DSH core `frontend-static` injects a same-origin `<base href="/">` into the served index (SPA deep-link asset anchoring), so the old policy made every page load raise a `securitypolicyviolation`. The page error guard queued each violation and retried delivery every 5 s; on direct-gateway connections (no nginx relay) every attempt 403'd forever, flooding the mobile app's http-error log and losing client-error telemetry. A same-origin base adds no XSS surface.
+- Add an unauthenticated-by-token `POST /log-ingest` passthrough route on the gateway (`X-Log-Token` allowlist identical to the public nginx relay: deployment token and page token). Direct-gateway pages now forward page error-guard reports to the same local logstash HTTP channel the nginx 18447 tunnel uses, so queued client errors drain instead of retrying 403 every 5 s.
+- (unreleased items carried below)
+
 ## 0.3.10 - 2026-09-02
 
 - Support the DSH 0.1.2-alpha.4 web frontend on mobile: its settings module no longer injects the connection client, so the gateway now appends the connection client to the settings dependency graph instead of failing the mobile index rewrite (which previously surfaced as an `upstream_unavailable` 502 right after pairing).
 - When an upstream index rewrite still cannot be completed, relay the raw upstream page instead of answering 502, so a paired mobile session always lands on something usable and the failure stays visible in gateway logs.
 
 ## Unreleased
+
 
 - Inject `AbortSignal.any` and `Promise.withResolvers` boot polyfills into gateway documents, so old Android System WebView releases (e.g. Chrome 114 on Android 12) can start the DSH connection instead of failing before the client bundle runs.
 

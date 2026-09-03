@@ -96,6 +96,18 @@ export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
 /** 日志查询豁免会话的存活时长：仅覆盖单次反代请求，取有限值避免
  *  setTimeout 溢出（Node 32 位毫秒上限 ≈24.8 天，溢出被截断为 1ms）。 */
 const LOG_QUERY_SESSION_TTL_MS = 60 * 60 * 1000
+/** 页面错误守卫上报令牌（POST /log-ingest）：与公网 nginx 反代同一白名单
+ *  （部署令牌 + 页面令牌，页面令牌注入为 __DSH_INGEST_TOKEN__）。
+ *  轮换需同步 nginx dsh-mobile.conf 与 dsh-mobile-flutter。 */
+const LOG_INGEST_TOKENS = new Set([
+  '84153b5de2ef20c9b17b0504bafae573cb6dcd0d9cfca6bf',
+  'dshm-page-ingest-7f3a91c4e6b2d805',
+])
+/** 本地上报体上限（守卫单条文本 JSON，1 MiB 远超实际）。 */
+const LOG_INGEST_MAX_BODY_BYTES = 1024 * 1024
+/** 本地 logstash HTTP 通道（http input，任意路径 200）：公网 nginx 的 18447
+ *  隧道同指向该端口；直连网关（无 nginx 层）由此转发守卫上报，403 重试停止。 */
+const LOG_INGEST_TARGET = 'http://127.0.0.1:30080/'
 const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
@@ -1134,6 +1146,41 @@ export class MobileAccessGateway {
     sendJson(response, 200, { loggedOut: true }, this.tlsEnabled)
   }
 
+  /** 页面错误守卫上报：POST /log-ingest（text/plain JSON，X-Log-Token 白名单）。
+   *  公网页面经 nginx 反代到 logstash；直连网关页面此前无此路由 → 守卫每次
+   *  5s 无限 403 重试（App http-error warn 刷屏 + 前端错误永不落库）。这里
+   *  转发到与 nginx 18447 隧道相同的本地 logstash HTTP 通道。 */
+  private async handleLogIngest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const token = request.headers['x-log-token']
+    if (typeof token !== 'string' || !LOG_INGEST_TOKENS.has(token)) {
+      throw new HttpError(403, 'forbidden')
+    }
+    const declared = request.headers['content-length']
+    if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > LOG_INGEST_MAX_BODY_BYTES)) {
+      throw new HttpError(413, 'payload_too_large')
+    }
+    const chunks: Buffer[] = []
+    let total = 0
+    for await (const chunk of request) {
+      const part = chunk as Buffer
+      total += part.length
+      if (total > LOG_INGEST_MAX_BODY_BYTES) throw new HttpError(413, 'payload_too_large')
+      chunks.push(part)
+    }
+    let upstream: Response
+    try {
+      upstream = await fetch(LOG_INGEST_TARGET, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: Buffer.concat(chunks),
+      })
+    } catch {
+      throw new HttpError(502, 'ingest_unreachable')
+    }
+    if (!upstream.ok) throw new HttpError(502, `ingest_${upstream.status}`)
+    sendJson(response, 200, { ok: true }, this.tlsEnabled)
+  }
+
   private async handleExternalRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const target = parseRequestTarget(request.url)
     const policy = this.requirePolicy()
@@ -1270,6 +1317,12 @@ export class MobileAccessGateway {
         expiresAt: Date.now() + LOG_QUERY_SESSION_TTL_MS,
       }
       await this.proxyHttp(request, response, synthetic)
+      return
+    }
+    // 页面错误守卫上报（POST /log-ingest）：与 nginx 公网反代同语义的免授权
+    // 直通路由（令牌即授权），直连网关页面由此落库 client-error。
+    if (request.method === 'POST' && target.decodedPathname === '/log-ingest') {
+      await this.handleLogIngest(request, response)
       return
     }
     let authorization: SessionAuthorization
