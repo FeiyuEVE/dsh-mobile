@@ -525,6 +525,7 @@ describe('HTTP gateway', () => {
     expect(batch.status).toBe(200)
     expect(batch.headers['content-type']).toBe('text/javascript; charset=utf-8')
     expect(batch.headers.etag).toMatch(/^[a-f\d]{64}$/u)
+    expect(batch.headers['cache-control']).toBe('private, max-age=31536000, immutable')
     expect(batch.body).toContain('/plugins/renderer.js?rev=renderer')
     expect(batch.body).toContain('__dedicatedMobileLayout = true')
     expect(batch.body).toContain('/plugins/feature.js?rev=feature')
@@ -551,6 +552,7 @@ describe('HTTP gateway', () => {
     })
     expect(compressedCached.status).toBe(304)
     expect(compressedCached.headers.vary).toBe('Accept-Encoding')
+    expect(compressedCached.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 
     const cached = await request(instance.address().port, path, {
       headers: { ...headers, 'if-none-match': String(batch.headers.etag) },
@@ -562,6 +564,57 @@ describe('HTTP gateway', () => {
     expect(inner.observations.map(observation => observation.url)).toContain('/plugins/feature.js?rev=feature')
     expect(inner.observations.map(observation => observation.url)).not.toContain('/plugins/layout.js?rev=layout')
     expect(inner.observations.map(observation => observation.url)).not.toContain('/plugins/application.js?rev=stock')
+  })
+
+  it('registers the opt-in static cache Service Worker from the mobile index', async () => {
+    const inner = await upstream('batched')
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-sw-on-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const mobileLayoutFile = join(directory, 'mobile-layout.js')
+    await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
+    const instance = await gateway(inner.port, { mobileLayoutFile, staticCacheWorker: true })
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    expect(mobile.body).toContain('navigator.serviceWorker.register')
+    expect(mobile.body).toContain('/mobile-access/sw.js')
+
+    const worker = await request(instance.address().port, '/mobile-access/sw.js', { headers })
+    expect(worker.status).toBe(200)
+    expect(worker.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(worker.headers['cache-control']).toBe('no-store')
+    expect(worker.headers['service-worker-allowed']).toBe('/')
+    expect(worker.body).toContain('dshm-static-v1')
+    expect(worker.body).toContain('/mobile-access/mobile-boot/')
+    expect(inner.observations.map(observation => observation.url)).toEqual(['/'])
+  })
+
+  it('keeps the static cache worker disabled by default', async () => {
+    const inner = await upstream('batched')
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-sw-off-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const mobileLayoutFile = join(directory, 'mobile-layout.js')
+    await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
+    const instance = await gateway(inner.port, { mobileLayoutFile })
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    expect(mobile.body).not.toContain('navigator.serviceWorker')
+
+    const worker = await request(instance.address().port, '/mobile-access/sw.js', { headers })
+    expect(worker.status).toBe(404)
   })
 
   it('keeps the DSH 0.1.2 browser-auth cookie inside the authenticated mobile gateway', async () => {

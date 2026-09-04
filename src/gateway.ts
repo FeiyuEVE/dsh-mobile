@@ -30,6 +30,7 @@ import {
   type SessionAuthorization,
 } from './access.js'
 import type { ResolvedGatewayConfig } from './config.js'
+import { SERVICE_WORKER_PATH, SERVICE_WORKER_SOURCE, injectServiceWorkerRegistration } from './sw-cache.js'
 import {
   AUTH_PREFIX,
   assertExternalTrust,
@@ -1254,6 +1255,21 @@ export class MobileAccessGateway {
       await this.handlePair(request, response)
       return
     }
+    if (this.config.staticCacheWorker && request.method === 'GET' && target.search === ''
+      && target.decodedPathname === SERVICE_WORKER_PATH) {
+      // 移动页 Service Worker 本体:静态脚本不含凭据,与 pair/login 同属免会话
+      // 引导资源;浏览器按规范每次导航做字节差量更新检查(no-store 禁止 HTTP
+      // 缓存复用)。scope 提升到源根,否则默认只控制 /mobile-access/ 下的页面。
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': Buffer.byteLength(SERVICE_WORKER_SOURCE),
+        'Cache-Control': 'no-store',
+        'Service-Worker-Allowed': '/',
+      })
+      response.end(SERVICE_WORKER_SOURCE)
+      return
+    }
     if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/renew`) {
       await this.handleRenew(request, response)
       return
@@ -1723,6 +1739,9 @@ export class MobileAccessGateway {
         console.warn(`[dsh-mobile] mobile index rewrite failed (${(error as Error)?.message ?? String(error)}); serving raw upstream page`)
         body = Buffer.concat(chunks)
       }
+      if (this.config.staticCacheWorker) {
+        body = Buffer.from(injectServiceWorkerRegistration(body.toString('utf8')))
+      }
       const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
       delete headers['content-length']
       delete headers['content-encoding']
@@ -1782,14 +1801,16 @@ export class MobileAccessGateway {
       const headers: OutgoingHttpHeaders = {
         'Content-Type': 'text/javascript; charset=utf-8',
         'Content-Length': body.byteLength,
-        'Cache-Control': 'private, no-cache',
+        // URL 内容寻址(key=sha256(版本+条目图)),换版本/换条目即换文件名,
+        // 可安全长缓存(ETag 仍保留给条件请求与调试)。
+        'Cache-Control': 'private, max-age=31536000, immutable',
         ETag: etag,
       }
       if (compressed) headers['Content-Encoding'] = 'gzip'
       addVaryAcceptEncoding(headers)
       if (headerValue(request.headers, 'if-none-match') === etag) {
         setSecurityHeaders(response, this.tlsEnabled)
-        response.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache', Vary: String(headers.vary) })
+        response.writeHead(304, { ETag: etag, 'Cache-Control': 'private, max-age=31536000, immutable', Vary: String(headers.vary) })
         response.end()
         return
       }

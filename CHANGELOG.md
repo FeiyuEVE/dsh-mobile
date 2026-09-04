@@ -2,6 +2,12 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.14 - 2026-09-04
+
+- Add an opt-in Service Worker static cache for the mobile page (`staticCacheWorker` in the `mobile-access` plugin config; off by default). Some WebView engines (observed: Huawei ArkWeb on Android 12) do not persist the gateway's large gzip/chunked responses in the HTTP disk cache, so every page entry re-downloaded the full plugin combo, Vite assets and the mobile boot batch (measured: the same content-addressed URLs fetched with full 200s on every one of 21 entries in a day, including 3-4 duplicate in-flight fetches of the same URL in a single load). When enabled, the rewritten mobile index registers a gateway-served worker (`/mobile-access/sw.js`, scope `/`) that answers revisioned `/plugins/*`, `/assets/*` and `/mobile-access/mobile-boot/*` GETs from Cache Storage — independent of the engine HTTP cache — with single-flight coalescing for duplicate requests, and prunes entries older than one week after each successful navigation. Cache entries are keyed by content-addressed URLs, so a hit is never stale.
+- The gateway now serves the mobile boot batch (content-addressed 64-hex URL derived from the DSH mobile version and the entry graph) as `private, max-age=31536000, immutable` instead of `private, no-cache`: a different version or graph is a different URL, so long-lived browser caching is safe and removes a per-entry revalidation/redownload of the ~370 KB layout bundle. The ETag is retained for conditional requests.
+- (unreleased items carried below)
+
 ## 0.3.13 - 2026-09-03
 
 - Follow-up on 0.3.12: the dedicated mobile layout could still leave the native backdrop up after React had closed the drawer. Two hardening changes make the stuck layer structurally impossible:

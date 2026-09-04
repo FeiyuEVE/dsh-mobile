@@ -42,6 +42,13 @@ export interface PluginConfig {
   customScriptFile?: string
   /** Internal dedicated mobile layout browser bundle. */
   mobileLayoutFile?: string
+  /**
+   * Opt-in Service Worker static caching for the mobile page. When enabled the
+   * rewritten mobile index registers a gateway-scoped worker that serves
+   * revisioned plugin/assets/mobile-boot responses from Cache Storage, so page
+   * entry no longer depends on the WebView engine's HTTP disk cache.
+   */
+  staticCacheWorker?: boolean
   /** Stable public discovery identifier; it is not an authentication secret. */
   instanceId?: string
   /** Managed CA certificate offered to the Android installer after fingerprint binding. */
@@ -82,6 +89,8 @@ export interface ResolvedGatewayConfig {
   readonly customCssFile: string
   readonly customScriptFile: string
   readonly mobileLayoutFile: string
+  /** Whether the mobile page registers the Service Worker static cache. */
+  readonly staticCacheWorker: boolean
   readonly instanceId: string
   readonly pairingCaFile?: string
   readonly tls: TlsConfig
@@ -118,6 +127,7 @@ export const Config: z<PluginConfig> = z.object({
   customCssFile: z.string().hidden(),
   customScriptFile: z.string().hidden(),
   mobileLayoutFile: z.string().hidden(),
+  staticCacheWorker: z.boolean(),
   instanceId: z.string().hidden(),
   pairingCaFile: z.string().hidden(),
   initiallyEnabled: z.boolean().hidden().required(),
@@ -293,6 +303,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     mobileLayoutFile: value.mobileLayoutFile === undefined
       ? fileURLToPath(new URL('./mobile-layout.js', import.meta.url))
       : absoluteFile(value.mobileLayoutFile, 'mobileLayoutFile'),
+    staticCacheWorker: value.staticCacheWorker === true,
     instanceId: value.instanceId === undefined
       ? createHash('sha256').update(absoluteFile(value.stateFile, 'stateFile')).digest('hex')
       : /^[a-f\d]{64}$/u.test(value.instanceId)
