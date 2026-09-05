@@ -282,4 +282,56 @@ describe('network trust policy', () => {
     expect(policy.acceptsOrigin(origin)).toBe(true)
     expect(policy.acceptsOrigin(`${origin}:${String(port)}`)).toBe(true)
   })
+
+  it('rejects IP literal hosts unless allowIpLiteralHosts is enabled', () => {
+    const policy = new RequestTrustPolicy(
+      [parseAuthority('139.199.186.70:18443')],
+      18443,
+      [parseCidr('127.0.0.0/8')],
+      true,
+    )
+    // 默认关闭：v6/v4 字面量 Host 一律拒绝
+    expect(policy.acceptsHost('[2409:8a4c:d11:3de1::1]:18443')).toBe(false)
+    expect(policy.acceptsHost('2409:8a4c:d11:3de1::1:18443')).toBe(false)
+    expect(policy.acceptsHost('203.0.113.7:18443')).toBe(false)
+    expect(policy.acceptsOrigin('https://[2409:8a4c:d11:3de1::1]:18443')).toBe(false)
+  })
+
+  it('accepts IP literal Host/Origin on the listener port when enabled', () => {
+    const enabled = new RequestTrustPolicy(
+      [parseAuthority('139.199.186.70:18443')],
+      18443,
+      [parseCidr('127.0.0.0/8')],
+      true,
+      true,
+    )
+    // IPv6 字面量（URL hostname 无括号）
+    expect(enabled.acceptsHost('[2409:8a4c:d11:3de1:6e0b:84ff:fe81:d393]:18443')).toBe(true)
+    expect(enabled.acceptsOrigin('https://[2409:8a4c:d11:3de1:6e0b:84ff:fe81:d393]:18443')).toBe(true)
+    // v4 字面量同样放行
+    expect(enabled.acceptsHost('203.0.113.7:18443')).toBe(true)
+    expect(enabled.acceptsOrigin('https://203.0.113.7:18443')).toBe(true)
+    // 端口必须等于监听端口；默认端口(443)不匹配 18443
+    expect(enabled.acceptsHost('[2409:8a4c::1]')).toBe(false)
+    expect(enabled.acceptsHost('[2409:8a4c::1]:443')).toBe(false)
+    expect(enabled.acceptsHost('[2409:8a4c::1]:18444')).toBe(false)
+    // 域名仍走精确表，不受开关影响
+    expect(enabled.acceptsHost('evil.example:18443')).toBe(false)
+    expect(enabled.acceptsOrigin('https://139.199.186.70:18443')).toBe(true)
+    expect(enabled.acceptsOrigin('https://evil.example:18443')).toBe(false)
+  })
+
+  it('parses allowIpLiteralHosts from gateway config (default false)', () => {
+    expect(parseGatewayConfig({
+      stateFile,
+      tls: { mode: 'disabled' },
+      listenPort: 18443,
+      allowIpLiteralHosts: true,
+    }).allowIpLiteralHosts).toBe(true)
+    expect(parseGatewayConfig({
+      stateFile,
+      tls: { mode: 'disabled' },
+      listenPort: 18443,
+    }).allowIpLiteralHosts).toBe(false)
+  })
 })

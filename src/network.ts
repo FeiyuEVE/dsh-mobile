@@ -156,18 +156,47 @@ export class RequestTrustPolicy {
   readonly authorities: ReadonlySet<string>
   readonly origins: ReadonlySet<string>
   private readonly scheme: 'http' | 'https'
+  private readonly listenerPort: number
+  private readonly allowIpLiteralHosts: boolean
 
   constructor(
     specs: readonly AuthoritySpec[],
     listenerPort: number,
     readonly cidrs: readonly ParsedCidr[],
     tls: boolean,
+    /** Opt-in: accept Host/Origin whose hostname is an IP literal on the listener port. */
+    allowIpLiteralHosts = false,
   ) {
     this.scheme = tls ? 'https' : 'http'
+    this.listenerPort = listenerPort
+    this.allowIpLiteralHosts = allowIpLiteralHosts
     this.authorities = new Set(specs.map(spec => resolveAuthority(spec, listenerPort).toLowerCase()))
     this.origins = new Set([...this.authorities].map(
       authority => new URL(`${this.scheme}://${authority}`).origin.toLowerCase(),
     ))
+  }
+
+  private defaultPort(): number {
+    return this.scheme === 'https' ? 443 : 80
+  }
+
+  /**
+   * IP 字面量 Host/Origin 是否命中放行（配置开关 allowIpLiteralHosts 时）：
+   * 只接受绑定到监听端口的字面量。IP 字面量不经 DNS 解析——DNS-rebinding
+   * 攻击依赖攻击者控制的域名，字面量无此攻击面；公网/回环字面量入口仍受
+   * socket CIDR + 会话/配对认证保护，放行不削弱既有防护（例：移动端蜂窝
+   * IPv6 直连网关 https://[公网IPv6]:18443，Host 为动态 SLAAC 字面量，
+   * 无法预配进 publicAuthorities）。
+   */
+  private acceptsLiteralHost(hostname: string, port: string): boolean {
+    if (!this.allowIpLiteralHosts) return false
+    // WHATWG URL 的 hostname 对 IPv6 保留方括号（Node 行为），剥掉再判字面量
+    const bare = hostname.startsWith('[') && hostname.endsWith(']')
+      ? hostname.slice(1, -1)
+      : hostname
+    if (isIP(bare) === 0) return false
+    const p = port === '' ? this.defaultPort() : Number(port)
+    return p === this.listenerPort
   }
 
   /** Validate the exact Host header after WHATWG authority normalization. */
@@ -178,18 +207,19 @@ export class RequestTrustPolicy {
   /** Return the canonical accepted Host authority, otherwise undefined. */
   canonicalHost(header: string | undefined): string | undefined {
     if (header === undefined || /[/?#@\\]/u.test(header)) return undefined
-    let normalized: string
+    let parsed: URL
     try {
-      const parsed = new URL(`${this.scheme}://${header}`)
+      parsed = new URL(`${this.scheme}://${header}`)
       if (parsed.pathname !== '/' || parsed.username !== '' || parsed.password !== '') return undefined
-      normalized = resolveAuthority({
-        hostname: parsed.hostname,
-        port: Number(parsed.port || (this.scheme === 'https' ? '443' : '80')),
-      }, 80).toLowerCase()
     } catch {
       return undefined
     }
-    return this.authorities.has(normalized) ? normalized : undefined
+    const normalized = resolveAuthority({
+      hostname: parsed.hostname,
+      port: Number(parsed.port || this.defaultPort()),
+    }, 80).toLowerCase()
+    if (this.authorities.has(normalized)) return normalized
+    return this.acceptsLiteralHost(parsed.hostname, parsed.port) ? normalized : undefined
   }
 
   /** Validate an exact same-scheme browser Origin. */
@@ -200,16 +230,17 @@ export class RequestTrustPolicy {
   /** Return the canonical accepted Origin, otherwise undefined. */
   canonicalOrigin(header: string | undefined): string | undefined {
     if (header === undefined) return undefined
-    let normalized: string
+    let parsed: URL
     try {
-      const parsed = new URL(header)
+      parsed = new URL(header)
       if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') {
         return undefined
       }
-      normalized = parsed.origin.toLowerCase()
     } catch {
       return undefined
     }
-    return this.origins.has(normalized) ? normalized : undefined
+    const normalized = parsed.origin.toLowerCase()
+    if (this.origins.has(normalized)) return normalized
+    return this.acceptsLiteralHost(parsed.hostname, parsed.port) ? normalized : undefined
   }
 }

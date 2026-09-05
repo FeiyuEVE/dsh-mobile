@@ -33,6 +33,9 @@ export interface PluginConfig {
   upstreamOrigin?: string
   publicAuthorities?: string[]
   allowedCidrs?: string[]
+  /** Opt-in: accept inbound Host/Origin whose hostname is an IP literal on the listener port
+   *  (公网 IPv6 直连：SLAAC 地址动态，无法预配进 publicAuthorities)。 */
+  allowIpLiteralHosts?: boolean
   stateFile: string
   /** Internal persisted on/off preference managed by the DSH plugin card. */
   controlFile: string
@@ -83,6 +86,7 @@ export interface ResolvedGatewayConfig {
   readonly upstreamOrigin: URL
   readonly authorities: readonly AuthoritySpec[]
   readonly allowedCidrs: readonly ParsedCidr[]
+  readonly allowIpLiteralHosts: boolean
   readonly stateFile: string
   /** Local extension root adjacent to the mobile-access state file. */
   readonly extensionsDir: string
@@ -122,6 +126,7 @@ export const Config: z<PluginConfig> = z.object({
   upstreamOrigin: z.string(),
   publicAuthorities: z.array(String).default(undefined as unknown as string[]),
   allowedCidrs: z.array(String).default(undefined as unknown as string[]),
+  allowIpLiteralHosts: z.boolean().default(false),
   stateFile: String,
   controlFile: z.string().hidden().required(),
   customCssFile: z.string().hidden(),
@@ -292,6 +297,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     upstreamOrigin,
     authorities: Object.freeze(authorities),
     allowedCidrs: Object.freeze(allowedCidrs),
+    allowIpLiteralHosts: value.allowIpLiteralHosts ?? false,
     stateFile: absoluteFile(value.stateFile, 'stateFile'),
     extensionsDir: join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'extensions'),
     customCssFile: value.customCssFile === undefined

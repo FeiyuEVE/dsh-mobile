@@ -2,6 +2,11 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.14 - 2026-09-05
+
+- Add an opt-in `allowIpLiteralHosts` switch to the `mobile-access` plugin config (off by default). When enabled, the gateway's external-trust policy (`RequestTrustPolicy`) also accepts requests whose Host header (and, for browser mutations, same-origin requests whose Origin) has an IP-literal hostname — IPv4 or IPv6 — on the bound listener port. Rationale: the public IPv6 direct-connect entry `https://[公网IPv6]:18443/18452` carries a dynamic SLAAC address that cannot be pre-registered in `publicAuthorities`, and without this switch those requests 403 `forbidden` on the exact-Host check. IP literals never go through DNS, so the DNS-rebinding protection the exact-Host check exists for is not weakened; socket CIDR and session/pairing auth still gate every request.
+- (previous 0.3.14 unreleased items below)
+
 ## 0.3.14 - 2026-09-04
 
 - Add an opt-in Service Worker static cache for the mobile page (`staticCacheWorker` in the `mobile-access` plugin config; off by default). Some WebView engines (observed: Huawei ArkWeb on Android 12) do not persist the gateway's large gzip/chunked responses in the HTTP disk cache, so every page entry re-downloaded the full plugin combo, Vite assets and the mobile boot batch (measured: the same content-addressed URLs fetched with full 200s on every one of 21 entries in a day, including 3-4 duplicate in-flight fetches of the same URL in a single load). When enabled, the rewritten mobile index registers a gateway-served worker (`/mobile-access/sw.js`, scope `/`) that answers revisioned `/plugins/*`, `/assets/*` and `/mobile-access/mobile-boot/*` GETs from Cache Storage — independent of the engine HTTP cache — with single-flight coalescing for duplicate requests, and prunes entries older than one week after each successful navigation. Cache entries are keyed by content-addressed URLs, so a hit is never stale.

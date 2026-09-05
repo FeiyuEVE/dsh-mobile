@@ -910,6 +910,7 @@ export class MobileAccessGateway {
         address.port,
         this.config.allowedCidrs,
         this.tlsEnabled,
+        this.config.allowIpLiteralHosts,
       )
       if (this.config.discovery) await this.startDiscovery(address.port)
       await this.pollLegacyCustomChanges()
