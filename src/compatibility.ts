@@ -11,6 +11,7 @@ export const SUPPORTED_DSH_VERSIONS = Object.freeze([
   '0.1.2-alpha.4-local.1',
   '0.1.2-alpha.1-local.1',
   '0.1.5-rc.2-local.1',
+  '0.1.5-rc.2-local.2',
 ] as const)
 
 /**
