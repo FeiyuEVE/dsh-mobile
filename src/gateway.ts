@@ -606,6 +606,12 @@ function isCompressibleContentType(value: string | string[] | undefined): boolea
     || /^(?:application\/(?:javascript|json|xml|x-javascript)|image\/svg\+xml)$/u.test(mediaType)
 }
 
+function isEventStreamContentType(value: string | string[] | undefined): boolean {
+  const contentType = Array.isArray(value) ? value[0] : value
+  if (contentType === undefined) return false
+  return (contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '') === 'text/event-stream'
+}
+
 function shouldCompressResponse(request: IncomingMessage, response: IncomingMessage): boolean {
   const pathname = request.url?.split('?', 1)[0] ?? ''
   const compressibleRequest = (request.method === 'GET'
@@ -617,6 +623,11 @@ function shouldCompressResponse(request: IncomingMessage, response: IncomingMess
     && response.headers['content-range'] === undefined
     && response.headers['content-encoding'] === undefined
     && acceptsGzip(request.headers['accept-encoding'])
+    // SSE 长连接**绝不能压缩**：gzip 转换会缓冲小帧（实测把
+    // `: connected\n\n` + 一帧 data 喂进 createGzip 后客户端 8s 内收不到任何
+    // 字节），`/plugins/events` 的 connected/rebuilt 帧会被整段吞掉，连接随之
+    // 长时间零流量 → 撞上游空闲超时（见 proxyHttp 的 SSE 处理）。
+    && !isEventStreamContentType(response.headers['content-type'])
     && isCompressibleContentType(response.headers['content-type'])
 }
 
@@ -1968,6 +1979,13 @@ export class MobileAccessGateway {
         void bodyDone.catch(reject)
       })
       const proxied = await upstreamResponse
+      // SSE 长连接不受上游空闲超时约束（WebSocket 分支在握手后同样
+      // `setTimeout(0)`）：`/plugins/events` 这类通道在无事件时长期零流量，
+      // 空闲超时会按 upstreamTimeoutMs（线上 300s）destroy 上游请求，客户端只
+      // 看到 ERR_INCOMPLETE_CHUNKED_ENCODING——移动端表现为每 5 分钟一次整页
+      // 「重连」。生命周期仍由会话过期（allocateRequest 的 expiresAt 定时器）
+      // 与客户端断开两处兜底，不会泄漏。
+      if (isEventStreamContentType(proxied.headers['content-type'])) holder.request?.setTimeout(0)
       setSecurityHeaders(response, this.tlsEnabled)
       const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
       const cacheControl = revisionedStaticCacheControl(request)

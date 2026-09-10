@@ -2,6 +2,12 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.15 - 2026-09-09
+
+- Keep the proxied `/plugins/events` SSE channel alive: the gateway applied its idle upstream socket timeout (`upstreamTimeoutMs`) to streamed responses, so a long-lived SSE with no events was destroyed at that deadline — the client saw `ERR_INCOMPLETE_CHUNKED_ENCODING` (production: every 300s) and the mobile app reloaded the whole page. Streaming (`text/event-stream`) responses now clear that timeout after the response headers arrive, matching the WebSocket branch, while session expiry and client disconnect still bound the connection.
+- Stop compressing `text/event-stream` responses: the gzip transform buffers small frames (a handshake frame plus one event produced zero bytes for the client within 8s), which silently swallowed `/plugins/events` frames and left the channel with no traffic at all.
+- Verify compatibility with DeepSeek Harness 0.1.2-alpha.4-local.1 (added to the declared peer ranges).
+
 ## 0.3.14 - 2026-09-05
 
 - Add an opt-in `allowIpLiteralHosts` switch to the `mobile-access` plugin config (off by default). When enabled, the gateway's external-trust policy (`RequestTrustPolicy`) also accepts requests whose Host header (and, for browser mutations, same-origin requests whose Origin) has an IP-literal hostname — IPv4 or IPv6 — on the bound listener port. Rationale: the public IPv6 direct-connect entry `https://[公网IPv6]:18443/18452` carries a dynamic SLAAC address that cannot be pre-registered in `publicAuthorities`, and without this switch those requests 403 `forbidden` on the exact-Host check. IP literals never go through DNS, so the DNS-rebinding protection the exact-Host check exists for is not weakened; socket CIDR and session/pairing auth still gate every request.

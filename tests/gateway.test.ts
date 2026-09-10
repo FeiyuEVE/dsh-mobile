@@ -1,7 +1,7 @@
 import { createHash, X509Certificate } from 'node:crypto'
 import { createSocket } from 'node:dgram'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { createServer, request as requestHttp, type IncomingHttpHeaders, type Server } from 'node:http'
+import { createServer, request as requestHttp, type IncomingHttpHeaders, type IncomingMessage, type Server } from 'node:http'
 import { request as requestHttps } from 'node:https'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -229,6 +229,16 @@ async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentica
       response.end(body)
       return
     }
+    if (incoming.url === '/plugins/events') {
+      // SSE 长连接：只发握手帧，之后长期无数据（与线上 /plugins/events 行为一致）
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      })
+      response.write(': connected\n\n')
+      return
+    }
     if (boot === 'batched' && incoming.url?.startsWith('/plugins/') === true) {
       const body = `globalThis.__loadedMobileFixture ??= []; globalThis.__loadedMobileFixture.push(${JSON.stringify(incoming.url)});\n`
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-length': Buffer.byteLength(body) })
@@ -399,6 +409,54 @@ async function openWebSocket(
 }
 
 describe('HTTP gateway', () => {
+  it('keeps the /plugins/events SSE uncompressed and alive past the upstream idle timeout', async () => {
+    const inner = await upstream()
+    // 上游空闲超时压到 1s：修复前本用例会在 1s 后断流（线上 upstreamTimeoutMs=300s，
+    // 表现为移动端每 5 分钟一次 ERR_INCOMPLETE_CHUNKED_ENCODING → 整页重连）。
+    const instance = await gateway(inner.port, { upstreamTimeoutMs: 1_000 })
+    const paired = await pair(instance)
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const outgoing = requestHttp({
+        host: '127.0.0.1',
+        port: instance.address().port,
+        path: '/plugins/events',
+        method: 'GET',
+        headers: {
+          ...browserHeaders(instance),
+          cookie: `${SESSION_COOKIE}=${paired.session}; ${DEVICE_COOKIE}=${paired.device}`,
+          accept: 'text/event-stream',
+          'accept-encoding': 'gzip',
+        },
+        agent: false,
+      }, resolve)
+      outgoing.once('error', reject)
+      outgoing.end()
+    })
+    cleanups.push(async () => { response.destroy() })
+    expect(response.statusCode).toBe(200)
+    let body = ''
+    let settled = false
+    response.setEncoding('utf8')
+    response.on('data', (chunk) => { body += String(chunk) })
+    response.once('end', () => { settled = true })
+    response.once('aborted', () => { settled = true })
+    response.once('error', () => { settled = true })
+    // 握手帧必须立刻到达：gzip 会把这类小帧缓冲住，客户端长时间收不到任何字节。
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`SSE handshake frame never arrived: ${JSON.stringify(body)}`)), 2_000)
+      response.on('data', () => {
+        if (body.includes(': connected')) { clearTimeout(timer); resolve() }
+      })
+    })
+    // SSE 不能被 gzip 包裹（Content-Encoding 一旦出现即说明压缩路径吞帧）。
+    expect(response.headers['content-encoding']).toBeUndefined()
+    // 静默 1.5s（> upstreamTimeoutMs）后连接必须仍然活着。
+    await new Promise(resolve => setTimeout(resolve, 1_500))
+    expect(settled).toBe(false)
+    expect(body).toContain(': connected')
+    expect(inner.observations.some(observation => observation.url === '/plugins/events')).toBe(true)
+  })
+
   it('serves authenticated computer image browsing without proxying filesystem paths', async () => {
     const inner = await upstream()
     const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-computer-files-'))
