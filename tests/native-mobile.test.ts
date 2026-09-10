@@ -40,15 +40,14 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-context-fields]')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-composer-card] ~ * [class*="_root"]')
     expect(NATIVE_MOBILE_STYLES).toContain('white-space:normal !important; overflow:visible !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('margin-bottom:-6px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-shortcuts')
     expect(NATIVE_MOBILE_STYLES).toContain('grid-template-columns:repeat(2,minmax(0,1fr))')
     expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-action')
     expect(NATIVE_MOBILE_STYLES).toContain('min-height:44px')
     expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-action:focus-visible')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-row] { display:grid !important; grid-template-columns:max-content minmax(0,1fr) !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; width:100% !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 0 !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-row] { gap:2px 8px !important; }')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:1 1 100% !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 auto !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:not(:disabled)')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:disabled')
@@ -165,16 +164,13 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).not.toContain('dsh-native-mobile-sheet')
   })
 
-  it('collapses the composer dock stats strip into a tappable pill on mobile', () => {
-    const source = installNativeMobileSurface.toString()
-    expect(source).toContain('[data-slot=\\"conversation.composer.dock\\"]')
-    expect(source).toContain('bindStatsDock()')
-    expect(source).toContain('dock.dataset.dshMobileStatsBound = "true"')
-    expect(source).toContain('statsDock.dataset.dshMobileStats === "expanded"')
-    expect(source).toContain('statsDock.removeEventListener("click", onStatsDockClick)')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"]:not([data-dsh-mobile-stats="expanded"]) > div > span:not(:first-child)')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"][data-dsh-mobile-stats="expanded"] > div')
-    expect(NATIVE_MOBILE_STYLES).toContain('border-radius:999px')
+  it('collapses peer composer-dock floaters and leaves the component stats row alone', () => {
+    // The stats row's own narrow-viewport presentation belongs to the harness
+    // StatsPills component; the native surface must not patch it back, so the
+    // dock rules reach every floater except a component root.
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"] > * { margin-inline:auto !important; }')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"] > div:not([class*="_root"])')
+    expect(NATIVE_MOBILE_STYLES).toContain('border-radius:999px !important')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('data-dsh-mobile-stats')
   })
 })

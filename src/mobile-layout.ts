@@ -11,7 +11,11 @@ interface SessionState {
 }
 
 interface MobileRootProps {
-  readonly renderSlot: (name: string, owner: Record<string, unknown>) => ReactNode
+  readonly renderSlot: (
+    name: string,
+    owner: Record<string, unknown>,
+    options?: { readonly entryKey?: string },
+  ) => ReactNode
   readonly useSessions: <T>(selector: (state: SessionState) => T) => T
 }
 
@@ -34,7 +38,9 @@ interface ThemeSnapshot {
 
 interface LayoutSnapshot {
   readonly sidebarOpen: boolean
-  readonly detailsOpen: boolean
+  readonly rightbarOpen: boolean
+  /** Selected main key; null is the reserved `conversation` seat. */
+  readonly panelId: string | null
 }
 
 /** Resolve the supported language used by the dedicated mobile layout. */
@@ -48,7 +54,8 @@ export function resolveMobileLayoutLanguage(
 }
 
 class MobileLayoutController {
-  private snapshot: LayoutSnapshot = Object.freeze({ sidebarOpen: false, detailsOpen: false })
+  private snapshot: LayoutSnapshot = Object.freeze({ sidebarOpen: false, rightbarOpen: false, panelId: null })
+  private navigation = new AbortController()
   private readonly listeners = new Set<() => void>()
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -58,25 +65,57 @@ class MobileLayoutController {
 
   readonly getSnapshot = (): LayoutSnapshot => this.snapshot
 
+  /**
+   * Select a main key. The mobile frame draws every key in the same column, so
+   * the selection only decides which seat the main slot renders; an unregistered
+   * key falls back to the Conversation because the slot renders nothing for it.
+   */
+  selectPanel(panelId: string | null): void {
+    this.navigation.abort()
+    this.update({ panelId })
+  }
+
+  /**
+   * Start a navigation that the next one supersedes, mirroring the desktop
+   * controller so Workspace navigation keeps its cancellation semantics.
+   * @returns a signal aborted by the next navigation or by layout disposal.
+   */
+  beginNavigation(): AbortSignal {
+    this.navigation.abort()
+    this.navigation = new AbortController()
+    return this.navigation.signal
+  }
+
   toggleSidebar(): void {
     this.update({ sidebarOpen: !this.snapshot.sidebarOpen })
   }
 
-  openDetails(): void {
-    this.update({ detailsOpen: true })
+  /**
+   * The right surface reports its own presentation; the mobile drawer follows
+   * that report instead of owning the state itself. Track and fullscreen are
+   * desktop column geometry with no mobile equivalent, so they are ignored.
+   */
+  openRightbar(): void {
+    this.update({ rightbarOpen: true })
   }
 
-  closeDetails(): void {
-    this.update({ detailsOpen: false })
+  closeRightbar(): void {
+    this.update({ rightbarOpen: false })
   }
 
   closeSidebar(): void {
     this.update({ sidebarOpen: false })
   }
 
+  dispose(): void {
+    this.navigation.abort()
+  }
+
   private update(next: Partial<LayoutSnapshot>): void {
     const snapshot = Object.freeze({ ...this.snapshot, ...next })
-    if (snapshot.sidebarOpen === this.snapshot.sidebarOpen && snapshot.detailsOpen === this.snapshot.detailsOpen) return
+    if (snapshot.sidebarOpen === this.snapshot.sidebarOpen
+      && snapshot.rightbarOpen === this.snapshot.rightbarOpen
+      && snapshot.panelId === this.snapshot.panelId) return
     this.snapshot = snapshot
     for (const listener of this.listeners) listener()
   }
@@ -178,7 +217,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
   }, [])
 
   useEffect(() => {
-    if (!hasSession) props.controller.closeDetails()
+    if (!hasSession) props.controller.closeRightbar()
   }, [hasSession, props.controller])
 
   useEffect(() => {
@@ -239,13 +278,14 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
   }
 
   return createElement('div', { className: 'dshm-shell', lang: language },
-    createElement('main', { className: 'dshm-main', 'data-dsh-mobile-session': activeSessionId }, props.renderSlot('conversation', {})),
+    createElement('main', { className: 'dshm-main', 'data-dsh-mobile-session': activeSessionId },
+      props.renderSlot('main', {}, { entryKey: state.panelId ?? 'conversation' })),
     createElement('button', {
       'aria-label': messages.closePanels,
       className: 'dshm-scrim',
-      'data-open': state.sidebarOpen || state.detailsOpen,
-      onClick: () => { state.detailsOpen ? props.controller.closeDetails() : props.controller.closeSidebar() },
-      tabIndex: state.sidebarOpen || state.detailsOpen ? 0 : -1,
+      'data-open': state.sidebarOpen || state.rightbarOpen,
+      onClick: () => { state.rightbarOpen ? props.controller.closeRightbar() : props.controller.closeSidebar() },
+      tabIndex: state.sidebarOpen || state.rightbarOpen ? 0 : -1,
       type: 'button',
     }),
     createElement('aside', {
@@ -258,11 +298,17 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       width: state.sidebarOpen ? 340 : 56,
     })),
     createElement('aside', {
-      'aria-hidden': !state.detailsOpen,
+      'aria-hidden': !state.rightbarOpen,
       className: 'dshm-details',
-      'data-open': state.detailsOpen,
-      ...(state.detailsOpen ? {} : { inert: '' }),
-    }, hasSession ? props.renderSlot('details', {}) : undefined),
+      'data-open': state.rightbarOpen,
+      ...(state.rightbarOpen ? {} : { inert: '' }),
+    }, hasSession
+      ? props.renderSlot('rightbar', {
+        width: state.rightbarOpen ? 340 : 0,
+        viewportWidth: window.innerWidth,
+        canShow: state.rightbarOpen,
+      })
+      : undefined),
     createElement('div', { className: 'dshm-overlay', 'data-shell-overlay': true }, props.renderSlot('shell.overlay', {})),
   )
 }
@@ -280,13 +326,14 @@ export function apply(ctx: MobileClientContext): void {
       name: 'root',
       children: {
         sidebar: { kind: 'single', scope: 'root' },
-        conversation: { kind: 'single', scope: 'session-maybe' },
-        details: { kind: 'single', scope: 'session' },
+        main: { kind: 'keyed', scope: 'root' },
+        rightbar: { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
       },
     }, props => createElement(MobileAppFrame, { ...props, controller }))
     return () => {
       disposeRoot()
+      controller.dispose()
       void disposeService()
       style.remove()
     }
