@@ -125,7 +125,7 @@ const CUSTOM_STYLE_FALLBACK = '/* Add mobile overrides in the DSH home mobile-ac
 const CUSTOM_SCRIPT_FALLBACK = 'window.dshMobile?.register(() => undefined)\n'
 const EXTENSION_CHANGE_POLL_MS = 2_000
 const EXTENSION_EVENT_HEARTBEAT_MS = 15_000
-const MOBILE_CLIENT_MODULE = 'dsh-mobile'
+const MOBILE_CLIENT_MODULE = '@feiyueve/dsh-mobile'
 const CONNECTION_MODULE = '@deepseek-ai/dsh-client-connection'
 const RUNTIME_MODULE = '@deepseek-ai/dsh-client-runtime'
 const RENDERER_MODULE = '@deepseek-ai/dsh-client-ui-renderer'

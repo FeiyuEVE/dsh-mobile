@@ -1,4 +1,16 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'tsdown'
+
+/**
+ * The client module id the Host boot graph looks up. It must equal the package
+ * name: `client-modules` matches each `/plugins/??<id>/client.js` row against
+ * what the bundle registers through `__ModuleLoader__.load`, and a mismatch
+ * fails the whole client graph ("loaded without registering ..."). Deriving it
+ * from the manifest keeps a rename from silently desynchronizing the two.
+ */
+const packageName: string = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+).name
 
 export default defineConfig([{
   entry: ['src/index.ts'],
@@ -37,7 +49,7 @@ export default defineConfig([{
   deps: { neverBundle: ['react'] },
   outputOptions: {
     entryFileNames: 'client.js',
-    banner: 'window.__ModuleLoader__.load({ id: "dsh-mobile", factory: (require) => {',
+    banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(packageName)}, factory: (require) => {`,
     intro: 'var module = { exports: {} }; var exports = module.exports;',
     footer: 'return module.exports; } });',
   },
