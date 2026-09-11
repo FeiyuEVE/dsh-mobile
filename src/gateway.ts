@@ -207,6 +207,37 @@ interface StoredMobileBootBatch {
 
 const gzipBuffer = promisify(gzip)
 
+/**
+ * WebView compatibility polyfills, injected into the mobile page's `<head>` as an inline classic
+ * script so it runs before every module bundle of the boot manifest (module scripts are deferred,
+ * inline classic scripts are not).
+ *
+ * Why this lives here: DSH 0.1.5 added the client plugin
+ * `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`, whose bundled `yaml` library probes
+ * `typeof Iterator.prototype.join` with no guard at all. An engine without the `Iterator` global
+ * (Android WebView / Chrome < 122, no iterator helpers) throws `ReferenceError: Iterator is not
+ * defined` while the client module graph is being imported — and because DSH imports its client
+ * plugins one by one, that single failure takes down the WHOLE client plugin graph, leaving only
+ * the error-guard fallback screen ("Failed to load plugins"). Desktop Chromium has the global, so
+ * desktop testing never reproduces it; only a real phone WebView does.
+ *
+ * `Iterator` is deliberately an empty shell with no `join`: leaving `join` undefined keeps the
+ * upstream probe true, so the bundled yaml still installs its own polyfill — behaviour identical
+ * to a modern engine, and upstream semantics stay untouched. The remaining three cover pdfjs
+ * paths inside that same plugin; `Float16Array` is feature-detected by pdfjs itself and needs
+ * nothing. Every block is `typeof`-guarded and swallowed, so a modern engine is unaffected.
+ */
+const WEBVIEW_COMPAT_BOOTSTRAP = `(()=>{try{if(typeof Iterator==='undefined')window.Iterator=function Iterator(){}}catch(e){}try{if(typeof Promise.try!=='function')Promise.try=function(fn){const args=Array.prototype.slice.call(arguments,1);return new Promise(resolve=>{resolve(fn.apply(undefined,args))})}}catch(e){}try{if(typeof Math.sumPrecise!=='function')Math.sumPrecise=function(values){const list=values&&typeof values.length!=='number'?[...values]:values;let sum=0,c=0;for(let i=0,n=list?list.length:0;i<n;i++){const v=Number(list[i]);const t=sum+v;c+=Math.abs(sum)>=Math.abs(v)?(sum-t)+v:(v-t)+sum;sum=t}return sum+c}}catch(e){}try{if(typeof Uint8Array.fromBase64!=='function')Uint8Array.fromBase64=function(base64){const bin=window.atob(String(base64));const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}}catch(e){}})();`
+
+/** Insert the WebView compatibility script immediately after `<head>`; a no-op when it is already there. */
+function injectWebViewCompat(html: string): string {
+  if (html.includes(WEBVIEW_COMPAT_BOOTSTRAP)) return html
+  const head = /<head\b[^>]*>/iu.exec(html)
+  if (head?.index === undefined) return html
+  const position = head.index + head[0].length
+  return `${html.slice(0, position)}<script>${WEBVIEW_COMPAT_BOOTSTRAP}</script>${html.slice(position)}`
+}
+
 function ensureMobileViewport(html: string): string {
   const viewport = /<meta\b(?=[^>]*\bname\s*=\s*["']viewport["'])[^>]*>/iu
   const match = viewport.exec(html)
@@ -321,7 +352,7 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
   }
   const replacement = `${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return Object.freeze({
-    html: ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`),
+    html: injectWebViewCompat(ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)),
     ...(mobileBatch === undefined ? {} : { batch: mobileBatch }),
   })
 }

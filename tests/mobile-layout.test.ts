@@ -35,6 +35,34 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('viewport-fit=cover')
   })
 
+  it('injects the WebView compatibility polyfills ahead of the boot manifest', () => {
+    const output = rewriteMobileIndex(index([
+      { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime' },
+      {
+        id: '@deepseek-ai/dsh-client-ui-layout',
+        url: '/layout.js',
+        rev: 'layout',
+        inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'],
+      },
+    ]))
+
+    // `Iterator` must exist before any client module bundle is evaluated: the bundled yaml inside
+    // @deepseek-ai/dsh-client-ui-sidebar-documentpreview probes Iterator.prototype.join unguarded,
+    // and one failed import takes the whole client plugin graph down on older WebViews.
+    expect(output).toContain("typeof Iterator==='undefined'")
+    expect(output).toContain('window.Iterator=function Iterator(){}')
+    expect(output).toContain("typeof Promise.try!=='function'")
+    expect(output).toContain("typeof Math.sumPrecise!=='function'")
+    expect(output).toContain("typeof Uint8Array.fromBase64!=='function'")
+
+    const compat = output.indexOf('window.Iterator=function Iterator(){}')
+    expect(compat).toBeGreaterThan(-1)
+    expect(compat).toBeLessThan(output.indexOf('__DSH_BOOT__'))
+    expect(compat).toBeLessThan(output.indexOf('</head>'))
+    // The empty shell must not pre-empt the bundled yaml's own join polyfill.
+    expect(output).not.toContain('Iterator.prototype.join=')
+  })
+
   it('orders the authenticated mobile client before settings without retaining the sidebar cycle', () => {
     const output = rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-connection', url: '/connection.js', rev: 'connection', inject: [] },

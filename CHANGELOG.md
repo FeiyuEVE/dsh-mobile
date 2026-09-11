@@ -2,6 +2,12 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.20 - 2026-09-11
+
+- Inject a WebView compatibility script into the served mobile page's `<head>`, ahead of the boot manifest, so it runs before every client module bundle. Reason: DeepSeek Harness 0.1.5 added the client plugin `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`, whose bundled `yaml` library probes `typeof Iterator.prototype.join` with no guard. An engine without the `Iterator` global (Android WebView / Chrome < 122) throws `ReferenceError: Iterator is not defined` while the client module graph is being imported, and because DSH imports client plugins one by one, that single failure takes the **whole** client plugin graph down — the phone showed only the error-guard fallback screen (`Failed to load plugins`). Desktop Chromium has the global, so desktop testing never reproduced it.
+- `Iterator` is installed as an empty shell with **no** `join`, deliberately: leaving `join` undefined keeps the upstream probe true, so the bundled `yaml` still installs its own polyfill — identical to a modern engine, and upstream semantics stay untouched. The script additionally shims `Promise.try` (Chrome 128+), `Math.sumPrecise` (137+) and `Uint8Array.fromBase64` (140+), which the bundled pdfjs in that same plugin reaches on its lazy PDF-preview paths; `Float16Array` is feature-detected by pdfjs itself. Every block is `typeof`-guarded and wrapped in `catch`, so a modern engine is unaffected and the script is idempotent.
+- Compatibility verified against DeepSeek Harness 0.1.5-rc.2-local.3 (already in the declared peer ranges).
+
 ## 0.3.15 - 2026-09-09
 
 - Keep the proxied `/plugins/events` SSE channel alive: the gateway applied its idle upstream socket timeout (`upstreamTimeoutMs`) to streamed responses, so a long-lived SSE with no events was destroyed at that deadline — the client saw `ERR_INCOMPLETE_CHUNKED_ENCODING` (production: every 300s) and the mobile app reloaded the whole page. Streaming (`text/event-stream`) responses now clear that timeout after the response headers arrive, matching the WebSocket branch, while session expiry and client disconnect still bound the connection.
