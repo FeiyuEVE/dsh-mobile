@@ -56,7 +56,7 @@ DSH Mobile 是一个 DeepSeek Harness 插件，让手机浏览器或 Android App
 已经安装 `dsh` 命令：
 
 ```powershell
-dsh plugin --profile web add dsh-mobile@latest
+dsh plugin --profile web add @feiyueve/dsh-mobile@latest
 dsh plugin --profile web exec dsh-mobile setup
 dsh --profile web
 ```
@@ -65,7 +65,7 @@ dsh --profile web
 
 ```powershell
 corepack enable; pnpm install
-pnpm dsh plugin --profile web add dsh-mobile@latest
+pnpm dsh plugin --profile web add @feiyueve/dsh-mobile@latest
 pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
@@ -209,14 +209,14 @@ flowchart LR
 ## 卸载
 
 ```powershell
-dsh plugin --profile web remove dsh-mobile
+dsh plugin --profile web remove @feiyueve/dsh-mobile
 ```
 
 同时清除插件数据：
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile purge --yes
-dsh plugin --profile web remove dsh-mobile
+dsh plugin --profile web remove @feiyueve/dsh-mobile
 ```
 
 源码模式把上述 `dsh` 换成 `pnpm dsh`。

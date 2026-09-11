@@ -49,7 +49,7 @@ A paired device is fully trusted and can operate the DSH on the computer. Use th
 With an installed `dsh` command:
 
 ```powershell
-dsh plugin --profile web add dsh-mobile@latest
+dsh plugin --profile web add @feiyueve/dsh-mobile@latest
 dsh plugin --profile web exec dsh-mobile setup
 dsh --profile web
 ```
@@ -58,7 +58,7 @@ From a DeepSeek Harness source checkout:
 
 ```powershell
 corepack enable; pnpm install
-pnpm dsh plugin --profile web add dsh-mobile@latest
+pnpm dsh plugin --profile web add @feiyueve/dsh-mobile@latest
 pnpm dsh plugin --profile web exec dsh-mobile setup
 pnpm dsh --profile web
 ```
@@ -199,14 +199,14 @@ At startup, the plugin verifies the DSH Host version and the frontend dependenci
 ## Uninstall
 
 ```powershell
-dsh plugin --profile web remove dsh-mobile
+dsh plugin --profile web remove @feiyueve/dsh-mobile
 ```
 
 To remove local plugin data first:
 
 ```powershell
 dsh plugin --profile web exec dsh-mobile purge --yes
-dsh plugin --profile web remove dsh-mobile
+dsh plugin --profile web remove @feiyueve/dsh-mobile
 ```
 
 Source users replace `dsh` with `pnpm dsh`.
