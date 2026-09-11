@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { rewriteMobileIndex } from '../src/gateway.js'
-import { MOBILE_LAYOUT_MESSAGES, MOBILE_LAYOUT_STYLES, resolveMobileLayoutLanguage } from '../src/mobile-layout.js'
+import { MOBILE_LAYOUT_MESSAGES, MOBILE_LAYOUT_STYLES, apply, resolveMobileLayoutLanguage } from '../src/mobile-layout.js'
 
 function index(entries: unknown[]): string {
   return `<!doctype html><html><head><script>window.__DSH_BOOT__ = ${JSON.stringify({ rev: 'stock', entries })};</script></head><body></body></html>`
@@ -80,7 +80,8 @@ describe('dedicated mobile layout boot', () => {
         inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-runtime'],
       },
       {
-        id: 'dsh-mobile',
+        // The client module id IS the npm package name (client-modules rejects any other id).
+        id: '@feiyueve/dsh-mobile',
         url: '/dsh-mobile.js',
         rev: 'mobile',
         inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-sidebar'],
@@ -88,9 +89,9 @@ describe('dedicated mobile layout boot', () => {
       },
     ]))
 
-    expect(output).toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime"]')
-    expect(output).toContain('"id":"@deepseek-ai/dsh-client-ui-settings","url":"/settings.js","rev":"settings","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","dsh-mobile"]')
-    expect(output).not.toContain('"id":"dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-sidebar"]')
+    expect(output).toContain('"id":"@feiyueve/dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime"]')
+    expect(output).toContain('"id":"@deepseek-ai/dsh-client-ui-settings","url":"/settings.js","rev":"settings","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-runtime","@feiyueve/dsh-mobile"]')
+    expect(output).not.toContain('"id":"@feiyueve/dsh-mobile","url":"/dsh-mobile.js","rev":"mobile","inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-sidebar"]')
   })
 
   it('rebuilds the DSH 0.1.2 application batch around the dedicated layout', () => {
@@ -115,7 +116,7 @@ describe('dedicated mobile layout boot', () => {
         inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-api-remotes'],
       },
       {
-        id: 'dsh-mobile',
+        id: '@feiyueve/dsh-mobile',
         url: '/plugins/dsh-mobile.js?rev=mobile',
         rev: 'mobile',
         inject: ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-sidebar'],
@@ -131,7 +132,7 @@ describe('dedicated mobile layout boot', () => {
 
     expect(output).toContain('"url":"/mobile-access/mobile-layout.js"')
     expect(output).toContain('"inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-renderer"]')
-    expect(output).toContain('"inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-api-remotes","dsh-mobile"]')
+    expect(output).toContain('"inject":["@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-api-remotes","@feiyueve/dsh-mobile"]')
     expect(output).toMatch(/"url":"\/mobile-access\/mobile-boot\/[a-f\d]{64}\.js"/u)
     expect(output).not.toContain('/plugins/application.js?rev=stock')
     expect(output).toContain(`"entries":${JSON.stringify(entries.map(entry => entry.id))}`)
@@ -192,5 +193,123 @@ describe('dedicated mobile layout boot', () => {
     expect(() => rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-ui-layout', url: '/layout.js', rev: 'layout', inject: ['new-runtime'] },
     ]))).toThrow('unsupported dependencies')
+  })
+})
+
+/**
+ * The dedicated mobile layout REPLACES the stock `@deepseek-ai/dsh-client-ui-layout` module, so it
+ * inherits that module's root contribution duties. `usePanelInfo` is one of them: the slot runtime
+ * materializes each root hook source into the standard prop `use<Name>` for every descendant entry
+ * (ui-slots `standardHookPropName`), and ui-sidebar's PanelRow/SessionTree call it. Without the
+ * contribution they receive `undefined` and the whole `sidebar.workspaces` entry throws
+ * `TypeError: usePanelInfo is not a function` — the drawer renders every control except the
+ * session list, and the page itself reports no HTTP or console error outside the slot boundary.
+ */
+describe('dedicated mobile layout root contributions', () => {
+  interface PanelInfoSource {
+    getSnapshot: () => { readonly activePanelId: string | null }
+    subscribe: (listener: () => void) => () => void
+  }
+
+  interface FakeClientContext {
+    readonly ctx: Parameters<typeof apply>[0]
+    readonly contributions: { readonly hooks: Record<string, unknown> }[]
+    readonly layout: { selectPanel: (panelId: string | null) => void }
+    readonly teardown: () => void
+    readonly disposals: string[]
+  }
+
+  /** Minimal DOM stand-in: `apply()` only writes a <style> plus the theme presenter's tokens. */
+  function installFakeDom(): () => void {
+    const styleProperties = (): Record<string, unknown> => ({ setProperty: () => {}, removeProperty: () => {} })
+    const chrome = {
+      createElement: (tag: string) => (tag === 'meta'
+        ? { name: '', content: '', isConnected: false, remove: () => {} }
+        : { dataset: {} as Record<string, string>, textContent: '', remove: () => {} }),
+      head: { append: () => {} },
+      body: { style: styleProperties(), toggleAttribute: () => {}, removeAttribute: () => {} },
+      documentElement: { style: styleProperties() },
+    }
+    const host = globalThis as unknown as Record<string, unknown>
+    const previous = { document: host['document'], getComputedStyle: host['getComputedStyle'] }
+    host['document'] = chrome
+    host['getComputedStyle'] = () => ({ backgroundColor: 'rgb(255,255,255)' })
+    return () => {
+      host['document'] = previous.document
+      host['getComputedStyle'] = previous.getComputedStyle
+    }
+  }
+
+  function createFakeClientContext(): FakeClientContext {
+    const contributions: { readonly hooks: Record<string, unknown> }[] = []
+    const disposals: string[] = []
+    const cleanups: (() => void)[] = []
+    let controller: { selectPanel: (panelId: string | null) => void } | undefined
+    const ctx = {
+      // Cordis runs the effect body and keeps its returned cleanup; the test only needs the latter.
+      effect: (body: () => void | (() => void)) => {
+        const cleanup = body()
+        if (typeof cleanup === 'function') cleanups.push(cleanup)
+      },
+      on: () => () => {},
+      reflect: {
+        provide: (name: string, value: unknown) => {
+          if (name === 'layout') controller = value as { selectPanel: (panelId: string | null) => void }
+          return () => { disposals.push(`service:${name}`) }
+        },
+      },
+      slots: {
+        provideRoot: (contribution: { readonly hooks: Record<string, unknown> }) => {
+          contributions.push(contribution)
+          return () => { disposals.push('panelInfo') }
+        },
+        register: () => () => { disposals.push('root') },
+      },
+      theme: { getTheme: () => ({ active: { colorScheme: 'light', tokens: {} } }) },
+    }
+    return {
+      ctx: ctx as unknown as Parameters<typeof apply>[0],
+      contributions,
+      get layout() {
+        if (controller === undefined) throw new Error('apply() did not provide the layout service')
+        return controller
+      },
+      teardown: () => { for (const cleanup of cleanups) cleanup() },
+      disposals,
+    }
+  }
+
+  it('provides the root panelInfo hook owned by the stock layout module it replaces', () => {
+    const restoreDom = installFakeDom()
+    try {
+      const fake = createFakeClientContext()
+      apply(fake.ctx)
+
+      expect(fake.contributions).toHaveLength(1)
+      const panelInfo = fake.contributions[0]?.hooks['panelInfo'] as PanelInfoSource | undefined
+      expect(panelInfo).toBeDefined()
+      expect(typeof panelInfo?.getSnapshot).toBe('function')
+      expect(typeof panelInfo?.subscribe).toBe('function')
+      const source = panelInfo as PanelInfoSource
+
+      // useSyncExternalStore compares snapshots by Object.is: a fresh object per call would spin
+      // the renderer forever, so an unchanged panel must keep its snapshot identity.
+      const initial = source.getSnapshot()
+      expect(initial).toEqual({ activePanelId: null })
+      expect(source.getSnapshot()).toBe(initial)
+
+      const notifications: string[] = []
+      source.subscribe(() => { notifications.push('changed') })
+      fake.layout.selectPanel('settings')
+      const selected = source.getSnapshot()
+      expect(selected).toEqual({ activePanelId: 'settings' })
+      expect(source.getSnapshot()).toBe(selected)
+      expect(notifications).toEqual(['changed'])
+
+      fake.teardown()
+      expect(fake.disposals).toContain('panelInfo')
+    } finally {
+      restoreDom()
+    }
   })
 })

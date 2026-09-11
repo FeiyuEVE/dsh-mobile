@@ -25,6 +25,11 @@ interface MobileClientContext {
   readonly reflect: { provide: (name: string, value: unknown) => () => void | Promise<void> }
   readonly slots: {
     register: (options: Record<string, unknown>, component: (props: MobileRootProps) => ReactNode) => () => void
+    /**
+     * Contribute domain-owned root hook sources. `panelInfo` becomes the standard
+     * prop `usePanelInfo` on every descendant slot entry.
+     */
+    provideRoot: (contribution: { readonly hooks: Record<string, unknown> }) => () => void
   }
   readonly theme: { getTheme: () => ThemeSnapshot }
 }
@@ -322,6 +327,26 @@ export function apply(ctx: MobileClientContext): void {
     style.textContent = MOBILE_LAYOUT_STYLES
     document.head.append(style)
     const disposeService = ctx.reflect.provide('layout', controller)
+    // 官方 layout 模块在注册 root 的同一个 effect 里用 provideRoot 提供 panelInfo；
+    // 槽运行时据此给**所有后代**注入标准 prop `usePanelInfo`（renderer.ts 的
+    // `use${Capitalize<hook>}` 命名约定）。本模块替换了整个 layout 模块，所以必须
+    // 自己提供：新版 core 的 sidebar SidebarRoot/SessionTree 会调用它，缺了就抛
+    // TypeError: usePanelInfo is not a function，整个 `sidebar.workspaces` 槽崩掉
+    // ——移动面的表现正是抽屉里只剩「新会话/余额/设置」，会话列表全空。
+    // getSnapshot 必须返回**稳定引用**（useSyncExternalStore 按 Object.is 比较），
+    // 逐次新建对象会触发无限重渲染，所以按 panelId 缓存。
+    let panelInfoSnapshot: { readonly activePanelId: string | null } = Object.freeze({ activePanelId: null })
+    const panelInfo = {
+      getSnapshot: (): { readonly activePanelId: string | null } => {
+        const panelId = controller.getSnapshot().panelId
+        if (panelInfoSnapshot.activePanelId !== panelId) {
+          panelInfoSnapshot = Object.freeze({ activePanelId: panelId })
+        }
+        return panelInfoSnapshot
+      },
+      subscribe: (listener: () => void): (() => void) => controller.subscribe(listener),
+    }
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo } })
     const disposeRoot = ctx.slots.register({
       name: 'root',
       children: {
@@ -333,6 +358,7 @@ export function apply(ctx: MobileClientContext): void {
     }, props => createElement(MobileAppFrame, { ...props, controller }))
     return () => {
       disposeRoot()
+      disposePanelInfo()
       controller.dispose()
       void disposeService()
       style.remove()
