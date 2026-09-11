@@ -35,6 +35,30 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('viewport-fit=cover')
   })
 
+  it('injects session recovery ahead of the boot manifest', () => {
+    const output = rewriteMobileIndex(index([
+      { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime' },
+      {
+        id: '@deepseek-ai/dsh-client-ui-layout',
+        url: '/layout.js',
+        rev: 'layout',
+        inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'],
+      },
+    ]))
+
+    // The page's Session Cookie lives in the gateway's memory, so restarting the host kills it while
+    // the open page keeps its DOM. Every request then answers 401 and the live channel retries
+    // forever; the injected bootstrap is what turns that state back into a working session.
+    expect(output).toContain('/mobile-access/auth/renew')
+    expect(output).toContain("credentials:'same-origin'")
+    expect(output).toContain('window.WebSocket')
+    expect(output).toContain("addEventListener('error'")
+    expect(output).toContain('"/mobile-access/login"')
+    expect(output).toContain("'?return='+encodeURIComponent(location.pathname+location.search)")
+    expect(output).toContain('response.status!==401')
+    expect(output.indexOf('/mobile-access/auth/renew')).toBeLessThan(output.indexOf('window.__DSH_BOOT__'))
+  })
+
   it('injects the WebView compatibility polyfills ahead of the boot manifest', () => {
     const output = rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime' },

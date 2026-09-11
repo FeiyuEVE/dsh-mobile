@@ -146,7 +146,26 @@ const MOBILE_LAYOUT_DEPENDENCY_PROFILES = Object.freeze([
     ]),
   }),
 ])
-const MOBILE_CSRF_FETCH_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const method=String(init?.method??source?.method??'GET').toUpperCase();if(method==='GET'||method==='HEAD')return nativeFetch(input,init);const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;if(raw===undefined||new URL(raw,location.href).origin!==location.origin)return nativeFetch(input,init);const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}return nativeFetch(input,{...init,headers})};})();`
+/**
+ * Page bootstrap injected ahead of the boot manifest: CSRF header + session recovery.
+ *
+ * Two responsibilities, both inherited from the same fact — the mobile page authenticates with a
+ * **short-lived Session Cookie** bound to a **persistent device Cookie** (see `handleRenew`):
+ *
+ * 1. CSRF: every same-origin mutation carries `x-dsh-mobile-csrf` read from the readable cookie.
+ * 2. Session recovery. The Session lives in the gateway's memory, so restarting the host (which
+ *    also restarts this gateway) invalidates every open page's Session while the device Cookie
+ *    stays valid. Without recovery the page keeps its DOM but every request answers
+ *    401 `authentication_failed`, and the live channel (`/api/remote.mux`) retries forever — the
+ *    user sees a permanent "自动重连中…" chip over a page that only *looks* alive because its
+ *    projectons were rendered before the restart. (`/mobile-access/auth/renew` is dispatched
+ *    before session auth on purpose, so it is reachable exactly when the Session is dead.)
+ *
+ * Recovery is failure-driven, never periodic: `renew()` is coalesced and rate-limited, and only
+ * a 401 (HTTP or WebSocket handshake) triggers it. A periodic renew would mint a new Session and
+ * rewrite the device store on every tick, for no benefit while the Session is alive.
+ */
+const MOBILE_SESSION_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);const renewPath=${JSON.stringify(`${AUTH_PREFIX}/auth/renew`)};const loginPath=${JSON.stringify(`${AUTH_PREFIX}/login`)};let renewTask=null;let lastRenewAt=0;const renew=()=>{if(renewTask!==null)return renewTask;if(Date.now()-lastRenewAt<3000)return Promise.resolve(false);lastRenewAt=Date.now();renewTask=nativeFetch(renewPath,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:'{}'}).then(response=>{if(response.status===401){location.replace(loginPath+'?return='+encodeURIComponent(location.pathname+location.search));return false}return response.ok},()=>false).then(ok=>{renewTask=null;return ok});return renewTask};const sameOrigin=raw=>{try{const url=typeof raw==='string'?raw:raw instanceof URL?raw.href:raw?.url;return url!==undefined&&new URL(url,location.href).origin===location.origin}catch{return false}};window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;const local=raw!==undefined&&sameOrigin(raw);const method=String(init?.method??source?.method??'GET').toUpperCase();let nextInit=init;if(local&&method!=='GET'&&method!=='HEAD'){const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}nextInit={...init,headers}}return nativeFetch(input,nextInit).then(response=>{if(response.status!==401||!local)return response;return renew().then(ok=>ok?nativeFetch(input,nextInit):response)},error=>{throw error})};const NativeWebSocket=window.WebSocket;if(typeof NativeWebSocket==='function'){const Patched=function(...args){const socket=new NativeWebSocket(...args);socket.addEventListener('error',()=>{void renew()});return socket};Patched.prototype=NativeWebSocket.prototype;for(const key of ['CONNECTING','OPEN','CLOSING','CLOSED'])Patched[key]=NativeWebSocket[key];window.WebSocket=Patched}})();`
 const PAIR_PAGE = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -350,7 +369,7 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
     mobileBatch = Object.freeze({ ...revision, entries: Object.freeze(planEntries) })
     parsed.rev = createHash('sha256').update(JSON.stringify({ entries, batches })).digest('hex').slice(0, 16)
   }
-  const replacement = `${MOBILE_CSRF_FETCH_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
+  const replacement = `${MOBILE_SESSION_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return Object.freeze({
     html: injectWebViewCompat(ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)),
     ...(mobileBatch === undefined ? {} : { batch: mobileBatch }),

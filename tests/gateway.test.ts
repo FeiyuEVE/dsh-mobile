@@ -30,8 +30,11 @@ interface UpstreamObservation {
 }
 
 const cleanups: Array<() => Promise<void>> = []
-const TEST_GATEWAY_PORT = 38080
-const TEST_FAILED_START_PORT = 38081
+// Above `net.ipv4.ip_local_port_range` (32768-60999) on purpose: the host runs long-lived tunnels
+// (`dsh-v6-front` forks a socat per connection), and any such connection parked on one of these
+// ports would make every bind in this file fail with EADDRINUSE.
+const TEST_GATEWAY_PORT = 61980
+const TEST_FAILED_START_PORT = 61981
 const SESSION_HISTORY_PATH = '/api/session.history'
 const COMPRESSIBLE_SCRIPT = 'globalThis.__compressionProbe = true;\n'.repeat(256)
 const UPSTREAM_LAUNCH_TOKEN = 'test-launch-token'
