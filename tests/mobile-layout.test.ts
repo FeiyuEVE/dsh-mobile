@@ -213,6 +213,16 @@ describe('dedicated mobile layout boot', () => {
     expect(() => rewriteMobileIndex('<html></html>')).toThrow('no boot manifest')
   })
 
+  it('drops the stock combined-bundle preload the rewritten page can never use', () => {
+    // 上游为「即将执行的那一个合并 bundle」发 preload；本网关把它替换成自己的
+    // content-addressed batch，那个 preload 永远不会被消费——实测仍会白下 4.5 MB。
+    const source = `<!doctype html><html><head><link rel="preload" as="script" href="/plugins/??@deepseek-ai/dsh-client-connection/client.js,@deepseek-ai/dsh-client-ui-renderer/client.js&rev=abc"><link rel="preload" as="style" href="/assets/app.css"><script>window.__DSH_BOOT__ = ${JSON.stringify({ rev: 'stock', entries: [{ id: '@deepseek-ai/dsh-client-ui-layout', url: '/layout.js', rev: 'layout', inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'] }] })};</script></head><body></body></html>`
+    const output = rewriteMobileIndex(source)
+    expect(output).not.toContain('/plugins/??')
+    // 其它 preload 不动
+    expect(output).toContain('<link rel="preload" as="style" href="/assets/app.css">')
+  })
+
   it('fails closed when the stock layout dependency contract changes', () => {
     expect(() => rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-ui-layout', url: '/layout.js', rev: 'layout', inject: ['new-runtime'] },

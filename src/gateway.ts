@@ -371,9 +371,29 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
   }
   const replacement = `${MOBILE_SESSION_BOOTSTRAP}window.__DSH_MOBILE_FRONTEND__="dedicated";${assignment[0]}${JSON.stringify(parsed)};`
   return Object.freeze({
-    html: injectWebViewCompat(ensureMobileViewport(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`)),
+    html: injectWebViewCompat(ensureMobileViewport(stripStockBundlePreload(`${html.slice(0, start)}${replacement}${html.slice(scriptEnd)}`))),
     ...(mobileBatch === undefined ? {} : { batch: mobileBatch }),
   })
+}
+
+/**
+ * Drop the stock page's `<link rel="preload" as="script" href="/plugins/??…">`.
+ *
+ * Why: upstream preloads the ONE combined client bundle it is about to execute, but this gateway
+ * replaces that bundle with its own content-addressed batch (`/mobile-access/mobile-boot/<hash>.js`)
+ * plus this rewrite's boot graph — so the preload is never consumed. Measured on a real phone-sized
+ * page (Playwright, iPhone 13): the preload still downloaded **4.5 MB** (initiator `link`) next to the
+ * 4.07 MB batch, i.e. the whole client payload was fetched twice per entry, and Chromium reported
+ * "preloaded but not used within a few seconds from the window's load event". Re-pointing it at the
+ * batch would not help either: an `as=script` preload without `crossorigin` fetches in no-CORS mode
+ * while the module script fetch is CORS-mode, so the preload can never be reused for a module.
+ *
+ * Only the stock combined bundle is stripped: any other preload the page carries is left alone.
+ */
+function stripStockBundlePreload(html: string): string {
+  return html.replace(/<link\b[^>]*>/giu, (tag) => (
+    /\brel\s*=\s*["']?preload\b/iu.test(tag) && /\bhref\s*=\s*["'][^"']*\/plugins\/\?\?/iu.test(tag) ? '' : tag
+  ))
 }
 
 /** Replace only DSH's layout client module while retaining its complete plugin graph. */
