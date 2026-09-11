@@ -138,19 +138,22 @@ export const NATIVE_MOBILE_STYLES = `
   .dsh-mobile-media-action svg { flex:none; width:16px; height:16px; color:var(--dsw-alias-label-tertiary,currentColor); }
   .dsh-mobile-media-action span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   [data-dsh-mobile-center] [class*="_composer"] { padding-left:8px !important; padding-right:8px !important; padding-bottom:max(8px,env(safe-area-inset-bottom)) !important; }
-  /* The desktop composer wraps whole toolbar groups only when the row runs
-     out of room, which a dynamic model label would flip between one and two
-     lines on a phone. Keep a stable two-row layout instead: the left tools on
-     row one, the model/usage/send group as a full right-aligned row two, so
-     the model name gets the remaining width instead of collapsing to a few
-     characters (the old grid kept the tools unshrinkable and squeezed the
-     model trigger to "De…"). */
-  [data-dsh-mobile-composer-row] { display:flex !important; flex-wrap:wrap !important; align-items:center !important; gap:4px 8px !important; }
+  /* One toolbar row on a phone. Core already ships everything this needs: its
+     row wraps whole groups only when they genuinely do not fit, and its own
+     container query (@container width<=360px on the row, ui-model-selection)
+     replaces the model label with the Models glyph so the trailing group stays
+     narrow. The earlier "stable two-row" override fought that: it forced
+     .trailing to flex:1 1 100% and stretched the trigger to width:100%, so the
+     icon-only model chip grew to ~230px of empty pill — the row wrapped anyway
+     AND the empty chip consumed the width the dock cards above the composer
+     need. Keep the groups at their natural size and let core's own wrap be the
+     fallback for tablets, where the label is visible and capped by 45cqw. */
+  [data-dsh-mobile-composer-row] { display:flex !important; flex-wrap:wrap !important; align-items:center !important; gap:2px 8px !important; }
   [data-dsh-mobile-composer-tools] { display:flex !important; flex-wrap:nowrap !important; width:auto !important; min-width:0 !important; max-width:100% !important; gap:6px !important; }
-  [data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:1 1 100% !important; width:auto !important; min-width:0 !important; max-width:100% !important; gap:6px !important; margin-left:0 !important; justify-content:flex-end !important; }
-  [data-dsh-mobile-composer-model] { flex:1 1 auto !important; width:auto !important; min-width:0 !important; max-width:none !important; }
-  [data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:100% !important; max-width:100% !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
-  [data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important; min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
+  [data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:0 0 auto !important; width:auto !important; min-width:0 !important; max-width:100% !important; gap:6px !important; margin-left:auto !important; justify-content:flex-end !important; }
+  [data-dsh-mobile-composer-model] { flex:0 1 auto !important; width:auto !important; min-width:0 !important; }
+  [data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:auto !important; min-width:0 !important; padding-left:6px !important; padding-right:4px !important; }
+  [data-dsh-mobile-composer-model-label] { min-width:0 !important; overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) { box-sizing:border-box !important; width:100% !important; padding:0 0 4px !important; }
   [data-dsh-mobile-center] [class*="_root"]:has(> [class*="_card"] textarea) > [class=""]:last-child { display:none !important; }
   /* Give the chat room back: the composer keeps its stable two toolbar rows

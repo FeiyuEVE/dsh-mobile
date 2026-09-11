@@ -2,6 +2,11 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.22 - 2026-09-11
+
+- Composer toolbar back to one row on a phone. The native surface used to force a permanent two-row layout (`[data-dsh-mobile-composer-trailing] { flex:1 1 100% }` plus a stretched model trigger), which was written when the model trigger kept a visible name at any width. DeepSeek Harness 0.1.5 added its own container-query icon-only floor for that trigger (`@container (width<=360px)` in ui-model-selection hides the label and shows the Models glyph), so the forced row was now self-defeating: the trigger rendered icon-only **and** stretched to ~230px of empty pill, which both wrapped the row and consumed the width the dock cards above the composer need. The toolbar now keeps every group at its natural size, packs the trailing group to the right on the same line, and lets core's own wrap be the fallback for tablets where the label is visible.
+- Compatibility verified against DeepSeek Harness 0.1.5-rc.2-local.3 (already in the declared peer ranges).
+
 ## 0.3.21 - 2026-09-11
 
 - Fix the empty session list in the mobile drawer. The dedicated mobile layout **replaces** the stock `@deepseek-ai/dsh-client-ui-layout` module, and that stock module also publishes a root hook source — `ctx.slots.provideRoot({ hooks: { panelInfo } })`. The slot runtime materializes each root hook source into the standard prop `use<Name>` on every descendant entry, so ui-sidebar's panel rows and session tree read it as `usePanelInfo`. The mobile layout registered its `root` slot without that contribution, so descendants received `undefined`; DeepSeek Harness 0.1.5's ui-sidebar started calling it, and the whole `sidebar.workspaces` entry threw `TypeError: usePanelInfo is not a function`. Symptom: the phone's drawer kept "new session / balance / settings" but rendered no sessions, while the page reported no HTTP error and no error outside the crashed slot. The layout now provides the hook itself, feeding the mobile controller's selected panel through `activePanelId` with a snapshot that keeps its identity until the selection changes (`useSyncExternalStore` compares with `Object.is`; a fresh object per read spins the renderer).

@@ -46,9 +46,14 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('min-height:44px')
     expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-action:focus-visible')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-row] { gap:2px 8px !important; }')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:1 1 100% !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:1 1 auto !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model-label] { flex:1 1 auto !important; max-width:none !important')
+    // 一行工具栏：trailing 不再被撑满整行，模型 chip 也不再被拉成空药丸——旧的两行版把
+    // icon-only 的模型触发器拉到 ~230px，既照样换行，又白占了 dock 卡片需要的宽度。
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:0 0 auto !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('margin-left:auto !important; justify-content:flex-end !important; }')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model] { flex:0 1 auto !important')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('[data-dsh-mobile-composer-trailing] { display:flex !important; flex-wrap:nowrap !important; flex:1 1 100%')
+    expect(NATIVE_MOBILE_STYLES).not.toContain('[data-dsh-mobile-composer-model-trigger] { box-sizing:border-box !important; width:100% !important')
+    expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-composer-model-label] { min-width:0 !important; overflow:hidden !important')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:not(:disabled)')
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-history-loader] button:disabled')
     expect(NATIVE_MOBILE_STYLES).toContain('[class*="_rowHead"]:has(> [class*="_rowIdentity"]) { flex-wrap:nowrap !important')
