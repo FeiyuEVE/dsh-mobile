@@ -13,10 +13,10 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | 项 | 事实 |
 |---|---|
 | git | 唯一 remote `origin=git@github.com:FeiyuEVE/dsh-mobile.git`（无 upstream；`origin/HEAD→origin/main`）；当前分支 `local/sse-keepalive`（非 main）；无 tag |
-| 包 | `@feiyueve/dsh-mobile@0.3.28`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
-| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）`latest=0.3.28`；本 fork 只发私源 |
-| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级（当前 web / staging 均 pin `0.3.27`，以 `~/.dsh/profiles/*/package.json` 为准） |
-| Android | `apps/mobile/android`：`io.github.sayach.dshmobile`，minSdk 29 / targetSdk·compileSdk 36；`versionName` 必须等于 package.version，`versionCode` 只需正整数递增（当前 0.3.28 / 63） |
+| 包 | `@feiyueve/dsh-mobile@0.3.31`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
+| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）`latest=0.3.31`；本 fork 只发私源 |
+| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级（当前 web / staging 均 pin `0.3.31`，以 `~/.dsh/profiles/*/package.json` 为准） |
+| Android | `apps/mobile/android`：`io.github.sayach.dshmobile`，minSdk 29 / targetSdk·compileSdk 36；`versionName` 必须等于 package.version，`versionCode` 只需正整数递增（当前 0.3.31 / 66） |
 
 ## 目录结构
 

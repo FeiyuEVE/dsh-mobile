@@ -21,6 +21,8 @@ interface MobileRootProps {
 
 interface MobileClientContext {
   readonly effect: (effect: () => void | (() => void), label?: string) => void
+  /** Optional service read: the frame peeks at faces it does not own. */
+  readonly get: (name: string) => unknown
   readonly on: (event: string, listener: (value: ThemeSnapshot) => void) => () => void
   readonly reflect: { provide: (name: string, value: unknown) => () => void | Promise<void> }
   readonly slots: {
@@ -60,6 +62,18 @@ export function resolveMobileLayoutLanguage(
 
 /** One mobile overlay the system back gesture may close. */
 export type MobileBackTarget = 'sidebar' | 'rightbar'
+
+/**
+ * The module that owns the right surface's expanded state (`ui-sidebar-right`),
+ * read structurally because the frame needs only the two commands it answers:
+ * whether the panel is showing, and collapsing it. It cannot be injected — that
+ * module reads `layout`, so a hard dependency from the layout back to it would
+ * be a cycle — so it is read lazily and treated as optional.
+ */
+interface SidebarRightFace {
+  readonly isExpanded?: () => boolean
+  readonly toggleExpanded?: () => void
+}
 
 /**
  * The overlay a system back gesture closes, in presentation order: the
@@ -220,7 +234,11 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 @media(prefers-reduced-motion:reduce){.dshm-drawer,.dshm-details,.dshm-scrim,.dshm-drawer>*{transition:none!important}}
 `
 
-function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLayoutController }): ReactNode {
+function MobileAppFrame(props: MobileRootProps & {
+  readonly controller: MobileLayoutController
+  /** Close the right surface through its owner; see `apply`'s `dismissRightbar`. */
+  readonly dismissRightbar: () => void
+}): ReactNode {
   const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot)
   const suppressKeyboardUntil = useRef(0)
   const [documentLanguage, setDocumentLanguage] = useState(document.documentElement.lang)
@@ -307,7 +325,7 @@ function MobileAppFrame(props: MobileRootProps & { readonly controller: MobileLa
       'aria-label': messages.closePanels,
       className: 'dshm-scrim',
       'data-open': state.sidebarOpen || state.rightbarOpen,
-      onClick: () => { state.rightbarOpen ? props.controller.closeRightbar() : props.controller.closeSidebar() },
+      onClick: () => { state.rightbarOpen ? props.dismissRightbar() : props.controller.closeSidebar() },
       tabIndex: state.sidebarOpen || state.rightbarOpen ? 0 : -1,
       type: 'button',
     }),
@@ -365,6 +383,31 @@ export function apply(ctx: MobileClientContext): void {
       subscribe: (listener: () => void): (() => void) => controller.subscribe(listener),
     }
     const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo } })
+    /**
+     * Close the right surface the way its own collapse control does.
+     *
+     * The frame only *mirrors* the surface's report (`rightbarOpen`) — it does not
+     * own the expanded state — so flipping the mirror alone leaves the module that
+     * does own it still expanded, and that module never reports again because
+     * nothing about its state changed. On a phone the panel is fullscreen, and the
+     * owner reconciles the frame's `canShow` only while it is *not* (a fullscreen
+     * panel is not collapsible by the frame, by design), so the two states stay
+     * split: the drawer is hidden while the owner still believes it is showing.
+     * The visible damage is that the panel's way back — the header control that
+     * renders **only while collapsed** — is gone, so the drawer cannot be opened
+     * again; the mirror-only close is kept as the fallback for a surface whose
+     * owner is not loaded, where there is no state to disagree with.
+     */
+    const dismissRightbar = (): void => {
+      controller.closeRightbar()
+      const surface = ctx.get('sidebarRight') as SidebarRightFace | undefined
+      if (surface === undefined) return
+      try {
+        if (surface.isExpanded?.() === true) surface.toggleExpanded?.()
+      } catch {
+        // The host app's back gesture must never see this surface throw.
+      }
+    }
     const disposeRoot = ctx.slots.register({
       name: 'root',
       children: {
@@ -373,7 +416,7 @@ export function apply(ctx: MobileClientContext): void {
         rightbar: { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
       },
-    }, props => createElement(MobileAppFrame, { ...props, controller }))
+    }, props => createElement(MobileAppFrame, { ...props, controller, dismissRightbar }))
     // The host app owns the Android back gesture; this is the surface's half of
     // it. Answered from the live snapshot so the app can fall back to its own
     // history or to exiting when nothing was consumed.
@@ -381,7 +424,7 @@ export function apply(ctx: MobileClientContext): void {
       const target = resolveMobileBackTarget(controller.getSnapshot())
       if (target === null) return false
       if (target === 'sidebar') controller.closeSidebar()
-      else controller.closeRightbar()
+      else dismissRightbar()
       return true
     }
     window.__dshMobileHandleBack = handleBack

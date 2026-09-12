@@ -237,10 +237,18 @@ describe('dedicated mobile layout root contributions', () => {
     subscribe: (listener: () => void) => () => void
   }
 
+  interface FakeRightSurface {
+    expanded: boolean
+    toggles: number
+    readonly isExpanded: () => boolean
+    readonly toggleExpanded: () => void
+  }
+
   interface FakeClientContext {
     readonly ctx: Parameters<typeof apply>[0]
     readonly contributions: { readonly hooks: Record<string, unknown> }[]
     readonly layout: { selectPanel: (panelId: string | null) => void }
+    readonly rightSurface: FakeRightSurface
     readonly teardown: () => void
     readonly disposals: string[]
   }
@@ -273,17 +281,27 @@ describe('dedicated mobile layout root contributions', () => {
     }
   }
 
-  function createFakeClientContext(): FakeClientContext {
+  /** `ownsRightSurface: false` models a page where that module never loaded. */
+  function createFakeClientContext(options?: { readonly ownsRightSurface?: boolean }): FakeClientContext {
     const contributions: { readonly hooks: Record<string, unknown> }[] = []
     const disposals: string[] = []
     const cleanups: (() => void)[] = []
     let controller: { selectPanel: (panelId: string | null) => void } | undefined
+    // The right surface is the module that owns the panel's expanded state; the
+    // frame only mirrors its report, so the fake stands in for the real owner.
+    const surface: FakeRightSurface = {
+      expanded: false,
+      toggles: 0,
+      isExpanded: () => surface.expanded,
+      toggleExpanded: () => { surface.toggles += 1; surface.expanded = !surface.expanded },
+    }
     const ctx = {
       // Cordis runs the effect body and keeps its returned cleanup; the test only needs the latter.
       effect: (body: () => void | (() => void)) => {
         const cleanup = body()
         if (typeof cleanup === 'function') cleanups.push(cleanup)
       },
+      get: (name: string) => (options?.ownsRightSurface === false || name !== 'sidebarRight' ? undefined : surface),
       on: () => () => {},
       reflect: {
         provide: (name: string, value: unknown) => {
@@ -307,6 +325,7 @@ describe('dedicated mobile layout root contributions', () => {
         if (controller === undefined) throw new Error('apply() did not provide the layout service')
         return controller
       },
+      rightSurface: surface,
       teardown: () => { for (const cleanup of cleanups) cleanup() },
       disposals,
     }
@@ -362,24 +381,105 @@ describe('dedicated mobile layout root contributions', () => {
         toggleSidebar: () => void
         getSnapshot: () => { readonly sidebarOpen: boolean; readonly rightbarOpen: boolean }
       }
+      // The mirror only reads open because the owner reported it open.
       layout.openRightbar()
+      fake.rightSurface.expanded = true
       expect(handle?.()).toBe(true)
       expect(layout.getSnapshot().rightbarOpen).toBe(false)
+      // Closing the mirror is not closing the panel: the owner keeps the expanded
+      // state, and while it stays expanded its way back (the header control that
+      // renders only while collapsed) never returns, so the gesture would leave
+      // the drawer shut for good.
+      expect(fake.rightSurface.toggles).toBe(1)
+      expect(fake.rightSurface.expanded).toBe(false)
 
       // The drawer sits above the right surface, so it closes first once both are open.
       layout.toggleSidebar()
       layout.openRightbar()
+      fake.rightSurface.expanded = true
       expect(handle?.()).toBe(true)
       expect(layout.getSnapshot().sidebarOpen).toBe(false)
       expect(layout.getSnapshot().rightbarOpen).toBe(true)
+      // The drawer took the gesture, so the panel behind it is left alone.
+      expect(fake.rightSurface.toggles).toBe(1)
       expect(handle?.()).toBe(true)
       expect(layout.getSnapshot().rightbarOpen).toBe(false)
+      expect(fake.rightSurface.toggles).toBe(2)
       expect(handle?.()).toBe(false)
 
       fake.teardown()
       // The surface only owns the handler while it lives; a stale one would
       // keep answering after the layout is gone.
       expect(dom.window['__dshMobileHandleBack']).toBeUndefined()
+    } finally {
+      dom.restore()
+    }
+  })
+
+  it('does not toggle a right surface the owner already reports collapsed', () => {
+    const dom = installFakeDom()
+    try {
+      const fake = createFakeClientContext()
+      apply(fake.ctx)
+      const handle = dom.window['__dshMobileHandleBack'] as () => boolean
+      const layout = fake.layout as unknown as { openRightbar: () => void }
+
+      // A mirror lagging behind its owner: the gesture must close it, never ask
+      // the owner to toggle — that would *open* a panel the user meant to shut.
+      layout.openRightbar()
+      expect(handle()).toBe(true)
+      expect(fake.rightSurface.toggles).toBe(0)
+
+      fake.teardown()
+    } finally {
+      dom.restore()
+    }
+  })
+
+  it('closes the right surface by its mirror when that owner is not loaded', () => {
+    const dom = installFakeDom()
+    try {
+      const fake = createFakeClientContext({ ownsRightSurface: false })
+      apply(fake.ctx)
+      const handle = dom.window['__dshMobileHandleBack'] as () => boolean
+      const layout = fake.layout as unknown as {
+        openRightbar: () => void
+        getSnapshot: () => { readonly rightbarOpen: boolean }
+      }
+
+      layout.openRightbar()
+      expect(handle()).toBe(true)
+      expect(layout.getSnapshot().rightbarOpen).toBe(false)
+      expect(fake.rightSurface.toggles).toBe(0)
+
+      fake.teardown()
+    } finally {
+      dom.restore()
+    }
+  })
+
+  it('keeps the back gesture working when the right surface throws', () => {
+    const dom = installFakeDom()
+    try {
+      const fake = createFakeClientContext()
+      apply(fake.ctx)
+      const handle = dom.window['__dshMobileHandleBack'] as () => boolean
+      const layout = fake.layout as unknown as {
+        openRightbar: () => void
+        getSnapshot: () => { readonly rightbarOpen: boolean }
+      }
+
+      // The host app calls this from its own back handling, so a face that blows
+      // up must still leave the drawer closed and the gesture consumed.
+      const broken = { isExpanded: () => { throw new Error('face unavailable') } }
+      ;(fake.ctx as unknown as { get: (name: string) => unknown }).get = (name: string) => (
+        name === 'sidebarRight' ? broken : undefined
+      )
+      layout.openRightbar()
+      expect(handle()).toBe(true)
+      expect(layout.getSnapshot().rightbarOpen).toBe(false)
+
+      fake.teardown()
     } finally {
       dom.restore()
     }
