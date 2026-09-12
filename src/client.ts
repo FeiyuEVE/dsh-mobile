@@ -13,6 +13,8 @@ export type { MobileControlLocale } from './client-messages.js'
 interface ClientContext {
   effect(effect: () => void | (() => void), label?: string): void
   get(name: 'connection'): MobileConnectionHandle
+  /** Optional-service read: an absent registration answers `undefined`, never throws. */
+  get(name: 'resources'): unknown
   slots: {
     inject(key: string, callback: () => (() => void)): () => void
     register<Props>(options: { name: string; id: string; order?: number; label?: string }, component: (props: Props) => unknown): () => void
@@ -1963,12 +1965,110 @@ const CONTROL_STYLES = `
 .dsh-mobile-control__trigger.is-rail{flex:0 0 auto;width:36px;margin:8px 0 10px}
 `
 
+/** One address no real file uses: readable only for its protocol's provider presence. */
+const PROBE_FILE_ADDRESS = 'dsh-resource://file/session/dsh-mobile-probe/__dsh-mobile-probe__'
+
+/** First provider check, after the boot graph has had time to import. */
+const PROBE_FIRST_DELAY_MS = 15_000
+
+/** Confirming check: only a second `none` is reported, so a slow graph is not a finding. */
+const PROBE_CONFIRM_DELAY_MS = 30_000
+
+/** The registry face this probe reads: the same one the document preview renders from. */
+interface ResourceProbeFace {
+  source(address: string): { getSnapshot(): { readonly status: string } }
+}
+
+/**
+ * Report a missing `file` resource provider once, through the same page ingest the core
+ * error guard uses.
+ *
+ * Why this exists: a document tab whose address has no registered provider renders
+ * "文件资源服务不可用。" and raises **no** JavaScript error, so the error guard stays silent
+ * and the phone leaves no evidence at all (observed 2026-09-12 with no client-error entry
+ * anywhere in the log store). The registry answers the question directly —
+ * `source()` is `none` exactly when the protocol has no provider — so the probe reads it
+ * after the graph settles and reports through `POST /log-ingest`, the route the deployment's
+ * error guard already delivers to (`X-Log-Token` from the injected page token).
+ *
+ * Diagnostics own their failure: delivery problems are swallowed and never reach the page.
+ * @param entry - structured fields appended to the shared ingest envelope.
+ */
+export function reportClientDiagnostic(entry: Record<string, unknown>): void {
+  try {
+    const token = (globalThis as { readonly __DSH_INGEST_TOKEN__?: unknown }).__DSH_INGEST_TOKEN__
+    const body = JSON.stringify({
+      tenant: 'dsh',
+      dsh_component: 'client-error',
+      level: 'error',
+      service: 'dsh-web-client',
+      source: 'frontend',
+      ts: Date.now(),
+      // The query string can carry the process token on direct entries; never report it.
+      url: `${location.origin}${location.pathname}`,
+      ...entry,
+    })
+    void fetch('/log-ingest', {
+      method: 'POST',
+      credentials: 'omit',
+      keepalive: true,
+      headers: {
+        'content-type': 'text/plain',
+        ...(typeof token === 'string' && token !== '' ? { 'x-log-token': token } : {}),
+      },
+      body,
+    }).catch(() => undefined)
+  } catch {
+    // A diagnostic that breaks the page it observes is worse than no diagnostic.
+  }
+}
+
+/**
+ * Watch the `file` resource protocol on the dedicated mobile surface and report its
+ * provider's absence once, after a confirming second check.
+ * @param ctx - client context; `resources` is read optionally so the probe never parks the
+ * plugin when the resource model is absent.
+ * @returns the disposer that cancels a pending check.
+ */
+export function watchFileResourceProvider(ctx: ClientContext): () => void {
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined
+  const first = setTimeout(() => {
+    const resources = ctx.get('resources') as ResourceProbeFace | undefined
+    if (resources === undefined) {
+      reportClientDiagnostic({
+        kind: 'resource-service-missing',
+        message: 'ctx.resources is absent on the dedicated mobile page',
+      })
+      return
+    }
+    if (resources.source(PROBE_FILE_ADDRESS).getSnapshot().status !== 'none') return
+    confirmTimer = setTimeout(() => {
+      if (resources.source(PROBE_FILE_ADDRESS).getSnapshot().status !== 'none') return
+      reportClientDiagnostic({
+        kind: 'resource-provider-missing',
+        message: 'no provider is registered for the file resource protocol',
+        protocol: 'file',
+        frontend: (globalThis as { readonly __DSH_MOBILE_FRONTEND__?: unknown }).__DSH_MOBILE_FRONTEND__,
+      })
+    }, PROBE_CONFIRM_DELAY_MS)
+  }, PROBE_FIRST_DELAY_MS)
+  return () => {
+    clearTimeout(first)
+    if (confirmTimer !== undefined) clearTimeout(confirmTimer)
+  }
+}
+
 /** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
     return trustAuthenticatedGatewayConnection(ctx.get('connection'))
   }, 'dsh-mobile: authenticated gateway client trust')
+
+  ctx.effect(() => {
+    if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
+    return watchFileResourceProvider(ctx)
+  }, 'dsh-mobile: file resource provider probe')
 
   ctx.effect(() => {
     const loopback = isLoopbackHost(location.hostname) && !new URLSearchParams(location.search).has('dsh-mobile-preview')
