@@ -2058,6 +2058,147 @@ export function watchFileResourceProvider(ctx: ClientContext): () => void {
   }
 }
 
+/** A second address form: it exists in the protocol but has no session scope, so a live provider answers `failed`. */
+const PROBE_ABSOLUTE_ADDRESS = 'dsh-resource://file/absolute/etc/hostname'
+
+/** Services the `file` provider injects: any one missing parks it with no error at all. */
+const PROVIDER_CHAIN_SERVICES = ['resources', 'remote', 'remote.workspaceFiles'] as const
+
+/** When the page-level snapshot is reported: past the module graph and the first RPC round trips. */
+const PAGE_STATE_DELAY_MS = 20_000
+
+/** How often open preview tabs are inspected afterwards. */
+const PREVIEW_POLL_MS = 5_000
+
+/** How long preview tabs keep being inspected: a page left open stops reporting by itself. */
+const PREVIEW_POLL_LIMIT_MS = 600_000
+
+/** Distinct preview tabs reported per page load: enough for a real one, bounded for a broken one. */
+const MAX_PREVIEW_REPORTS = 5
+
+/** The DOM attribute the document preview owns; its value is the tab's resource address. */
+const PREVIEW_TAB_SELECTOR = '[data-textpreview-state]'
+
+/**
+ * Read one address's status without ever throwing into the page being observed.
+ * @param ctx - client context; `resources` is read optionally.
+ * @param address - resource address whose registry record is read.
+ * @returns the registry's status, `no-resources-service`, or the thrown error as text.
+ */
+export function resourceStatus(ctx: ClientContext, address: string): string {
+  const resources = ctx.get('resources') as ResourceProbeFace | undefined
+  if (resources === undefined) return 'no-resources-service'
+  try {
+    return resources.source(address).getSnapshot().status
+  } catch (error) {
+    return `throw:${String(error)}`
+  }
+}
+
+/**
+ * Report the page-level facts no error event carries.
+ *
+ * Why: the phone showed "文件资源服务不可用。" with a working network and **no** JavaScript
+ * error, and from the server side three different causes look identical — the `resources`
+ * service is absent, the `remote.workspaceFiles` it injects is absent, or the preview tab's
+ * address never resolves to the `file` protocol. This reports all of them at once, together
+ * with the engine capabilities the Flutter host's compat script is supposed to supply, the
+ * boot graph the page is actually running, and every open preview tab's address and status.
+ * @param ctx - client context; every read is guarded so a diagnostic can never break the page.
+ */
+export function reportMobilePageState(ctx: ClientContext): void {
+  try {
+    const services: Record<string, boolean> = {}
+    for (const name of PROVIDER_CHAIN_SERVICES) {
+      try {
+        services[name] = ctx.get(name as 'resources') !== undefined
+      } catch {
+        services[name] = false
+      }
+    }
+    const previews = Array.from(document.querySelectorAll(PREVIEW_TAB_SELECTOR))
+      .slice(0, MAX_PREVIEW_REPORTS)
+      .map((element) => {
+        const address = element.getAttribute('data-textpreview-url') ?? ''
+        return {
+          state: element.getAttribute('data-textpreview-state'),
+          address,
+          status: address === '' ? 'no-address' : resourceStatus(ctx, address),
+        }
+      })
+    const boot = (globalThis as {
+      readonly __DSH_BOOT__?: { readonly rev?: unknown; readonly entries?: readonly { readonly id?: unknown }[] }
+    }).__DSH_BOOT__
+    reportClientDiagnostic({
+      kind: 'mobile-page-state',
+      message: 'dedicated mobile page: services, resource status and preview tabs',
+      frontend: (globalThis as { readonly __DSH_MOBILE_FRONTEND__?: unknown }).__DSH_MOBILE_FRONTEND__,
+      services,
+      probeStatus: resourceStatus(ctx, PROBE_FILE_ADDRESS),
+      absoluteStatus: resourceStatus(ctx, PROBE_ABSOLUTE_ADDRESS),
+      previews,
+      unavailableVisible: document.body.innerText.includes('文件资源服务不可用'),
+      bootRev: boot?.rev,
+      bootEntries: Array.isArray(boot?.entries) ? boot.entries.length : undefined,
+      hasWorkspaceFilesEntry: Array.isArray(boot?.entries)
+        ? boot.entries.some(entry => entry?.id === '@deepseek-ai/dsh-api-workspace-files')
+        : undefined,
+      // Whether the host app's document-start compat script actually ran on this engine.
+      engine: {
+        iterator: typeof (globalThis as { Iterator?: unknown }).Iterator,
+        promiseTry: typeof (Promise as unknown as { try?: unknown }).try,
+        withResolvers: typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers,
+        sumPrecise: typeof (Math as unknown as { sumPrecise?: unknown }).sumPrecise,
+        fromBase64: typeof (Uint8Array as unknown as { fromBase64?: unknown }).fromBase64,
+        arrayAt: typeof (Array.prototype as unknown as { at?: unknown }).at,
+      },
+      userAgent: navigator.userAgent,
+    })
+  } catch {
+    // A diagnostic that breaks the page it observes is worse than no diagnostic.
+  }
+}
+
+/**
+ * Report the page state once the boot graph has settled, then report every new document
+ * preview tab it can see until the report or time budget runs out.
+ * @param ctx - client context.
+ * @returns the disposer that clears both timers.
+ */
+export function watchMobilePageState(ctx: ClientContext): () => void {
+  const seen = new Set<string>()
+  const first = setTimeout(() => { reportMobilePageState(ctx) }, PAGE_STATE_DELAY_MS)
+  const poll = setInterval(() => {
+    try {
+      if (seen.size >= MAX_PREVIEW_REPORTS) return
+      for (const element of Array.from(document.querySelectorAll(PREVIEW_TAB_SELECTOR))) {
+        const address = element.getAttribute('data-textpreview-url') ?? ''
+        const state = element.getAttribute('data-textpreview-state') ?? ''
+        if (address === '') continue
+        const key = `${address}|${state}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        reportClientDiagnostic({
+          kind: 'document-preview-tab',
+          message: 'a document preview tab is open on the dedicated mobile page',
+          address,
+          state,
+          status: resourceStatus(ctx, address),
+        })
+        if (seen.size >= MAX_PREVIEW_REPORTS) return
+      }
+    } catch {
+      // A diagnostic that breaks the page it observes is worse than no diagnostic.
+    }
+  }, PREVIEW_POLL_MS)
+  const stop = setTimeout(() => { clearInterval(poll) }, PREVIEW_POLL_LIMIT_MS)
+  return () => {
+    clearTimeout(first)
+    clearTimeout(stop)
+    clearInterval(poll)
+  }
+}
+
 /** Mount the desktop control or mobile feature enhancements. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -2069,6 +2210,11 @@ export function apply(ctx: ClientContext): void {
     if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
     return watchFileResourceProvider(ctx)
   }, 'dsh-mobile: file resource provider probe')
+
+  ctx.effect(() => {
+    if (window.__DSH_MOBILE_FRONTEND__ !== 'dedicated') return
+    return watchMobilePageState(ctx)
+  }, 'dsh-mobile: dedicated page state report')
 
   ctx.effect(() => {
     const loopback = isLoopbackHost(location.hostname) && !new URLSearchParams(location.search).has('dsh-mobile-preview')

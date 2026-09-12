@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { reportClientDiagnostic, watchFileResourceProvider } from '../src/client.js'
+import { reportClientDiagnostic, reportMobilePageState, watchFileResourceProvider, watchMobilePageState } from '../src/client.js'
 
 /** The registry stand-in: one address, one status, the same read the probe makes. */
 function resourcesWith(status: 'none' | 'loading' | 'live'): { source: (address: string) => { getSnapshot: () => { status: string } } } {
@@ -12,6 +12,17 @@ interface FakeContext {
 
 function context(resources: unknown): FakeContext {
   return { get: (name: string) => (name === 'resources' ? resources : undefined) }
+}
+
+/** One preview tab's DOM face: only the two attributes the diagnostic reads. */
+function tab(address: string, state: string): { getAttribute: (name: string) => string | null } {
+  return { getAttribute: (name: string) => (name === 'data-textpreview-url' ? address : name === 'data-textpreview-state' ? state : null) }
+}
+
+/** Everything `reportMobilePageState` reads outside the context. */
+function stubPage(elements: unknown[], innerText = ''): void {
+  vi.stubGlobal('document', { querySelectorAll: () => elements, body: { innerText } })
+  vi.stubGlobal('navigator', { userAgent: 'phone-ua' })
 }
 
 function ingest(): { url: string; body: Record<string, unknown>; token: string | undefined }[] {
@@ -71,6 +82,52 @@ describe('mobile client diagnostics', () => {
     watchFileResourceProvider(context(undefined) as never)
     await vi.advanceTimersByTimeAsync(15_000)
     expect(ingest()[0]?.body).toMatchObject({ kind: 'resource-service-missing' })
+  })
+
+  it('reports which services exist and what each open preview tab resolves to', () => {
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    stubPage([tab('dsh-resource://file/session/s1/t7.txt', 'loading')], '文件资源服务不可用。')
+
+    reportMobilePageState(context(resourcesWith('live')) as never)
+
+    expect(ingest()[0]?.body).toMatchObject({
+      kind: 'mobile-page-state',
+      // The whole point: a parked provider chain is visible as a missing service, not as silence.
+      services: { resources: true, remote: false, 'remote.workspaceFiles': false },
+      probeStatus: 'live',
+      absoluteStatus: 'live',
+      unavailableVisible: true,
+      previews: [{ state: 'loading', address: 'dsh-resource://file/session/s1/t7.txt', status: 'live' }],
+    })
+  })
+
+  it('reports a preview tab once, and keeps watching until its budget is spent', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    const address = 'dsh-resource://file/session/s1/t7.txt'
+    let state = 'loading'
+    // The stub reads `state` on every call, so the poll sees the tab change under it.
+    vi.stubGlobal('document', { querySelectorAll: () => [tab(address, state)], body: { innerText: '' } })
+    vi.stubGlobal('navigator', { userAgent: 'phone-ua' })
+
+    const dispose = watchMobilePageState(context(resourcesWith('live')) as never)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(ingest().filter(call => call.body.kind === 'mobile-page-state')).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(ingest().filter(call => call.body.kind === 'document-preview-tab')).toHaveLength(1)
+
+    state = 'text'
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(ingest().filter(call => call.body.kind === 'document-preview-tab')).toHaveLength(2)
+    expect(ingest().filter(call => call.body.kind === 'document-preview-tab')[1]?.body).toMatchObject({ state: 'text' })
+
+    dispose()
+    const sent = ingest().length
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(ingest()).toHaveLength(sent)
   })
 
   it('carries the page ingest token and never reports a token-bearing url', () => {
