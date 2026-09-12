@@ -19,7 +19,7 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle] > svg[class*="_railFish"] { transform:translateY(-4px) !important; }')
     expect(NATIVE_MOBILE_STYLES).toContain('min-height:32px !important; height:32px !important')
     expect(NATIVE_MOBILE_STYLES).toContain('min-height:28px !important; height:28px !important; margin-top:0 !important')
-    expect(NATIVE_MOBILE_STYLES).toContain('[class*="_tab"] { padding-bottom:5px !important; }')
+    expect(NATIVE_MOBILE_STYLES).toContain('[class*="_tab"] { flex:0 0 auto !important; padding-bottom:5px !important; white-space:nowrap !important; }')
     expect(NATIVE_MOBILE_STYLES).toContain('width:max-content !important; max-width:calc(100% - 58px) !important')
     expect(NATIVE_MOBILE_STYLES).toContain('width:calc(100% - 16px) !important; margin:0 8px !important')
     expect(NATIVE_MOBILE_STYLES).not.toContain(':is([data-dsh-mobile-header], header)')

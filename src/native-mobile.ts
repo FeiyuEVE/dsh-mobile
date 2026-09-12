@@ -32,8 +32,12 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-header] [class*="_sessionLogButton"] > * { display:none !important; }
   [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { color:var(--dsw-text, #171a21); content:"Log"; font-size:11px; font-weight:600; }
   html[data-dsh-mobile-language="zh"] [data-dsh-mobile-header] [class*="_sessionLogButton"]::after { content:"日志"; }
-  [data-dsh-mobile-header] [class*="_tabs"] { box-sizing:border-box !important; width:max-content !important; max-width:calc(100% - 58px) !important; min-height:28px !important; height:28px !important; margin-top:0 !important; padding-left:6px !important; padding-right:6px !important; overflow-x:auto; scrollbar-width:none; }
-  [data-dsh-mobile-header] [class*="_tab"] { padding-bottom:5px !important; }
+  /* Session tab strip. The core strip is one flex row sized for 2-3 desktop tabs, so
+     with the 9+ plugin tabs a phone squeezes every button to ~13px and each CJK label
+     breaks inside it ("对" above "话"). Pin each tab to one line and let the strip
+     scroll, and tighten the desktop 36px gap so the common six-tab session still fits. */
+  [data-dsh-mobile-header] [class*="_tabs"] { box-sizing:border-box !important; width:max-content !important; max-width:calc(100% - 58px) !important; min-height:28px !important; height:28px !important; margin-top:0 !important; padding-left:6px !important; padding-right:6px !important; gap:18px !important; overflow-x:auto; scrollbar-width:none; }
+  [data-dsh-mobile-header] [class*="_tab"] { flex:0 0 auto !important; padding-bottom:5px !important; white-space:nowrap !important; }
   [data-dsh-mobile-header] [class*="_tabs"]::-webkit-scrollbar { display:none; }
   [data-dsh-mobile-sidebar] { position:fixed !important; z-index:240 !important; inset:0 auto 0 0 !important; width:0 !important; overflow:visible !important; }
   [data-dsh-mobile-sidebar] [class*="_footerActions"] { flex-wrap:wrap !important; gap:4px !important; }

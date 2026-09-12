@@ -5,6 +5,7 @@ import {
   MOBILE_CONTROL_MESSAGES,
   type MobileControlLocale,
 } from './client-messages.js'
+import { installMobileAdapterShell, type MobileAdapterModuleSource } from './mobile-adapter.js'
 import { installNativeMobileSurface, NATIVE_MOBILE_STYLES } from './native-mobile.js'
 
 export { DIAGNOSTIC_REASON_MESSAGES, MOBILE_CONTROL_MESSAGES } from './client-messages.js'
@@ -2316,7 +2317,8 @@ export function apply(ctx: ClientContext): void {
     if (!loopback) {
       const removeCustom = installCustomAssets()
       const removeSurface = installDshLanguageBoundSurface(installNativeMobileSurface)
-      return () => { removeCustom(); removeSurface(); style.remove() }
+      const removeAdapters = installMobileAdapterShell(() => ctx.get('modules') as MobileAdapterModuleSource | undefined)
+      return () => { removeCustom(); removeSurface(); removeAdapters(); style.remove() }
     }
     const removeControl = installDshLanguageBoundSurface(() => {
       const control = installControl()
