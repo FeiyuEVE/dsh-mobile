@@ -59,7 +59,7 @@ describe('dedicated mobile layout boot', () => {
     expect(output.indexOf('/mobile-access/auth/renew')).toBeLessThan(output.indexOf('window.__DSH_BOOT__'))
   })
 
-  it('injects the WebView compatibility polyfills ahead of the boot manifest', () => {
+  it('leaves old-WebView polyfills to the host app instead of injecting a second copy', () => {
     const output = rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime' },
       {
@@ -70,21 +70,13 @@ describe('dedicated mobile layout boot', () => {
       },
     ]))
 
-    // `Iterator` must exist before any client module bundle is evaluated: the bundled yaml inside
-    // @deepseek-ai/dsh-client-ui-sidebar-documentpreview probes Iterator.prototype.join unguarded,
-    // and one failed import takes the whole client plugin graph down on older WebViews.
-    expect(output).toContain("typeof Iterator==='undefined'")
-    expect(output).toContain('window.Iterator=function Iterator(){}')
-    expect(output).toContain("typeof Promise.try!=='function'")
-    expect(output).toContain("typeof Math.sumPrecise!=='function'")
-    expect(output).toContain("typeof Uint8Array.fromBase64!=='function'")
-
-    const compat = output.indexOf('window.Iterator=function Iterator(){}')
-    expect(compat).toBeGreaterThan(-1)
-    expect(compat).toBeLessThan(output.indexOf('__DSH_BOOT__'))
-    expect(compat).toBeLessThan(output.indexOf('</head>'))
-    // The empty shell must not pre-empt the bundled yaml's own join polyfill.
-    expect(output).not.toContain('Iterator.prototype.join=')
+    // Old-WebView polyfills are the Flutter host's job (`_webViewCompatScript`, injected at
+    // document start ahead of every bundle). The served page must not carry a second copy:
+    // one owner for the engine gap, and the gateway rewrite stays limited to the layout module.
+    expect(output).not.toContain("typeof Iterator==='undefined'")
+    expect(output).not.toContain("typeof Promise.try!=='function'")
+    expect(output).not.toContain("typeof Math.sumPrecise!=='function'")
+    expect(output).not.toContain("typeof Uint8Array.fromBase64!=='function'")
   })
 
   it('orders the authenticated mobile client before settings without retaining the sidebar cycle', () => {
