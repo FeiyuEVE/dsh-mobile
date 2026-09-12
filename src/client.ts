@@ -75,6 +75,13 @@ declare global {
       define(definition: MobileClientDefinition): void
     }
     __DSH_MOBILE_FRONTEND__?: 'dedicated'
+    /**
+     * Consume one system back gesture on the mobile surface: closes the
+     * topmost mobile overlay and reports whether it did. The host app calls
+     * this before falling back to its own WebView history or to exiting
+     * (absent, the surface has no overlay to close).
+     */
+    __dshMobileHandleBack?: () => boolean
     __DSH_MOBILE_NATIVE__?: {
       capabilities(): Promise<readonly string[]> | readonly string[]
       invoke(action: string, input?: unknown): Promise<unknown>

@@ -211,6 +211,31 @@ function firstByClassSuffix(root: ParentNode, suffix: string): HTMLElement | und
 
 const AUTO_HISTORY_THRESHOLD_PX = 64
 
+/** The core composer's editor root; its keymap owns the Enter gesture. */
+export const COMPOSER_INPUT_SELECTOR = '[data-composer-input]'
+
+/**
+ * Whether one keydown is the plain Enter that a soft keyboard sends and that
+ * must become a line break instead of a submit. Decided from the event alone:
+ * the caller owns the two context facts (touch input mode, and whether the
+ * target is the composer editor).
+ * @param event - the keydown under inspection.
+ * @param touchMode - false once a physical keyboard has been observed.
+ * @returns true when the caller must replay the gesture as Shift+Enter.
+ */
+export function isComposerLineBreakGesture(
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'ctrlKey' | 'metaKey' | 'altKey' | 'isComposing'> & { readonly keyCode?: number },
+  touchMode: boolean,
+): boolean {
+  if (!touchMode) return false
+  if (event.key !== 'Enter') return false
+  // Chords keep their desktop meaning, and an IME-closing Enter is the
+  // candidate pick, not a gesture this page may reinterpret.
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return false
+  if (event.isComposing || event.keyCode === 229) return false
+  return true
+}
+
 export type NativeMobileLanguage = 'it' | 'en' | 'zh'
 
 interface FileDropTarget { dispatchEvent(event: Event): boolean }
@@ -347,8 +372,40 @@ export function installNativeMobileSurface(): () => void {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Tab' || event.key.startsWith('Arrow')) setInputMode('keyboard')
   }
+  /**
+   * A soft keyboard has no Shift, so the composer's only Enter gesture is the
+   * submit one and a newline is unreachable (see the core keymap: plain Enter
+   * submits, Shift+Enter breaks the line). In touch mode this claims the plain
+   * Enter in the capture phase and replays it as a Shift+Enter on the same
+   * editor root, so the core keymap inserts a line break; the Send button and
+   * Ctrl/Cmd+Enter keep submitting. A physical keyboard (Tab/arrows seen)
+   * restores the desktop gesture.
+   */
+  const onComposerKeyDown = (event: KeyboardEvent): void => {
+    if (!isComposerLineBreakGesture(event, document.documentElement.dataset.dshMobileInput !== 'keyboard')) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const root = target.closest(COMPOSER_INPUT_SELECTOR)
+    if (root === null) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    root.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', code: 'Enter', shiftKey: true, bubbles: true, cancelable: true,
+    }))
+  }
+  /** Label the soft keyboard's Enter as the line break it now performs. */
+  const onComposerFocusIn = (event: FocusEvent): void => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const root = target.closest(COMPOSER_INPUT_SELECTOR)
+    if (root === null) return
+    if (document.documentElement.dataset.dshMobileInput === 'keyboard') root.removeAttribute('enterkeyhint')
+    else root.setAttribute('enterkeyhint', 'enter')
+  }
   document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('keydown', onKeyDown, true)
+  document.addEventListener('keydown', onComposerKeyDown, true)
+  document.addEventListener('focusin', onComposerFocusIn, true)
   const backdrop = document.createElement('button')
   backdrop.type = 'button'
   backdrop.className = 'dsh-native-mobile-backdrop'
@@ -837,6 +894,8 @@ export function installNativeMobileSurface(): () => void {
     historyScroller?.removeEventListener('scroll', onHistoryScroll)
     document.removeEventListener('pointerdown', onPointerDown, true)
     document.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('keydown', onComposerKeyDown, true)
+    document.removeEventListener('focusin', onComposerFocusIn, true)
     document.removeEventListener('click', animateNavigation)
     backdrop.remove()
     document.documentElement.classList.remove('dsh-native-mobile-active')

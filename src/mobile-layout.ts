@@ -58,6 +58,24 @@ export function resolveMobileLayoutLanguage(
     .find((value): value is MobileLayoutLanguage => value === 'it' || value === 'en' || value === 'zh') ?? 'en'
 }
 
+/** One mobile overlay the system back gesture may close. */
+export type MobileBackTarget = 'sidebar' | 'rightbar'
+
+/**
+ * The overlay a system back gesture closes, in presentation order: the
+ * workspace drawer sits above the right surface, so it goes first.
+ * @param snapshot - the live layout state.
+ * @returns the overlay to close, or null when the gesture belongs to the page
+ *   or to the host app.
+ */
+export function resolveMobileBackTarget(
+  snapshot: Pick<LayoutSnapshot, 'sidebarOpen' | 'rightbarOpen'>,
+): MobileBackTarget | null {
+  if (snapshot.sidebarOpen) return 'sidebar'
+  if (snapshot.rightbarOpen) return 'rightbar'
+  return null
+}
+
 class MobileLayoutController {
   private snapshot: LayoutSnapshot = Object.freeze({ sidebarOpen: false, rightbarOpen: false, panelId: null })
   private navigation = new AbortController()
@@ -356,7 +374,19 @@ export function apply(ctx: MobileClientContext): void {
         'shell.overlay': { kind: 'list', scope: 'root' },
       },
     }, props => createElement(MobileAppFrame, { ...props, controller }))
+    // The host app owns the Android back gesture; this is the surface's half of
+    // it. Answered from the live snapshot so the app can fall back to its own
+    // history or to exiting when nothing was consumed.
+    const handleBack = (): boolean => {
+      const target = resolveMobileBackTarget(controller.getSnapshot())
+      if (target === null) return false
+      if (target === 'sidebar') controller.closeSidebar()
+      else controller.closeRightbar()
+      return true
+    }
+    window.__dshMobileHandleBack = handleBack
     return () => {
+      if (window.__dshMobileHandleBack === handleBack) delete window.__dshMobileHandleBack
       disposeRoot()
       disposePanelInfo()
       controller.dispose()

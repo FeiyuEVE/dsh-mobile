@@ -246,7 +246,7 @@ describe('dedicated mobile layout root contributions', () => {
   }
 
   /** Minimal DOM stand-in: `apply()` only writes a <style> plus the theme presenter's tokens. */
-  function installFakeDom(): () => void {
+  function installFakeDom(): { readonly window: Record<string, unknown>; readonly restore: () => void } {
     const styleProperties = (): Record<string, unknown> => ({ setProperty: () => {}, removeProperty: () => {} })
     const chrome = {
       createElement: (tag: string) => (tag === 'meta'
@@ -257,12 +257,19 @@ describe('dedicated mobile layout root contributions', () => {
       documentElement: { style: styleProperties() },
     }
     const host = globalThis as unknown as Record<string, unknown>
-    const previous = { document: host['document'], getComputedStyle: host['getComputedStyle'] }
+    const previous = { document: host['document'], getComputedStyle: host['getComputedStyle'], window: host['window'] }
+    // The surface publishes its back handler on `window`; node has no such global.
+    const fakeWindow: Record<string, unknown> = {}
     host['document'] = chrome
     host['getComputedStyle'] = () => ({ backgroundColor: 'rgb(255,255,255)' })
-    return () => {
-      host['document'] = previous.document
-      host['getComputedStyle'] = previous.getComputedStyle
+    host['window'] = fakeWindow
+    return {
+      window: fakeWindow,
+      restore: () => {
+        host['document'] = previous.document
+        host['getComputedStyle'] = previous.getComputedStyle
+        host['window'] = previous.window
+      },
     }
   }
 
@@ -306,7 +313,7 @@ describe('dedicated mobile layout root contributions', () => {
   }
 
   it('provides the root panelInfo hook owned by the stock layout module it replaces', () => {
-    const restoreDom = installFakeDom()
+    const dom = installFakeDom()
     try {
       const fake = createFakeClientContext()
       apply(fake.ctx)
@@ -335,7 +342,46 @@ describe('dedicated mobile layout root contributions', () => {
       fake.teardown()
       expect(fake.disposals).toContain('panelInfo')
     } finally {
-      restoreDom()
+      dom.restore()
+    }
+  })
+
+  it('hands the system back gesture to the surface and reports what it closed', () => {
+    const dom = installFakeDom()
+    try {
+      const fake = createFakeClientContext()
+      apply(fake.ctx)
+      const handle = dom.window['__dshMobileHandleBack'] as (() => boolean) | undefined
+      expect(typeof handle).toBe('function')
+
+      // Nothing open: the gesture belongs to the host app, not to the surface.
+      expect(handle?.()).toBe(false)
+
+      const layout = fake.layout as unknown as {
+        openRightbar: () => void
+        toggleSidebar: () => void
+        getSnapshot: () => { readonly sidebarOpen: boolean; readonly rightbarOpen: boolean }
+      }
+      layout.openRightbar()
+      expect(handle?.()).toBe(true)
+      expect(layout.getSnapshot().rightbarOpen).toBe(false)
+
+      // The drawer sits above the right surface, so it closes first once both are open.
+      layout.toggleSidebar()
+      layout.openRightbar()
+      expect(handle?.()).toBe(true)
+      expect(layout.getSnapshot().sidebarOpen).toBe(false)
+      expect(layout.getSnapshot().rightbarOpen).toBe(true)
+      expect(handle?.()).toBe(true)
+      expect(layout.getSnapshot().rightbarOpen).toBe(false)
+      expect(handle?.()).toBe(false)
+
+      fake.teardown()
+      // The surface only owns the handler while it lives; a stale one would
+      // keep answering after the layout is gone.
+      expect(dom.window['__dshMobileHandleBack']).toBeUndefined()
+    } finally {
+      dom.restore()
     }
   })
 })

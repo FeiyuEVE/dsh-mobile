@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyNativeMobileLanguageMarker, dispatchComposerImageDrop, installNativeMobileSurface, isComposerMediaOriginCurrent, NATIVE_MOBILE_STYLES, preflightComposerImageDrop, resolveNativeMobileLanguage, shouldAutoLoadEarlier } from '../src/native-mobile.js'
+import { applyNativeMobileLanguageMarker, dispatchComposerImageDrop, installNativeMobileSurface, isComposerLineBreakGesture, isComposerMediaOriginCurrent, NATIVE_MOBILE_STYLES, preflightComposerImageDrop, resolveNativeMobileLanguage, shouldAutoLoadEarlier } from '../src/native-mobile.js'
 
 describe('native mobile presentation', () => {
   it('keeps touch focus quiet without removing keyboard focus globally', () => {
@@ -177,5 +177,37 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('[data-slot="conversation.composer.dock"] > div:not([class*="_root"])')
     expect(NATIVE_MOBILE_STYLES).toContain('border-radius:999px !important')
     expect(NATIVE_MOBILE_STYLES).not.toContain('data-dsh-mobile-stats')
+  })
+  it('turns the soft keyboard Enter into a line break and leaves every chord alone', () => {
+    const enter = { key: 'Enter', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false }
+    expect(isComposerLineBreakGesture(enter, true)).toBe(true)
+    // A physical keyboard restores the desktop submit gesture (Tab/arrows seen).
+    expect(isComposerLineBreakGesture(enter, false)).toBe(false)
+    // Shift+Enter is already the core line break; Ctrl/Cmd is the accelerated
+    // submit; both keep their meaning instead of being reinterpreted.
+    expect(isComposerLineBreakGesture({ ...enter, shiftKey: true }, true)).toBe(false)
+    expect(isComposerLineBreakGesture({ ...enter, ctrlKey: true }, true)).toBe(false)
+    expect(isComposerLineBreakGesture({ ...enter, metaKey: true }, true)).toBe(false)
+    expect(isComposerLineBreakGesture({ ...enter, altKey: true }, true)).toBe(false)
+    // An IME-closing Enter picks a candidate; keyCode 229 is the legacy signal
+    // engines emit without isComposing.
+    expect(isComposerLineBreakGesture({ ...enter, isComposing: true }, true)).toBe(false)
+    expect(isComposerLineBreakGesture({ ...enter, keyCode: 229 }, true)).toBe(false)
+    expect(isComposerLineBreakGesture({ ...enter, key: 'a' }, true)).toBe(false)
+  })
+
+  it('claims the composer Enter in the capture phase and replays it as Shift+Enter', () => {
+    const source = installNativeMobileSurface.toString()
+    // The core keymap decides on the editor root, so the capture listener must
+    // both stop the original gesture and deliver the line-break one to the root.
+    expect(source).toContain('document.addEventListener("keydown", onComposerKeyDown, true)')
+    expect(source).toContain('document.removeEventListener("keydown", onComposerKeyDown, true)')
+    expect(source).toContain('event.stopImmediatePropagation()')
+    expect(source).toContain('target.closest(COMPOSER_INPUT_SELECTOR)')
+    expect(source).toContain('new KeyboardEvent("keydown", {')
+    expect(source).toContain('shiftKey: true')
+    // The soft keyboard's Enter key is labelled as the line break it performs.
+    expect(source).toContain("root.setAttribute(\"enterkeyhint\", \"enter\")")
+    expect(source).toContain("root.removeAttribute(\"enterkeyhint\")")
   })
 })
