@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { reportClientDiagnostic, reportMobilePageState, watchFileResourceProvider, watchMobilePageState } from '../src/client.js'
+import { addressParseState, loaderState, reportClientDiagnostic, reportMobilePageState, watchFileResourceProvider, watchMobilePageState } from '../src/client.js'
 
 /** The registry stand-in: one address, one status, the same read the probe makes. */
 function resourcesWith(status: 'none' | 'loading' | 'live'): { source: (address: string) => { getSnapshot: () => { status: string } } } {
@@ -128,6 +128,31 @@ describe('mobile client diagnostics', () => {
     const sent = ingest().length
     await vi.advanceTimersByTimeAsync(120_000)
     expect(ingest()).toHaveLength(sent)
+  })
+
+  it('names every loader row that never activated, with the service it waits for', () => {
+    const loaderCtx = {
+      get: (name: string) => (name === 'loader'
+        ? {
+            entries: () => [
+              { options: { name: 'active-row' }, fiber: { state: 2, inject: {} } },
+              { options: { name: '@deepseek-ai/dsh-api-workspace-files' }, fiber: { state: 0, inject: { resources: {}, 'remote.workspaceFiles': {} } } },
+            ],
+          }
+        : name === 'resources' ? resourcesWith('live') : undefined),
+    }
+    expect(loaderState(loaderCtx as never)).toEqual({
+      present: true,
+      rows: 2,
+      broken: [{ name: '@deepseek-ai/dsh-api-workspace-files', state: 'pending', missing: ['remote.workspaceFiles'] }],
+    })
+    expect(loaderState({ get: () => undefined } as never)).toEqual({ present: false })
+  })
+
+  it('reports how this engine parses the resource address forms', () => {
+    const parsed = addressParseState()
+    expect(parsed).toHaveLength(3)
+    expect(parsed[0]).toBe('dsh-resource:|file')
   })
 
   it('carries the page ingest token and never reports a token-bearing url', () => {

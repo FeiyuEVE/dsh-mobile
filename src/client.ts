@@ -15,6 +15,8 @@ interface ClientContext {
   get(name: 'connection'): MobileConnectionHandle
   /** Optional-service read: an absent registration answers `undefined`, never throws. */
   get(name: 'resources'): unknown
+  /** Any further optional service read (`loader`, other plugins' services): absent answers `undefined`. */
+  get(name: string): unknown
   slots: {
     inject(key: string, callback: () => (() => void)): () => void
     register<Props>(options: { name: string; id: string; order?: number; label?: string }, component: (props: Props) => unknown): () => void
@@ -2079,6 +2081,83 @@ const MAX_PREVIEW_REPORTS = 5
 /** The DOM attribute the document preview owns; its value is the tab's resource address. */
 const PREVIEW_TAB_SELECTOR = '[data-textpreview-state]'
 
+/** Loader rows reported when some never activated: enough to name the cause. */
+const MAX_BROKEN_ROWS = 12
+
+/** Cordis `FiberState` value mirror, to report a row's state as a word (see the const enum). */
+const FIBER_STATE_LABELS: Record<number, string> = { 0: 'pending', 1: 'loading', 2: 'active', 3: 'failed', 4: 'disposed', 5: 'unloading' }
+
+/** The loader face this diagnostic reads: the same `ctx.loader` the boot audit iterates. */
+interface LoaderRowFace {
+  readonly options?: { readonly name?: unknown }
+  readonly fiber?: { readonly state?: unknown; readonly inject?: Record<string, unknown> }
+}
+
+/** Addresses whose parse is reported verbatim: a parse failure is reported as `none` too. */
+const ADDRESS_PARSE_SAMPLES = [
+  'dsh-resource://file/session/dsh-mobile-probe/__dsh-mobile-probe__',
+  'dsh-resource://file/session/session-00000000-0000-0000-0000-000000000000/a.txt',
+  'dsh-resource://file/absolute/etc/hostname',
+] as const
+
+/**
+ * Report every loader row that is not active, with the services it waits for.
+ *
+ * Why: `bootClient` audits activation **after** `loader.await()`, so a row that never
+ * settles leaves the audit unreached — the page keeps rendering whatever did activate, and
+ * a plugin that never applied (here: the one registering the `file` provider) looks exactly
+ * like one that applied and registered nothing.
+ * @param ctx - client context.
+ * @returns the row count and the non-active rows, or why they could not be read.
+ */
+export function loaderState(ctx: ClientContext): Record<string, unknown> {
+  try {
+    const loader = ctx.get('loader') as { entries?: () => readonly LoaderRowFace[] } | undefined
+    if (loader === undefined || typeof loader.entries !== 'function') return { present: false }
+    const rows = loader.entries()
+    const broken: Record<string, unknown>[] = []
+    for (const row of rows) {
+      const state = typeof row?.fiber?.state === 'number' ? row.fiber.state : -1
+      if (state === 2) continue
+      if (broken.length >= MAX_BROKEN_ROWS) break
+      const inject = row?.fiber?.inject
+      const missing = inject === undefined || inject === null
+        ? []
+        : Object.keys(inject).filter((service) => {
+          try {
+            return ctx.get(service) === undefined
+          } catch {
+            return true
+          }
+        })
+      broken.push({ name: row?.options?.name, state: FIBER_STATE_LABELS[state] ?? state, missing })
+    }
+    return { present: true, rows: rows.length, broken }
+  } catch (error) {
+    return { present: true, error: String(error) }
+  }
+}
+
+/**
+ * Report how the page's own URL parser reads the resource address forms.
+ *
+ * Why: `protocolOf()` returns `undefined` for anything `new URL()` rejects, and an undefined
+ * protocol is reported as `none` — indistinguishable from "no provider registered". An
+ * address that parses in every desktop browser but not on this engine would explain a
+ * page-wide `none`.
+ * @returns one `protocol|hostname` string, or the thrown error, per sample.
+ */
+export function addressParseState(): string[] {
+  return ADDRESS_PARSE_SAMPLES.map((address) => {
+    try {
+      const parsed = new URL(address)
+      return `${parsed.protocol}|${parsed.hostname}`
+    } catch (error) {
+      return `throw:${String(error)}`
+    }
+  })
+}
+
 /**
  * Read one address's status without ever throwing into the page being observed.
  * @param ctx - client context; `resources` is read optionally.
@@ -2138,6 +2217,11 @@ export function reportMobilePageState(ctx: ClientContext): void {
       absoluteStatus: resourceStatus(ctx, PROBE_ABSOLUTE_ADDRESS),
       previews,
       unavailableVisible: document.body.innerText.includes('文件资源服务不可用'),
+      // Non-active loader rows: the audit that would have caught them never runs when one hangs.
+      loader: loaderState(ctx),
+      addressParse: addressParseState(),
+      tabs: Array.from(document.querySelectorAll('[role="tab"]')).slice(0, 6)
+        .map(element => (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)),
       bootRev: boot?.rev,
       bootEntries: Array.isArray(boot?.entries) ? boot.entries.length : undefined,
       hasWorkspaceFilesEntry: Array.isArray(boot?.entries)
