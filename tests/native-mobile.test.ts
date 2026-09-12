@@ -196,16 +196,20 @@ describe('native mobile presentation', () => {
     expect(isComposerLineBreakGesture({ ...enter, key: 'a' }, true)).toBe(false)
   })
 
-  it('claims the composer Enter in the capture phase and replays it as Shift+Enter', () => {
+  it('claims the composer Enter in the capture phase and asks for the break through beforeinput', () => {
     const source = installNativeMobileSurface.toString()
-    // The core keymap decides on the editor root, so the capture listener must
-    // both stop the original gesture and deliver the line-break one to the root.
+    // The composer editor ignores untrusted keydown events, so the surface must
+    // stop the submit gesture and request the line break on the editor root.
     expect(source).toContain('document.addEventListener("keydown", onComposerKeyDown, true)')
     expect(source).toContain('document.removeEventListener("keydown", onComposerKeyDown, true)')
     expect(source).toContain('event.stopImmediatePropagation()')
     expect(source).toContain('target.closest(COMPOSER_INPUT_SELECTOR)')
-    expect(source).toContain('new KeyboardEvent("keydown", {')
-    expect(source).toContain('shiftKey: true')
+    expect(source).toContain('new InputEvent("beforeinput", {')
+    expect(source).toContain('inputType: "insertLineBreak"')
+    // A page without the constructor keeps the desktop gesture instead of
+    // swallowing Enter.
+    expect(source).toMatch(/typeof InputEvent !== "function"\) return/u)
+    expect(source).not.toContain('new KeyboardEvent("keydown"')
     // The soft keyboard's Enter key is labelled as the line break it performs.
     expect(source).toContain("root.setAttribute(\"enterkeyhint\", \"enter\")")
     expect(source).toContain("root.removeAttribute(\"enterkeyhint\")")

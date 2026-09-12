@@ -376,10 +376,13 @@ export function installNativeMobileSurface(): () => void {
    * A soft keyboard has no Shift, so the composer's only Enter gesture is the
    * submit one and a newline is unreachable (see the core keymap: plain Enter
    * submits, Shift+Enter breaks the line). In touch mode this claims the plain
-   * Enter in the capture phase and replays it as a Shift+Enter on the same
-   * editor root, so the core keymap inserts a line break; the Send button and
-   * Ctrl/Cmd+Enter keep submitting. A physical keyboard (Tab/arrows seen)
-   * restores the desktop gesture.
+   * Enter in the capture phase and requests the line break through the input
+   * pipeline instead: the composer editor drops untrusted keydown events, so
+   * replaying Shift+Enter does nothing, while `beforeinput`/`insertLineBreak`
+   * is exactly the event its own handling turns into a managed line break
+   * (verified against a trusted Shift+Enter: same caret, same DOM). The Send
+   * button and Ctrl/Cmd+Enter keep submitting, and a physical keyboard
+   * (Tab/arrows seen) restores the desktop gesture.
    */
   const onComposerKeyDown = (event: KeyboardEvent): void => {
     if (!isComposerLineBreakGesture(event, document.documentElement.dataset.dshMobileInput !== 'keyboard')) return
@@ -387,10 +390,13 @@ export function installNativeMobileSurface(): () => void {
     if (!(target instanceof Element)) return
     const root = target.closest(COMPOSER_INPUT_SELECTOR)
     if (root === null) return
+    // Without the constructor there is no way to ask for the break, and
+    // consuming the gesture would leave Enter doing nothing at all.
+    if (typeof InputEvent !== 'function') return
     event.preventDefault()
     event.stopImmediatePropagation()
-    root.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter', code: 'Enter', shiftKey: true, bubbles: true, cancelable: true,
+    root.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertLineBreak', bubbles: true, cancelable: true,
     }))
   }
   /** Label the soft keyboard's Enter as the line break it now performs. */
