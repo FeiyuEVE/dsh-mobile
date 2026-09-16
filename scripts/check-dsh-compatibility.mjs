@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const arguments_ = process.argv.slice(2)
@@ -30,6 +30,25 @@ async function optionalText(path) {
 async function optionalJson(path) {
   const source = await optionalText(path)
   return source === undefined ? undefined : JSON.parse(source)
+}
+
+/**
+ * Concatenated TypeScript/TSX sources under a DSH source subtree. Markers that DSH
+ * owns but may move between files inside one component tree (for example the
+ * conversation scroll containers) are asserted against the subtree so a file
+ * split keeps the check meaningful instead of pinning an internal file layout.
+ * @param path - directory relative to the DSH source root.
+ * @returns every `.ts`/`.tsx` file's text joined by newlines.
+ */
+async function sourceTextUnder(path) {
+  const root = resolve(sourceRoot, path)
+  const entries = await readdir(root, { withFileTypes: true, recursive: true })
+  const sources = await Promise.all(
+    entries
+      .filter(entry => entry.isFile() && /\.tsx?$/.test(entry.name))
+      .map(entry => readFile(resolve(entry.parentPath, entry.name), 'utf8')),
+  )
+  return sources.join('\n')
 }
 
 const plugin = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
@@ -98,13 +117,16 @@ for (const declaration of [
   if (!layoutSource.includes(declaration)) throw new Error(`DSH layout contract changed: missing ${declaration}`)
 }
 
-const conversation = await text('packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx')
+const conversation = await sourceTextUnder('packages/client/ui-conversation/src/client')
 if (!conversation.includes('data-conversation-scroll')) {
   throw new Error('DSH conversation no longer exposes data-conversation-scroll')
 }
+if (!conversation.includes('data-input-scroll')) {
+  throw new Error('DSH composer command contract changed: missing data-input-scroll')
+}
 
 const composer = await text('packages/client/ui-conversation/src/client/skeleton/InputBar.tsx')
-for (const marker of ['data-composer-card', 'data-input-scroll', 'aria-haspopup="listbox"']) {
+for (const marker of ['data-composer-card', 'aria-haspopup="listbox"']) {
   if (!composer.includes(marker)) throw new Error(`DSH composer command contract changed: missing ${marker}`)
 }
 const triggerMenu = await text('packages/client/ui-input-trigger/src/client/MenuView.tsx')

@@ -2,6 +2,12 @@
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
 
+## 0.3.34 - 2026-09-16
+
+- Declare DeepSeek Harness `0.1.6-alpha.1` (and the local release line `0.1.6-alpha.1-local.1`) compatible: `SUPPORTED_DSH_VERSIONS` gains both, and the four `@deepseek-ai/dsh-*` peer ranges gain `|| 0.1.6-alpha.1 || 0.1.6-alpha.1-local.1` in the same release. Same hard ordering as 0.3.33 — the runtime gate quarantines the whole plugin tree, so this release has to reach the registry **before** 0.1.6 is deployed to the gateway.
+- `scripts/check-dsh-compatibility.mjs`: two markers moved inside the conversation tree upstream (`data-conversation-scroll` from `skeleton/ConversationRoot.tsx` to `skeleton/ConversationContent.tsx`, `data-input-scroll` from `skeleton/InputBar.tsx` to `input/editor/DraftEditor.tsx`). The check now reads the whole `packages/client/ui-conversation/src/client` subtree through a recursive `sourceTextUnder()` helper for those two markers, while `data-composer-card` and `aria-haspopup="listbox"` stay pinned to `InputBar.tsx`. Verified against the 0.1.6 source tree: `DSH frontend contract recognized: 0.1.6-alpha.1 (renderer-v2; not yet declared supported)` before the declaration lands, all green after.
+- No functional change: 0.1.6 leaves the mobile-facing contracts untouched (verified upstream: `ui-layout` `src/` unchanged, `client/modules/src/client/system.ts` unchanged, `ui-sidebar-right` additive, `sidebar.footer.action` byte-identical, webserver `Config` unchanged).
+
 ## 0.3.33 - 2026-09-14
 
 - Declare DeepSeek Harness 0.1.5-rc.2-local.5 compatible. The runtime version gate quarantines this plugin — and with it the whole plugin tree the mobile page boots — whenever the running dsh version is absent from `SUPPORTED_DSH_VERSIONS`, so the new version has to be named here **before** the core is deployed to the gateway, not after. The four `peerDependencies` ranges gain it in the same release. No functional change: this release is the version declaration only.
