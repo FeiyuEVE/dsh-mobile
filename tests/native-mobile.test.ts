@@ -28,6 +28,19 @@ describe('native mobile presentation', () => {
     expect(NATIVE_MOBILE_STYLES).not.toContain('html.dsh-native-mobile-active :focus { outline:none')
   })
 
+  it('keeps injected mobile chrome out of the desktop page layout', () => {
+    // 非回环地址打开 3080 时 native surface 照样注入，但它的盒子规则全在
+    // max-width:720px 里。没有这层基线，backdrop 会退回 <body> 尾部的行内流，
+    // 把文档撑高 ~18px 逼出整页滚动条（toast 带文字后同理，媒体快捷键在指令菜单里
+    // 变成两个无样式大按钮）。断言基线存在、排在断点之前，且断点内重新放行。
+    const base = '.dsh-native-mobile-backdrop,.dsh-mobile-branch-toast,.dsh-mobile-media-toast,.dsh-mobile-media-shortcuts { display:none; }'
+    expect(NATIVE_MOBILE_STYLES).toContain(base)
+    expect(NATIVE_MOBILE_STYLES.indexOf(base)).toBeLessThan(NATIVE_MOBILE_STYLES.indexOf('@media (max-width:720px)'))
+    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-native-mobile-backdrop:not([hidden]) { display:block; animation:dsh-mobile-fade-in')
+    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-branch-toast,.dsh-mobile-media-toast { display:block; position:fixed;')
+    expect(NATIVE_MOBILE_STYLES).toContain('.dsh-mobile-media-shortcuts { box-sizing:border-box; display:grid;')
+  })
+
   it('stacks narrow settings and conversation metadata instead of squeezing text', () => {
     expect(NATIVE_MOBILE_STYLES).toContain('data-slot="settings.general.item"')
     expect(NATIVE_MOBILE_STYLES).toContain('flex-direction:column !important')

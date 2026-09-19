@@ -1,5 +1,13 @@
 /** Mobile feature and compatibility rules applied to DSH React surfaces. */
 export const NATIVE_MOBILE_STYLES = `
+/* The native surface is injected on every non-loopback page, but the rules that
+   give its chrome a box all live inside the mobile breakpoint below. Outside it
+   the element gets no box rules at all and falls back to inline flow at the end
+   of <body>: the backdrop <button> then grows the document by ~18px and forces a
+   page scrollbar on a desktop-width page, the toasts do the same once they carry
+   text, and the media shortcuts render as unstyled buttons in the composer menu.
+   Keep all four out of the layout unless the breakpoint actually applies. */
+.dsh-native-mobile-backdrop,.dsh-mobile-branch-toast,.dsh-mobile-media-toast,.dsh-mobile-media-shortcuts { display:none; }
 @media (max-width:720px) {
   html.dsh-native-mobile-active,html.dsh-native-mobile-active body { width:100%; height:100%; overflow:hidden; }
   html.dsh-native-mobile-active { --dsh-mobile-motion-duration:200ms; --dsh-mobile-motion-ease:cubic-bezier(.22,1,.36,1); }
@@ -52,7 +60,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-toggle] { width:44px !important; height:44px !important; min-width:44px !important; min-height:44px !important; }
   [data-dsh-mobile-sidebar][data-open="false"] [data-dsh-mobile-toggle] > svg[class*="_railFish"] { transform:translateY(-4px) !important; }
   .dsh-native-mobile-backdrop { position:fixed; z-index:235; inset:env(safe-area-inset-top) 0 0; border:0; background:rgb(15 23 42 / 32%); }
-  .dsh-native-mobile-backdrop:not([hidden]) { animation:dsh-mobile-fade-in var(--dsh-mobile-motion-duration) ease-out; }
+  .dsh-native-mobile-backdrop:not([hidden]) { display:block; animation:dsh-mobile-fade-in var(--dsh-mobile-motion-duration) ease-out; }
   .dsh-native-mobile-backdrop[hidden] { display:none; }
   [data-dsh-mobile-details] { position:fixed !important; z-index:250 !important; inset:0 0 0 auto !important; width:min(94vw,460px) !important; max-width:none !important; transform:translateX(100%); transition:transform var(--dsh-mobile-motion-duration) var(--dsh-mobile-motion-ease); background:var(--dsw-bg, #fff); box-shadow:-18px 0 46px rgb(15 23 42 / 18%); }
   [data-dsh-mobile-details][data-open="true"] { transform:translateX(0); }
@@ -132,7 +140,7 @@ export const NATIVE_MOBILE_STYLES = `
   [data-dsh-mobile-center] [role="dialog"][aria-label*="Context"] [class*="_rows"] > [class*="_row"] { display:flex !important; align-items:center !important; justify-content:space-between !important; width:100% !important; min-width:0 !important; white-space:nowrap !important; }
   [data-dsh-mobile-center] [role="dialog"][aria-label*="上下文"] :is(dt,dd),
   [data-dsh-mobile-center] [role="dialog"][aria-label*="Context"] :is(dt,dd) { white-space:nowrap !important; word-break:keep-all !important; }
-  .dsh-mobile-branch-toast,.dsh-mobile-media-toast { position:fixed; z-index:330; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
+  .dsh-mobile-branch-toast,.dsh-mobile-media-toast { display:block; position:fixed; z-index:330; top:max(12px,env(safe-area-inset-top)); left:50%; max-width:calc(100vw - 32px); box-sizing:border-box; padding:7px 14px; border:1px solid rgb(15 23 42 / 10%); border-radius:999px; background:rgb(15 23 42 / 92%); color:#fff; font-size:13px; line-height:20px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; pointer-events:none; transform:translate(-50%,-8px); transition:opacity 160ms ease,transform 160ms ease; }
   .dsh-mobile-branch-toast[data-visible="true"],.dsh-mobile-media-toast[data-visible="true"] { opacity:1; transform:translate(-50%,0); }
   .dsh-mobile-media-shortcuts { box-sizing:border-box; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; padding:4px 4px 8px; margin-bottom:4px; border-bottom:1px solid var(--dsw-alias-border-inverted,var(--dsw-alias-border-subtle,rgb(148 163 184 / 28%))); }
   .dsh-mobile-media-action { box-sizing:border-box; display:flex; align-items:center; justify-content:flex-start; gap:8px; width:100%; min-width:0; min-height:44px; padding:8px 10px; border:0; border-radius:10px; background:var(--dsw-alias-interactive-bg-hover,rgb(148 163 184 / 12%)); color:var(--dsw-alias-label-primary,inherit); cursor:pointer; font:inherit; font-size:14px; line-height:22px; text-align:left; touch-action:manipulation; }
