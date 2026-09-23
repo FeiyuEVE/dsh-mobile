@@ -1,5 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm/message'
+// dsh 0.1.7 的 V4 会话格式取消了通用的 catch-all `plugin` 来源 kind，改为「每个生产者
+// 在自己的模块里用声明合并声明自己的 kind」（见 dsh-llm 的 MessageSourceMap JSDoc）。
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 // Side-effect type import: activates dsh-commands' Context augmentation so
 // `ctx.commands` and its handler types resolve without a runtime dependency.
 import type {} from '@deepseek-ai/dsh-commands'
@@ -42,6 +45,13 @@ import {
   selectLanNetwork,
   type ManagedSetup,
 } from './managed-setup.js'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /** `/mobile` 交给 agent 的自定义需求：折叠成一行 context 注入行（form=notice）。 */
+    'dsh-mobile': { kind: 'dsh-mobile' } & ContextFormed
+  }
+}
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-mobile'
@@ -569,8 +579,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         agent.steer(createUserMessage({
           content: [{ type: 'text', text: `${MOBILE_CUSTOMIZATION_GUIDE}\n\n用户需求：${task}` }],
           source: {
-            kind: 'plugin',
-            plugin: 'dsh-mobile',
+            kind: 'dsh-mobile',
             form: 'notice',
             summary: boundContextSummary(`/mobile ${task}`),
           },

@@ -246,10 +246,11 @@ describe('stock DSH lifecycle', () => {
     expect(steeredMessage).toBeDefined()
     expect(steeredMessage!.text).toContain('mobile-access')
     expect(steeredMessage!.text).toContain('把手机端改成深色主题')
-    // The guide rides as a plugin-source context injection, not a user bubble.
+    // The guide rides as producer-owned context injection, not a user bubble.
+    // dsh 0.1.7 的 V4 会话格式删掉了通用的 catch-all `plugin` 来源 kind，改为每个生产者
+    // 声明自己的 kind（`plugin: 'dsh-mobile'` 折进 `kind: 'dsh-mobile'`）。
     expect(steeredMessage!.source).toMatchObject({
-      kind: 'plugin',
-      plugin: 'dsh-mobile',
+      kind: 'dsh-mobile',
       form: 'notice',
       summary: '/mobile 把手机端改成深色主题',
     })

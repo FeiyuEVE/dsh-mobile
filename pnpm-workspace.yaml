@@ -5,6 +5,10 @@
 # (declare module '@deepseek-ai/cordis') 与运行时 Service 身份都以 vendor/cordis
 # 为准,若用 registry 副本会出现双份 cordis(类型增强失效、服务身份割裂)。
 overrides:
+  # 0.1.7 起 schemastery 新增 Mode/Volatile：配置 schema 的类型与运行时品牌
+  # (`isVolatile`) 都必须与 dsh 自身同一份实现，否则类型不兼容、且 dsh 读到
+  # 另一份副本造的 Volatile 可能认不出（同 cordis 的「双份即割裂」理由）。
+  '@deepseek-ai/schemastery': 'link:../deepseek-harness/vendor/schemastery'
   '@deepseek-ai/cordis': 'link:../deepseek-harness/vendor/cordis'
   '@deepseek-ai/dsh-client-connection': 'link:../deepseek-harness/packages/client/connection'
   '@deepseek-ai/dsh-commands': 'link:../deepseek-harness/packages/interaction/commands'
