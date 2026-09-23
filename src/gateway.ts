@@ -16,6 +16,7 @@ import {
 import { createServer as createHttpsServer, type Server as HttpsServer, type ServerOptions } from 'node:https'
 import { connect, isIP, type AddressInfo, type Socket } from 'node:net'
 import { Transform, type TransformCallback } from 'node:stream'
+import { StringDecoder } from 'node:string_decoder'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { createGzip, gzip } from 'node:zlib'
@@ -346,7 +347,7 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
 }
 
 /**
- * Drop the stock page's `<link rel="preload" as="script" href="/plugins/??…">`.
+ * Drop the stock page's `<link rel="preload" as="script" href="/plugins/??…">`（0.1.7 起上游写成相对形态 `plugins/??…`，两种前缀都要认）。
  *
  * Why: upstream preloads the ONE combined client bundle it is about to execute, but this gateway
  * replaces that bundle with its own content-addressed batch (`/mobile-access/mobile-boot/<hash>.js`)
@@ -361,7 +362,7 @@ function rewriteMobileIndexWithBatch(html: string): RewrittenMobileIndex {
  */
 function stripStockBundlePreload(html: string): string {
   return html.replace(/<link\b[^>]*>/giu, (tag) => (
-    /\brel\s*=\s*["']?preload\b/iu.test(tag) && /\bhref\s*=\s*["'][^"']*\/plugins\/\?\?/iu.test(tag) ? '' : tag
+    /\brel\s*=\s*["']?preload\b/iu.test(tag) && /\bhref\s*=\s*["'][^"']*plugins\/\?\?/iu.test(tag) ? '' : tag
   ))
 }
 
@@ -470,6 +471,76 @@ class ByteLimitTransform extends Transform {
       return
     }
     callback(null, buffer)
+  }
+}
+
+/**
+ * 丢掉 `/plugins/events` 上 `type:"graph"` 的帧。
+ *
+ * 为什么必须丢：移动页的 boot graph 是网关**改写过的**——布局模块被换成
+ * `mobile-layout.js`（专属移动布局）、布局批次的 URL 被换成 `mobile-boot/<hash>.js`。
+ * 但 HMR 客户端一连上 `/plugins/events`，上游就会推一帧**它自己那份 stock graph**，
+ * `entries.sync(graph)` 把页面手上的改写图整体覆盖回 stock：布局模块又变回官方
+ * `plugins/??@deepseek-ai/dsh-client-ui-layout/client.js` 并被重新拉取，专属布局的注册
+ * 被冲掉，shell 渲染 `root` 插槽时一个注册都还没有 →
+ * `SlotAssemblyError: renderSlot('root') before any 'root' registration (boot order)`
+ * → React 树崩掉、手机页**白屏**（2026-09-23 在 dsh 0.1.7 上实测；同一次启动里把
+ * `/plugins/events` 拦掉，页面立刻正常挂载 `.dshm-shell`）。
+ *
+ * 只丢 `graph` 帧：`rebuilt`（单模块热替换）与注释帧（`: connected`）原样透传，HMR 心跳
+ * 与单模块热更不受影响；从 stock 图同步回来的「插件集变化」对移动页本来就没有意义——
+ * 手机页的模块集由网关按移动形态决定，换版本即换内容寻址 URL。
+ */
+class MobilePluginEventsFilter extends Transform {
+  private readonly decoder = new StringDecoder('utf8')
+  private pending = ''
+  private data: string[] = []
+
+  override _transform(chunk: Buffer, encoding: BufferEncoding, callback: TransformCallback): void {
+    const text = this.decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding))
+    const out: string[] = []
+    this.pending += text
+    for (;;) {
+      const newline = this.pending.indexOf('\n')
+      if (newline < 0) break
+      const line = this.pending.slice(0, newline + 1)
+      this.pending = this.pending.slice(newline + 1)
+      const body = line.replace(/\r?\n$/u, '')
+      if (body.length === 0) {
+        // 空行 = 一帧结束：data 行拼起来若是一帧 stock graph，整帧丢掉。
+        if (!isStockGraphFrame(this.data.join('\n'))) out.push(...this.data.map(entry => `data: ${entry}\n`), '\n')
+        this.data = []
+        continue
+      }
+      // data 行按 SSE 规范可多次出现、以换行拼接；这里存**值**（剥掉 `data:` 前缀），
+      // 判定与重发都以此为唯一形态，避免把 `data: ` 前缀喂进 JSON.parse。
+      if (body.startsWith('data:')) this.data.push(body.slice(5).replace(/^ /u, ''))
+      else out.push(line) // 注释 / event / id / retry 行原样透传
+    }
+    callback(null, out.join(''))
+  }
+
+  override _flush(callback: TransformCallback): void {
+    const rest = this.pending + this.decoder.end()
+    this.pending = ''
+    const pendingFrame = this.data.length === 0 ? '' : `${this.data.map(entry => `data: ${entry}\n`).join('')}\n`
+    this.data = []
+    if (rest.length === 0 && pendingFrame.length === 0) {
+      callback()
+      return
+    }
+    callback(null, `${pendingFrame}${rest}`)
+  }
+}
+
+/** 一帧 SSE data 是否是上游推来的 stock boot graph。 */
+function isStockGraphFrame(payload: string): boolean {
+  if (!payload.includes('"graph"')) return false
+  try {
+    const value: unknown = JSON.parse(payload)
+    return isJsonRecord(value) && value.type === 'graph'
+  } catch {
+    return false
   }
 }
 
@@ -651,6 +722,11 @@ function isCompressibleContentType(value: string | string[] | undefined): boolea
   const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
   return mediaType.startsWith('text/')
     || /^(?:application\/(?:javascript|json|xml|x-javascript)|image\/svg\+xml)$/u.test(mediaType)
+}
+
+/** 移动页订阅的那条 HMR 通道（文档相对路径，网关侧按 pathname 判定）。 */
+function isPluginEventsRequest(request: IncomingMessage): boolean {
+  return request.method === 'GET' && (request.url?.split('?', 1)[0] ?? '') === '/plugins/events'
 }
 
 function isEventStreamContentType(value: string | string[] | undefined): boolean {
@@ -1905,8 +1981,14 @@ export class MobileAccessGateway {
   }
 
   private async readUpstreamClientBundle(source: string, signal: AbortSignal): Promise<Buffer> {
-    if (!source.startsWith('/plugins/') || source.includes('#')) throw new HttpError(502, 'upstream_unavailable')
-    const target = new URL(source, this.config.upstreamOrigin)
+    // Boot manifest 条目 URL 的形态在两代 dsh 之间不一样：0.1.6 及更早是绝对路径
+    // `/plugins/??…`，0.1.7 起去掉了前导斜杠（上游 `packages/client/modules/src/index.ts:472`
+    // 的 `artifact.url.slice(1)`，同一处 combo 引用也走相对形态）。只认绝对形态会让整份
+    // mobile-boot 批次在这一步 502（`upstream_unavailable`），手机上表现为白屏——所以两种
+    // 形态都先归一化成绝对路径再取上游。
+    const normalized = source.startsWith('/') ? source : `/${source}`
+    if (!normalized.startsWith('/plugins/') || normalized.includes('#')) throw new HttpError(502, 'upstream_unavailable')
+    const target = new URL(normalized, this.config.upstreamOrigin)
     if (target.origin !== this.config.upstreamOrigin.origin) throw new HttpError(502, 'upstream_unavailable')
     let upstreamRequest: ClientRequest | undefined
     const aborted = (): void => { upstreamRequest?.destroy(new Error('request aborted')) }
@@ -2045,10 +2127,16 @@ export class MobileAccessGateway {
         headers['content-encoding'] = 'gzip'
         addVaryAcceptEncoding(headers)
       }
+      // 移动页的 /plugins/events 要过一层帧过滤：上游推来的 stock graph 会覆盖掉
+      // 网关改写过的 boot graph（见 MobilePluginEventsFilter 的说明）。
+      const filterPluginEvents = isPluginEventsRequest(request) && isEventStreamContentType(proxied.headers['content-type'])
+      if (filterPluginEvents) delete headers['content-length']
       response.writeHead(proxied.statusCode ?? 502, headers)
       await Promise.all([
         bodyDone,
-        compressed ? pipeline(proxied, createGzip(), response) : pipeline(proxied, response),
+        filterPluginEvents
+          ? pipeline(proxied, new MobilePluginEventsFilter(), response)
+          : compressed ? pipeline(proxied, createGzip(), response) : pipeline(proxied, response),
       ])
     } catch (error) {
       holder.request?.destroy()

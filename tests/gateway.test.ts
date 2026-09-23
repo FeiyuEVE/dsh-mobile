@@ -172,7 +172,7 @@ function websocketAccept(key: string): string {
   return createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, 'ascii').digest('base64')
 }
 
-async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentication = false): Promise<{
+async function upstream(boot: 'legacy' | 'batched' | 'relative' = 'legacy', requireAuthentication = false): Promise<{
   port: number
   observations: UpstreamObservation[]
   upgradeObservations: IncomingHttpHeaders[]
@@ -209,25 +209,31 @@ async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentica
       return
     }
     if (incoming.url === '/' && incoming.headers.accept?.includes('text/html')) {
+      // 'relative' 复刻 dsh 0.1.7 的 boot manifest：条目 URL 没有前导斜杠
+      // （上游 `packages/client/modules/src/index.ts:472` 的 `artifact.url.slice(1)`）。
+      // 'batched' 是 0.1.2..0.1.6 的绝对形态。preload 两种形态各自对应。
       const entries = boot === 'legacy'
         ? [
             { id: '@deepseek-ai/dsh-client-ui-layout', url: '/plugins/layout.js', rev: 'stock-layout', inject: ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-theme'] },
             { id: 'feature', url: '/plugins/feature.js', rev: 'feature' },
           ]
         : [
-            { id: '@deepseek-ai/dsh-client-ui-renderer', url: '/plugins/renderer.js?rev=renderer', rev: 'renderer' },
+            { id: '@deepseek-ai/dsh-client-ui-renderer', url: `${boot === 'relative' ? '' : '/'}plugins/renderer.js?rev=renderer`, rev: 'renderer' },
             {
               id: '@deepseek-ai/dsh-client-ui-layout',
-              url: '/plugins/layout.js?rev=layout',
+              url: `${boot === 'relative' ? '' : '/'}plugins/layout.js?rev=layout`,
               rev: 'layout',
               inject: ['@deepseek-ai/dsh-client-locale', '@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-session', '@deepseek-ai/dsh-client-ui-theme'],
             },
-            { id: 'feature', url: '/plugins/feature.js?rev=feature', rev: 'feature' },
+            { id: 'feature', url: `${boot === 'relative' ? '' : '/'}plugins/feature.js?rev=feature`, rev: 'feature' },
           ]
       const graph = boot === 'legacy'
         ? { rev: 'stock', entries }
-        : { rev: 'stock', entries, batches: [{ phase: 'application', url: '/plugins/application.js?rev=stock', rev: 'stock-batch', entries: entries.map(entry => entry.id) }] }
-      const body = `<!doctype html><html><head><script>globalThis["__DSH_BOOT__"] = ${JSON.stringify(graph)};</script></head><body></body></html>`
+        : { rev: 'stock', entries, batches: [{ phase: 'application', url: `${boot === 'relative' ? '' : '/'}plugins/application.js?rev=stock`, rev: 'stock-batch', entries: entries.map(entry => entry.id) }] }
+      const preload = boot === 'relative'
+        ? '<link rel="preload" as="script" href="plugins/??feature.js&rev=feature">'
+        : '<link rel="preload" as="script" href="/plugins/??feature.js&rev=feature">'
+      const body = `<!doctype html><html><head>${preload}<script>globalThis["__DSH_BOOT__"] = ${JSON.stringify(graph)};</script></head><body></body></html>`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(body) })
       response.end(body)
       return
@@ -240,9 +246,12 @@ async function upstream(boot: 'legacy' | 'batched' = 'legacy', requireAuthentica
         connection: 'keep-alive',
       })
       response.write(': connected\n\n')
+      // 线上上游一连上就推一帧 stock graph，随后按需推单模块 rebuilt 帧。
+      response.write(`data: ${JSON.stringify({ type: 'graph', graph: { rev: 'stock', entries: [], batches: [] } })}\n\n`)
+      response.write(`data: ${JSON.stringify({ type: 'rebuilt', id: 'feature', rev: 'feature-2' })}\n\n`)
       return
     }
-    if (boot === 'batched' && incoming.url?.startsWith('/plugins/') === true) {
+    if ((boot === 'batched' || boot === 'relative') && incoming.url?.startsWith('/plugins/') === true) {
       const body = `globalThis.__loadedMobileFixture ??= []; globalThis.__loadedMobileFixture.push(${JSON.stringify(incoming.url)});\n`
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-length': Buffer.byteLength(body) })
       response.end(body)
@@ -412,6 +421,46 @@ async function openWebSocket(
 }
 
 describe('HTTP gateway', () => {
+  it('drops the upstream stock graph frame from the mobile /plugins/events stream', async () => {
+    // 回归（2026-09-23，dsh 0.1.7 手机白屏）：上游推的 stock graph 一旦到达页面，
+    // `entries.sync(graph)` 会把网关改写过的 boot graph（专属移动布局 + mobile-boot
+    // 批次）整体覆盖回 stock，布局模块被重新拉取、root 注册被冲掉 →
+    // `renderSlot('root') before any 'root' registration (boot order)` → React 树崩、白屏。
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await pair(instance)
+    const body = await new Promise<string>((resolve, reject) => {
+      const outgoing = requestHttp({
+        host: '127.0.0.1',
+        port: instance.address().port,
+        path: '/plugins/events',
+        method: 'GET',
+        headers: {
+          ...browserHeaders(instance),
+          cookie: `${SESSION_COOKIE}=${paired.session}; ${DEVICE_COOKIE}=${paired.device}`,
+          accept: 'text/event-stream',
+        },
+        agent: false,
+      }, (response) => {
+        let text = ''
+        response.setEncoding('utf8')
+        response.on('data', (chunk) => {
+          text += String(chunk)
+          // 三帧都到齐（graph 被丢、rebuilt 与注释透传）即可收工。
+          if (text.includes('rebuilt') && text.includes(': connected')) { response.destroy(); resolve(text) }
+        })
+        response.once('error', (error) => reject(error))
+      })
+      outgoing.once('error', reject)
+      outgoing.end()
+      setTimeout(() => { outgoing.destroy(); resolve('') }, 5_000).unref()
+    })
+    expect(body).toContain(': connected')
+    expect(body).toContain('"type":"rebuilt"')
+    expect(body).not.toContain('"type":"graph"')
+    expect(body).not.toContain('"graph"')
+  })
+
   it('keeps the /plugins/events SSE uncompressed and alive past the upstream idle timeout', async () => {
     const inner = await upstream()
     // 上游空闲超时压到 1s：修复前本用例会在 1s 后断流（线上 upstreamTimeoutMs=300s，
@@ -561,6 +610,38 @@ describe('HTTP gateway', () => {
     expect(stock.status).toBe(200)
     expect(stock.body).not.toContain('__DSH_MOBILE_FRONTEND__')
     expect(stock.body).toContain('/plugins/layout.js')
+  })
+
+  it('assembles the mobile boot batch when the boot manifest uses 0.1.7 relative plugin URLs', async () => {
+    // 回归（2026-09-23，dsh 0.1.7 升级时线上手机白屏抓到）：0.1.7 的 boot manifest 条目
+    // URL 去掉了前导斜杠，`readUpstreamClientBundle` 只认 `/plugins/` 会让整份批次 502
+    // （`upstream_unavailable`），专用移动前端因此起不来。
+    const inner = await upstream('relative')
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-relative-layout-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const mobileLayoutFile = join(directory, 'mobile-layout.js')
+    await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
+    const instance = await gateway(inner.port, { mobileLayoutFile })
+    const paired = await pair(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      accept: 'text/html,application/xhtml+xml',
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+    }
+
+    const mobile = await request(instance.address().port, '/', { headers })
+    expect(mobile.status).toBe(200)
+    // 相对形态的 preload 也必须被剥掉（否则手机上整包下载两次）
+    expect(mobile.body).not.toContain('rel="preload" as="script" href="plugins/??')
+    const match = /"url":"(\/mobile-access\/mobile-boot\/[a-f\d]{64}\.js)"/u.exec(mobile.body)
+    expect(match?.[1]).toBeDefined()
+    const batch = await request(instance.address().port, match![1]!, { headers })
+    expect(batch.status).toBe(200)
+    expect(batch.headers['content-type']).toBe('text/javascript; charset=utf-8')
+    expect(batch.body).toContain('renderer.js?rev=renderer')
+    expect(batch.body).toContain('__dedicatedMobileLayout = true')
+    expect(batch.body).toContain('feature.js?rev=feature')
+    expect(batch.body).not.toContain('layout.js?rev=layout')
   })
 
   it('serves a DSH 0.1.2 mobile application batch without the stock layout factory', async () => {

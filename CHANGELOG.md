@@ -1,3 +1,30 @@
+## 0.3.37 — 手机页白屏的第二处根因：上游 stock graph 帧覆盖网关改写的 boot graph
+
+**症状（0.3.36 之后仍复现，dsh 0.1.7）**：`mobile-boot` 批次已经能组装（0.3.36 修的 502 不再出现，批次 200、5.1 MB），但手机页仍是**白屏**，页面里 `pageerror: SlotAssemblyError: renderSlot('root') before any 'root' registration (boot order)`，body 为空；`.dshm-shell` 偶发挂上一瞬又被冲掉。
+
+**根因**：移动页的 boot graph 是网关改写过的（布局模块 → `mobile-layout.js`、布局批次 URL → `mobile-boot/<hash>.js`），而 HMR 客户端一连上 `/plugins/events`，上游就推一帧**它自己那份 stock graph**；`entries.sync(graph)` 把页面手上的改写图整体覆盖回 stock → 官方布局模块被按 stock URL 重新拉取（实测网络日志里 `/plugins/??@deepseek-ai/dsh-client-ui-layout/client.js&rev=76ce175d3f8e` 紧跟 `/plugins/events` 之后出现）→ 专属布局的 root 注册被冲掉 → shell 渲染 `root` 插槽时零注册 → React 树崩、白屏。
+**判定实验**：同一次启动里把 `/plugins/events` 拦掉（`NO HMR`），页面立刻正常挂载（`textbox=1`、`.dshm-shell=1`、无 root 报错），stock 布局 URL 也不再被请求。
+
+**修复**：网关在代理 `/plugins/events` 时过一层 `MobilePluginEventsFilter`——只丢 `type:"graph"` 的 SSE 帧，注释帧（`: connected`）与 `type:"rebuilt"`（单模块热替换）原样透传，HMR 心跳与单模块热更不受影响。从 stock 图同步回来的「插件集变化」对移动页本来就没有意义：手机页的模块集由网关按移动形态决定，换版本即换内容寻址 URL。
+
+**验证**：
+- `tests/gateway.test.ts` 新增用例「drops the upstream stock graph frame from the mobile /plugins/events stream」（上游 fixture 现在会推 graph + rebuilt 两帧）：断言 `: connected` 与 `"type":"rebuilt"` 到达、`"type":"graph"` 与 `"graph"` 一个都不剩。把过滤条件改成 `false` 该用例即失败（已实测）。
+- `npm run verify` 全绿：23 文件 **231 例**（含新用例）、typecheck 0 错误、`check:mobile-release` 通过。
+- 部署 web(18443)/staging(18452) 后真机路径复跑 `scratch-release/e2e/mobile.cjs`。
+
+## 0.3.36 — dsh 0.1.7：boot manifest 的插件 URL 改为相对形态，mobile-boot 批次必须两种都认
+
+**症状（线上，dsh 升级到 0.1.7-alpha.2-local.1 之后）**：手机经网关打开专用移动前端时**白屏**——HTML 回来了、`window.__DSH_MOBILE_FRONTEND__="dedicated"` 也在，但 `<script src="/mobile-access/mobile-boot/<hash>.js">` 回 **502**，响应体为空、`Content-Type: application/json`，浏览器报「Refused to execute script … MIME type ('application/json') is not executable」，页面里没有任何 DOM。
+
+**根因**：dsh 0.1.7 把 boot manifest 的条目 URL 从绝对路径改成了相对路径（上游 `packages/client/modules/src/index.ts:472` 的 `artifact.url.slice(1)`，`0.1.6` 及更早是 `/plugins/??…`，`0.1.7` 起是 `plugins/??…`）。网关组装批次时 `readUpstreamClientBundle()` 硬校验 `source.startsWith('/plugins/')`，相对形态直接抛 `HttpError(502, 'upstream_unavailable')`，整份批次组装失败。
+
+**修复**：
+- `readUpstreamClientBundle()`：先把条目 URL 归一化成绝对路径（缺前导斜杠就补 `/`）再校验并取上游——两代 dsh 的形态都认。
+- `stripStockBundlePreload()`：去掉 preload 的 `<link>` 时同样不再要求 `href` 里 `plugins/??` 前必须有斜杠，否则 0.1.7 下那条 4.5 MB 的重复预加载会漏剥（该修复的原始动机见函数注释）。
+- `tests/gateway.test.ts`：上游 fixture 增加 `boot: 'relative'` 变体（相对条目 URL + 相对 preload），新增用例「assembles the mobile boot batch when the boot manifest uses 0.1.7 relative plugin URLs」——把归一化改回 `const normalized = source` 该用例即失败（已实测），批次的三个条目顺序、专用布局替换、preload 剥离同时被钉住。
+
+**验证**：`npx vitest run tests/gateway.test.ts` 30/30（含新用例）；`npm run verify` 全绿；发布后用真实浏览器打网关 18443 复跑 `scratch-release/e2e/mobile.cjs`（配对 + 专用前端 + 布局 + 真实回合）。
+
 # Changelog
 
 Notable changes to DSH Mobile are recorded here. GitHub Releases remain the source for downloadable packages and complete generated commit notes.
