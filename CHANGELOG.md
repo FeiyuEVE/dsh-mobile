@@ -1,3 +1,18 @@
+## 0.3.38（未发布）— 客户端诊断的 url 改为对象形态：此前整类诊断被摄入管道静默丢弃
+
+**症状**：插件自带的 `reportClientDiagnostic`（文件资源提供者缺失、移动页状态等诊断）在真机上一条都查不到——ES 里 `mobile-page-state` 自上线以来零条，页面侧却没有任何报错。
+
+**根因**：`src/client.ts` 把 `url` 发成字符串（`` `${location.origin}${location.pathname}` ``）。摄入管道按**对象**取 `url`（`url.path` / `url.domain`），字符串形态的事件会被**静默丢弃**：客户端仍看到 HTTP 200，服务端什么都不落。同一约束 2026-09-24 在做移动端探针时已实测过（探针改成对象后才开始有数据）。
+
+**修复**：改为 `url: { path: location.pathname, domain: location.hostname }`，与探针一致；`pathname` 不含查询串，页面 token 仍然不会外发。
+
+**验证**：
+- `tests/client-diagnostics.test.ts` 断言 `body.url` 等于 `{ path, domain }`，并保留 `?token=secret` 的 stub 作「绝不外发 token」哨兵。
+- `npm run test` 23 文件 / **231 例**全绿，`npm run typecheck` 0 错，`npm run build` 通过。
+- 实机链路：重建的 `lib/client.js` 覆盖到 web/staging 两个 profile 的已装副本后，从 3080 拉 `/plugins/??@feiyueve/dsh-mobile/client.js&rev=…` 确认下发的是新形态（备份在 `/home/feiyueve/tmp/mobile-perf/dsh-mobile-installed-backup/`；rev 由 mtime/ctime/size 派生，改文件即换 URL，无需重启）。
+
+**注意**：本次只就地覆盖已装副本，私源 `@feiyueve/dsh-mobile` 仍是 `0.3.37`；下次发版要把这条作为 0.3.38 发布并同步两个 profile。
+
 ## 0.3.37 — 手机页白屏的第二处根因：上游 stock graph 帧覆盖网关改写的 boot graph
 
 **症状（0.3.36 之后仍复现，dsh 0.1.7）**：`mobile-boot` 批次已经能组装（0.3.36 修的 502 不再出现，批次 200、5.1 MB），但手机页仍是**白屏**，页面里 `pageerror: SlotAssemblyError: renderSlot('root') before any 'root' registration (boot order)`，body 为空；`.dshm-shell` 偶发挂上一瞬又被冲掉。

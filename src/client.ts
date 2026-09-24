@@ -2014,8 +2014,11 @@ export function reportClientDiagnostic(entry: Record<string, unknown>): void {
       service: 'dsh-web-client',
       source: 'frontend',
       ts: Date.now(),
-      // The query string can carry the process token on direct entries; never report it.
-      url: `${location.origin}${location.pathname}`,
+      // The ingest pipeline keys `url` as an object (`url.path` / `url.domain`) and silently
+      // drops an event whose `url` is a bare string — every report through this path went
+      // missing until 2026-09-25. `pathname` excludes the query string, which can carry the
+      // process token on direct entries, so the token never leaves the page.
+      url: { path: location.pathname, domain: location.hostname },
       ...entry,
     })
     void fetch('/log-ingest', {

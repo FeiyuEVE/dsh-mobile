@@ -41,7 +41,7 @@ afterEach(() => {
 describe('mobile client diagnostics', () => {
   it('reports a missing file provider once, after a confirming second check', async () => {
     vi.useFakeTimers()
-    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/', hostname: 'phone.example' })
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
 
     const dispose = watchFileResourceProvider(context(resourcesWith('none')) as never)
@@ -58,14 +58,14 @@ describe('mobile client diagnostics', () => {
       source: 'frontend',
       kind: 'resource-provider-missing',
       protocol: 'file',
-      url: 'https://phone.example:18443/',
+      url: { path: '/', domain: 'phone.example' },
     })
     dispose()
   })
 
   it('stays silent while the provider is registered', async () => {
     vi.useFakeTimers()
-    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/', hostname: 'phone.example' })
     const send = vi.fn(async () => new Response('{}', { status: 200 }))
     vi.stubGlobal('fetch', send)
 
@@ -85,7 +85,7 @@ describe('mobile client diagnostics', () => {
   })
 
   it('reports which services exist and what each open preview tab resolves to', () => {
-    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/', hostname: 'phone.example' })
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
     stubPage([tab('dsh-resource://file/session/s1/t7.txt', 'loading')], '文件资源服务不可用。')
 
@@ -104,7 +104,7 @@ describe('mobile client diagnostics', () => {
 
   it('reports a preview tab once, and keeps watching until its budget is spent', async () => {
     vi.useFakeTimers()
-    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/' })
+    vi.stubGlobal('location', { origin: 'https://phone.example:18443', pathname: '/', hostname: 'phone.example' })
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
     const address = 'dsh-resource://file/session/s1/t7.txt'
     let state = 'loading'
@@ -155,15 +155,17 @@ describe('mobile client diagnostics', () => {
     expect(parsed[0]).toBe('dsh-resource:|file')
   })
 
-  it('carries the page ingest token and never reports a token-bearing url', () => {
-    vi.stubGlobal('location', { origin: 'http://192.168.0.240:3080', pathname: '/' })
+  it('reports url as an object and never a token-bearing value', () => {
+    vi.stubGlobal('location', { origin: 'http://192.168.0.240:3080', pathname: '/', hostname: '192.168.0.240', search: '?token=secret' })
     vi.stubGlobal('__DSH_INGEST_TOKEN__', 'page-token')
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
 
     reportClientDiagnostic({ kind: 'probe', message: 'why' })
     const calls = ingest()
     expect(calls[0]?.token).toBe('page-token')
-    expect(JSON.stringify(calls[0]?.body)).not.toContain('?token=')
+    // A bare string here is dropped by the ingest pipeline, so the shape is the contract.
+    expect(calls[0]?.body['url']).toEqual({ path: '/', domain: '192.168.0.240' })
+    expect(JSON.stringify(calls[0]?.body)).not.toContain('token=')
   })
 
   it('swallows a delivery failure', () => {
