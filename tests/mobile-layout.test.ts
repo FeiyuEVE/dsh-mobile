@@ -358,6 +358,18 @@ describe('dedicated mobile layout root contributions', () => {
       expect(source.getSnapshot()).toBe(selected)
       expect(notifications).toEqual(['changed'])
 
+      // dsh 0.2.x reads the very same selection off the layout service itself —
+      // `ui-sidebar-right` calls `ctx.layout.panelInfo.getSnapshot()` inside a
+      // load-time effect, `ui-plugin-manager` subscribes when the `main` slot
+      // appears — so the module replacing the official layout must expose the
+      // member there too, pointing at the same snapshot source as the hook.
+      const service = fake.layout as unknown as { readonly panelInfo?: PanelInfoSource }
+      expect(service.panelInfo).toBeDefined()
+      expect(service.panelInfo).toBe(source)
+      const fromService = service.panelInfo?.getSnapshot()
+      expect(fromService).toEqual({ activePanelId: 'settings' })
+      expect(service.panelInfo?.getSnapshot()).toBe(fromService)
+
       fake.teardown()
       expect(fake.disposals).toContain('panelInfo')
     } finally {

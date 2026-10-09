@@ -94,6 +94,8 @@ class MobileLayoutController {
   private snapshot: LayoutSnapshot = Object.freeze({ sidebarOpen: false, rightbarOpen: false, panelId: null })
   private navigation = new AbortController()
   private readonly listeners = new Set<() => void>()
+  /** Cached `panelInfo` snapshot: `useSyncExternalStore` compares by Object.is. */
+  private panelInfoSnapshot: { readonly activePanelId: string | null } = Object.freeze({ activePanelId: null })
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -101,6 +103,29 @@ class MobileLayoutController {
   }
 
   readonly getSnapshot = (): LayoutSnapshot => this.snapshot
+
+  /**
+   * The selected central panel, as the official `ILayout` exposes it.
+   *
+   * dsh 0.2.x added `ILayout.panelInfo` and four client modules now read it
+   * straight off `ctx.layout` (`ui-sidebar-right` in a load-time effect,
+   * `ui-plugin-manager` when the `main` slot appears, plus two shortcut
+   * conditions). This module replaces the official layout module, so the member
+   * must exist here too: without it `layout.panelInfo.getSnapshot()` throws
+   * `TypeError: Cannot read properties of undefined` and those modules never
+   * load. `getSnapshot` keeps a stable reference per `panelId` for the same
+   * reason the root hook does — a fresh object each call re-renders forever.
+   */
+  readonly panelInfo = Object.freeze({
+    getSnapshot: (): { readonly activePanelId: string | null } => {
+      const panelId = this.snapshot.panelId
+      if (this.panelInfoSnapshot.activePanelId !== panelId) {
+        this.panelInfoSnapshot = Object.freeze({ activePanelId: panelId })
+      }
+      return this.panelInfoSnapshot
+    },
+    subscribe: this.subscribe,
+  })
 
   /**
    * Select a main key. The mobile frame draws every key in the same column, so
@@ -369,20 +394,10 @@ export function apply(ctx: MobileClientContext): void {
     // 自己提供：新版 core 的 sidebar SidebarRoot/SessionTree 会调用它，缺了就抛
     // TypeError: usePanelInfo is not a function，整个 `sidebar.workspaces` 槽崩掉
     // ——移动面的表现正是抽屉里只剩「新会话/余额/设置」，会话列表全空。
-    // getSnapshot 必须返回**稳定引用**（useSyncExternalStore 按 Object.is 比较），
-    // 逐次新建对象会触发无限重渲染，所以按 panelId 缓存。
-    let panelInfoSnapshot: { readonly activePanelId: string | null } = Object.freeze({ activePanelId: null })
-    const panelInfo = {
-      getSnapshot: (): { readonly activePanelId: string | null } => {
-        const panelId = controller.getSnapshot().panelId
-        if (panelInfoSnapshot.activePanelId !== panelId) {
-          panelInfoSnapshot = Object.freeze({ activePanelId: panelId })
-        }
-        return panelInfoSnapshot
-      },
-      subscribe: (listener: () => void): (() => void) => controller.subscribe(listener),
-    }
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo } })
+    // dsh 0.2.x 起同一个 observable 也挂在 `ctx.layout.panelInfo` 上（官方
+    // LayoutController 直接把它交给 provideRoot），所以这里复用控制器上那一份，
+    // 两条读法指向同一个快照源。
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: controller.panelInfo } })
     /**
      * Close the right surface the way its own collapse control does.
      *

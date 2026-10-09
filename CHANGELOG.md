@@ -1,4 +1,4 @@
-## 0.3.38（未发布）— 客户端诊断的 url 改为对象形态：此前整类诊断被摄入管道静默丢弃
+## 0.3.38 — 2026-10-09 · 客户端诊断 url 改对象形态 + dsh 0.2.1 兼容（版本门 / peer / `ctx.layout.panelInfo` 适配）：此前整类诊断被摄入管道静默丢弃
 
 **症状**：插件自带的 `reportClientDiagnostic`（文件资源提供者缺失、移动页状态等诊断）在真机上一条都查不到——ES 里 `mobile-page-state` 自上线以来零条，页面侧却没有任何报错。
 
@@ -12,6 +12,18 @@
 - 实机链路：重建的 `lib/client.js` 覆盖到 web/staging 两个 profile 的已装副本后，从 3080 拉 `/plugins/??@feiyueve/dsh-mobile/client.js&rev=…` 确认下发的是新形态（备份在 `/home/feiyueve/tmp/mobile-perf/dsh-mobile-installed-backup/`；rev 由 mtime/ctime/size 派生，改文件即换 URL，无需重启）。
 
 **注意**：本次只就地覆盖已装副本，私源 `@feiyueve/dsh-mobile` 仍是 `0.3.37`；下次发版要把这条作为 0.3.38 发布并同步两个 profile。
+
+### 附带：dsh 0.2.1-alpha.1-local.1 兼容核对（版本门 / peer 跟版 / `ctx.layout.panelInfo` 适配）
+
+**版本门与跟版**：`src/compatibility.ts` 白名单与 4 处 dsh `peerDependencies` 加 `0.2.1-alpha.1`、`0.2.1-alpha.1-local.1`（前者是为容器测试台——私源只发布了 pristine 版本，`-local.1` 未发布；0.1.6 世代也同时声明过 pristine + local）。另两处依赖不匹配 0.2.1 基线，会各自落成第二份副本：`@deepseek-ai/cordis` peer `^4.0.1` → `^4.0.1 || 4.0.5-alpha.1`（semver：prerelease 只在同 `[major,minor,patch]` 比较器带 prerelease 时才被接受，`4.0.5-alpha.1` 不被 `^4.0.1` 命中），`@deepseek-ai/schemastery` 依赖 `^3.18.1` → `3.18.5-alpha.1`（0.2.1 vendor 版本；本插件只用 `z.string/natural/object/array/union/boolean/const`，未用 `.volatile()`，故副本分裂对它无功能影响，跟版是为了不落第二份）。
+
+**API 适配（必需，已做反向验证）**：dsh 0.2.x 给官方 `ILayout` 增加了 `panelInfo`（`HostObservable<PanelInfo>`），且有 4 处客户端模块直接读 `ctx.layout.panelInfo`——`ui-sidebar-right` 在**加载期 effect** 里 `layout.panelInfo.getSnapshot()`、`ui-plugin-manager` 在 `main` 槽出现时 `subscribe`，另有 `ui-workspace`/`ui-open-in-app` 的两处快捷键条件。本插件的 `mobile-layout.js` **替换**官方 layout 模块，控制器缺这个成员时真浏览器实测**整块移动布局挂不上**：`drawer=0 shell=0`、连输入框都没有，而 `pageerror` 仍是 **0**（静默失败，HTTP 级验证完全看不出来）。修法：把 `panelInfo` 挂到 `MobileLayoutController` 上，并让 `provideRoot({hooks:{panelInfo}})` 复用同一份（两条读法同一快照源，仍按 `panelId` 缓存稳定引用）。
+
+**兼容脚本的既存误报**：`scripts/check-dsh-compatibility.mjs` 要求 `PlanReviewPanel.tsx` 含 `data-plan-review-scroll`，该标记上游 **0.1.7（f6428a164e「计划评审改成决策卡」）就已删除**，其自身用例反向断言 `toBeNull()`；把脚本指向 0.1.7 的树同样报同一个错——即这是**升级前就存在的误报**，不是 0.2.1 的破坏性变更。已删除该断言并保留 `data-plan-review-key`（移动 CSS 仍在用）。
+
+**验证**：`npm run verify` 退出 0（23 文件 **233 例**）；`node scripts/check-dsh-compatibility.mjs ../deepseek-harness` 退出 0（`DSH compatibility ok: 0.2.1-alpha.1-local.1 (renderer-v2)`）；容器测试台（`dsh-testbed-021`，dsh `0.2.1-alpha.1` + 本地 tarball）真浏览器 A/B——去掉 `panelInfo`：`手机面出现输入框` FAIL、`drawer=0 shell=0`；补上：两项 PASS、`drawer=1 shell=1`，两臂 `pageerror` 均 0（末项「真实模型回合」因测试台未注入凭据而失败，与本改动无关）。
+
+**同代核对结论（未改代码）**：boot manifest / HMR graph 链路在 0.2.1 **未再变化**——`packages/host/webserver/src`、`packages/client/modules/src/index.ts`（boot 图与批次组装）、`packages/client/hmr/src`（`/plugins/events` 与 graph 帧协议）在 `dsh-v0.1.7-alpha.2..dsh-v0.2.1-alpha.1` 区间**逐字节未改**，本地 13 组补丁在该区间只给 `client/modules` 加了一行 index 注入（error guard），不影响条目 URL/批次形态；0.3.36/0.3.37 的两处修复继续有效。
 
 ## 0.3.37 — 手机页白屏的第二处根因：上游 stock graph 帧覆盖网关改写的 boot graph
 

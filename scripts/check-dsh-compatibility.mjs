@@ -166,8 +166,15 @@ const planReview = await text('packages/client/ui-user-questions/src/client/Plan
 for (const marker of ['data-question-key', 'data-question-scroll']) {
   if (!questions.includes(marker)) throw new Error(`DSH question UI contract changed: missing ${marker}`)
 }
-for (const marker of ['data-plan-review-key', 'data-plan-review-scroll']) {
-  if (!planReview.includes(marker)) throw new Error(`DSH plan-review UI contract changed: missing ${marker}`)
+// `data-plan-review-scroll` was dropped upstream in 0.1.7 (f6428a164e): the plan
+// review became a decision card whose body is a title plus a two-line clamped
+// description, so the scrolling body — and the marker on it — is gone. Upstream's
+// own panel spec asserts its absence (`expect(document.querySelector(
+// '[data-plan-review-scroll]')).toBeNull()` in plan-review-panel.client.spec.tsx),
+// so requiring it here failed on 0.1.7 and on 0.2.1 alike. Only the card key is
+// still a contract this plugin's mobile CSS keys off.
+if (!planReview.includes('data-plan-review-key')) {
+  throw new Error('DSH plan-review UI contract changed: missing data-plan-review-key')
 }
 
 const hostInjections = await optionalText('packages/host/webserver/src/injections.ts')
