@@ -1,4 +1,4 @@
-import { createHash, X509Certificate } from 'node:crypto'
+import { createHash, randomBytes, X509Certificate } from 'node:crypto'
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram'
 import { readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
@@ -83,21 +83,24 @@ const MAX_HEADER_BYTES = 16 * 1024
 const MOBILE_HISTORY_PAGE_MESSAGES = 10
 const SESSION_HISTORY_PATH = '/api/session.history'
 
-/** App 日志查看令牌（GET /api/mobile-logs）：网关据此放行免移动会话的
- * 日志查询反代，dsh-web 3080 侧插件校验同一值。App 内置常量，与上报令牌分离；
- * 仅返回低敏日志字段。轮换需同步 dsh-mobile-flutter 与 tests。
- */
-export const LOG_QUERY_TOKEN = '8f2d6a41c9e7b305d4a8f1c276e5b90d'
-/** 日志查询豁免会话的存活时长：仅覆盖单次反代请求，取有限值避免
- *  setTimeout 溢出（Node 32 位毫秒上限 ≈24.8 天，溢出被截断为 1ms）。 */
+/** 日志查询的**进程内**共享键（GET /api/mobile-logs）：网关反代到 3080 时注入
+ *  请求头 `x-log-query`，3080 侧插件路由比对同一值。两半在同一进程里，所以键在
+ *  启动时随机生成——不落盘、不进客户端、无需轮换（0.3.41 起取代原先写在源码里的
+ *  `LOG_QUERY_TOKEN` 静态常量与 App 内置的同一份拷贝）。
+ *  客户端进这条路由的凭据是**账号会话**（Bearer / 会话 cookie），见
+ *  handleExternalRequest 的 /api/mobile-logs 分支。 */
+export const LOG_QUERY_KEY = randomBytes(32).toString('hex')
+export const LOG_QUERY_HEADER = 'x-log-query'
+/** 日志查询代理会话的存活时长：仅覆盖单次反代请求，取有限值避免
+ *  setTimeout 溢出（Node 32 位毫秒上限 ≈24.8 天，溢出被截断为 1ms；30 天
+ *  token 的真实 expiresAt 正好超限，所以这里必须夹住）。 */
 const LOG_QUERY_SESSION_TTL_MS = 60 * 60 * 1000
-/** 页面错误守卫上报令牌（POST /log-ingest）：与公网 nginx 反代同一白名单
- *  （部署令牌 + 页面令牌，页面令牌注入为 __DSH_INGEST_TOKEN__）。
- *  轮换需同步 nginx dsh-mobile.conf 与 dsh-mobile-flutter。 */
-const LOG_INGEST_TOKENS = new Set([
-  '84153b5de2ef20c9b17b0504bafae573cb6dcd0d9cfca6bf',
-  'dshm-page-ingest-7f3a91c4e6b2d805',
-])
+/** 页面错误守卫上报令牌（POST /log-ingest）：**只认页面令牌**——它由部署经
+ *  __DSH_INGEST_TOKEN__ 注入到（登录后才拿得到的）页面里，不进 App。
+ *  0.3.41 起原先与它并列的「部署令牌」已整体退役：App 原生上报改走
+ *  POST /mobile-access/log-report（凭账号会话）。轮换只需同步 profile 的
+ *  ingestPageToken + frps nginx dsh-mobile.conf + supervisor。 */
+const LOG_INGEST_PAGE_TOKEN = 'dshm-page-ingest-7f3a91c4e6b2d805'
 /** 本地上报体上限（守卫单条文本 JSON，1 MiB 远超实际）。 */
 const LOG_INGEST_MAX_BODY_BYTES = 1024 * 1024
 /** 本地 logstash HTTP 通道（http input，任意路径 200）：公网 nginx 的 18447
@@ -644,10 +647,10 @@ function sanitizeRequestHeaders(
   const allowed = [
     'accept', 'accept-encoding', 'accept-language', 'content-encoding', 'content-length', 'content-type',
     'if-match', 'if-modified-since', 'if-none-match', 'if-unmodified-since', 'range', 'user-agent',
-    // 日志查看豁免会话：X-Log-Query 是凭据而非会话状态，需转发给 upstream
-    // 3080 的插件路由做二次校验（值不匹配会被拒），放行无安全损失。
-    'x-log-query',
   ] as const
+  // `x-log-query` 是网关 → 3080 插件路由的**进程内**共享键（LOG_QUERY_KEY），
+  // 由 proxyHttp 的 extraHeaders 显式注入：客户端给的同名头一律丢掉（0.3.41 前
+  // 它曾是「客户端自带凭据」，放行转发、由 upstream 二次校验）。
   for (const name of allowed) {
     const value = request.headers[name]
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(', ') : value
@@ -1328,15 +1331,29 @@ export class MobileAccessGateway {
     sendJson(response, 200, { loggedOut: true }, this.tlsEnabled)
   }
 
-  /** 页面错误守卫上报：POST /log-ingest（text/plain JSON，X-Log-Token 白名单）。
+  /** 页面错误守卫上报：POST /log-ingest（text/plain JSON，X-Log-Token = 页面令牌）。
    *  公网页面经 nginx 反代到 logstash；直连网关页面此前无此路由 → 守卫每次
    *  5s 无限 403 重试（App http-error warn 刷屏 + 前端错误永不落库）。这里
    *  转发到与 nginx 18447 隧道相同的本地 logstash HTTP 通道。 */
   private async handleLogIngest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const token = request.headers['x-log-token']
-    if (typeof token !== 'string' || !LOG_INGEST_TOKENS.has(token)) {
+    if (typeof token !== 'string' || token !== LOG_INGEST_PAGE_TOKEN) {
       throw new HttpError(403, 'forbidden')
     }
+    await this.forwardLogReport(request, response)
+  }
+
+  /** App 原生日志上报：POST /mobile-access/log-report（text/plain JSON）。
+   *  凭据是**账号会话**（Bearer / 会话 cookie）——0.3.41 起 App 不再内置任何
+   *  静态上报令牌，未登录/被踢即 401（App 侧失败静默、排队等下次）。
+   *  不要求 CSRF：这是只写遥测、没有状态可被改写的端点，凭据本身即授权。 */
+  private async handleAppLogReport(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.authorize(request)
+    await this.forwardLogReport(request, response)
+  }
+
+  /** 把一条上报原样喂给本地 logstash（只限大小、不解析 body：通道收文本 JSON）。 */
+  private async forwardLogReport(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const declared = request.headers['content-length']
     if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > LOG_INGEST_MAX_BODY_BYTES)) {
       throw new HttpError(413, 'payload_too_large')
@@ -1461,6 +1478,11 @@ export class MobileAccessGateway {
       await this.handleLogout(request, response)
       return
     }
+    // App 原生日志上报（账号会话鉴权，取代 0.3.41 前的静态上报令牌）。
+    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/log-report`) {
+      await this.handleAppLogReport(request, response)
+      return
+    }
     const computerImages = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-images`
     const computerImage = request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/computer-image`
     const requestedExtension = extensionTarget(target.decodedPathname)
@@ -1496,18 +1518,22 @@ export class MobileAccessGateway {
       && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
     }
-    // App 日志查看（GET /api/mobile-logs）：X-Log-Query 令牌即授权，免移动
-    // 会话直接反代 upstream（dsh-web 3080 的插件路由校验同一令牌）。
+    // App 日志查看（GET /api/mobile-logs）：**需要账号会话**（Bearer / 会话
+    // cookie）——0.3.41 起不再有内置查询令牌，未登录/被踢即 401（App 回登录页）。
+    // 反代给 3080 的插件路由时另注入进程内共享键 LOG_QUERY_KEY：3080 那条路由
+    // 无法复用客户端凭据（网关用自己的 upstream cookie 会话代理），也不能裸奔
+    // （3080 监听 0.0.0.0，同网段直连者不该读得到移动端日志）。
     // expiresAt 必须是有限值：allocateRequest 的 setTimeout 需 32 位有符号
-    // 毫秒内（>24.8 天会被 Node 截断为 1ms，连接被立即销毁）。
-    if (request.method === 'GET' && target.decodedPathname === '/api/mobile-logs'
-      && request.headers['x-log-query'] === LOG_QUERY_TOKEN) {
-      const synthetic: SessionAuthorization = {
-        sessionKey: 'mobile-logs-query',
-        deviceId: 'mobile-logs-query',
-        expiresAt: Date.now() + LOG_QUERY_SESSION_TTL_MS,
-      }
-      await this.proxyHttp(request, response, synthetic)
+    // 毫秒内（>24.8 天会被 Node 截断为 1ms，连接被立即销毁）——30 天 token 的
+    // 真实 expiresAt 正好超限，所以代理会话的 TTL 一律夹到 1 小时。
+    if (request.method === 'GET' && target.decodedPathname === '/api/mobile-logs') {
+      const authorization = this.authorize(request)
+      await this.proxyHttp(
+        request,
+        response,
+        { ...authorization, expiresAt: Math.min(authorization.expiresAt, Date.now() + LOG_QUERY_SESSION_TTL_MS) },
+        { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
+      )
       return
     }
     // 页面错误守卫上报（POST /log-ingest）：与 nginx 公网反代同语义的免授权
@@ -2107,6 +2133,7 @@ export class MobileAccessGateway {
     request: IncomingMessage,
     response: ServerResponse,
     authorization: SessionAuthorization,
+    extraUpstreamHeaders?: Record<string, string>,
   ): Promise<void> {
     const declared = request.headers['content-length']
     if (declared !== undefined && (!/^\d+$/u.test(declared) || Number(declared) > this.config.maxBodyBytes)) {
@@ -2120,6 +2147,9 @@ export class MobileAccessGateway {
         ? mobileHistoryRequestBody(request, await readBoundedBody(request, this.config.maxBodyBytes))
         : undefined
       const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
+      // 显式注入的头放在 sanitize 之后：客户端给的同名头一律盖掉
+      // （sanitize 已把 x-log-query 排除在放行列表之外，这里是唯一的写入点）。
+      if (extraUpstreamHeaders !== undefined) Object.assign(upstreamHeaders, extraUpstreamHeaders)
       const upstreamCookie = await this.upstreamCookieHeader()
       if (upstreamCookie !== undefined) upstreamHeaders.cookie = upstreamCookie
       if (bufferedBody !== undefined) upstreamHeaders['content-length'] = String(bufferedBody.byteLength)

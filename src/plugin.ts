@@ -28,7 +28,7 @@ import {
   JsonTokenStore,
   tokenSnapshotLimit,
 } from './account.js'
-import { LOG_QUERY_TOKEN, MobileAccessGateway } from './gateway.js'
+import { LOG_QUERY_HEADER, LOG_QUERY_KEY, MobileAccessGateway } from './gateway.js'
 import { createMobileAccessService, type MobileAccessService } from './extensions.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
@@ -86,11 +86,13 @@ function createAccountController(resolved: ResolvedGatewayConfig): AccountContro
 }
 
 /**
- * App 日志查询令牌（GET /api/mobile-logs）：App 内置常量，与上报令牌分离。
- * 仅返回低敏日志字段（无 token/凭据），泄露面有限；轮换需同步 dsh-mobile-flutter。
+ * 日志查询路由的**进程内**共享键（GET /api/mobile-logs）：网关代理时注入请求头
+ * `x-log-query`，本路由比对同一值。两半同进程，键随机生成、不落盘、不进客户端。
+ * 0.3.41 起取代原先的静态 `LOG_QUERY_TOKEN`（App 曾内置同一份拷贝 ⇒ 谁都能读
+ * 移动端日志）；客户端现在的凭据是账号会话，由网关侧 `authorize()` 裁决。
  */
-// 与网关共用（gateway.ts 免会话放行同令牌）；测试 import 自本模块保持兼容。
-export { LOG_QUERY_TOKEN } from './gateway.js'
+// 与网关共用（gateway.ts 的 LOG_QUERY_KEY）；测试 import 自本模块保持兼容。
+export { LOG_QUERY_KEY, LOG_QUERY_HEADER } from './gateway.js'
 
 /** The stock WebServer serves the control card; Connection authenticates the loopback DSH origin. */
 export const inject = ['webServer', 'commands', 'connection']
@@ -567,7 +569,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
       path: '/api/mobile-logs',
       handler: async (request, response) => {
         try {
-          if (request.headers['x-log-query'] !== LOG_QUERY_TOKEN) throw new HttpError(401, 'unauthorized')
+          if (request.headers[LOG_QUERY_HEADER] !== LOG_QUERY_KEY) throw new HttpError(401, 'unauthorized')
           const target = new URL(request.url ?? '/', 'http://localhost')
           const limit = Math.min(Number(target.searchParams.get('limit') ?? '100') || 100, 200)
           const since = target.searchParams.get('since') ?? '2h'

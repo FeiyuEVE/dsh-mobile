@@ -6,7 +6,7 @@ import { rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { TMP_ROOT, createTempDirectory } from './tmp-root.js'
 import { join } from 'node:path'
-import { LOG_QUERY_TOKEN } from '../src/plugin.js'
+import { LOG_QUERY_HEADER, LOG_QUERY_KEY } from '../src/plugin.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Config, parseGatewayConfig } from '../src/config.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
@@ -256,9 +256,9 @@ describe('stock DSH lifecycle', () => {
     })
   })
 
-  it('registers the logs query route and requires its token', async () => {
+  it('registers the logs query route and requires the in-process key', async () => {
     const mounted = await mount()
-    // 无查询令牌 → 401；有令牌才进入 ES 代理分支（测试环境 ES 不可达，返回 5xx 而非 401）
+    // 无共享键 → 401（这条路由只该被**网关**用进程内随机键调到；它自己不做会话校验）
     const denied = await invoke(mounted.logsRoute, 'GET', '/api/mobile-logs?limit=10', '')
     expect(denied.status).toBe(401)
     const allowed = await invoke(
@@ -266,10 +266,22 @@ describe('stock DSH lifecycle', () => {
       'GET',
       '/api/mobile-logs?limit=10',
       '',
-      { 'x-log-query': LOG_QUERY_TOKEN },
+      { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
     )
     expect(allowed.status).not.toBe(401)
-    // 本机测试环境 ES 可达时返回 200；异机返回 5xx。两条路径都证明令牌放行。
+    // 本机测试环境 ES 可达时返回 200；异机返回 5xx。两条路径都证明共享键放行。
     expect(allowed.status).toBeLessThan(500)
+    // 0.3.41 退役的静态查询令牌（App 曾内置）不再有任何效力。
+    const stale = await invoke(
+      mounted.logsRoute,
+      'GET',
+      '/api/mobile-logs?limit=10',
+      '',
+      { 'x-log-query': '8f2d6a41c9e7b305d4a8f1c276e5b90d' },
+    )
+    expect(stale.status).toBe(401)
+    // 共享键是**随机**的：不是那枚写死在源码里的旧常量。
+    expect(LOG_QUERY_KEY).not.toBe('8f2d6a41c9e7b305d4a8f1c276e5b90d')
+    expect(LOG_QUERY_KEY).toMatch(/^[0-9a-f]{64}$/u)
   })
 })

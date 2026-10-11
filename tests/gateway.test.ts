@@ -8,7 +8,7 @@ import { connect, type AddressInfo, type Socket } from 'node:net'
 import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseGatewayConfig } from '../src/config.js'
-import { MobileAccessGateway } from '../src/gateway.js'
+import { MobileAccessGateway, LOG_QUERY_HEADER, LOG_QUERY_KEY } from '../src/gateway.js'
 import { CSRF_HEADER, DEVICE_COOKIE, SESSION_COOKIE } from '../src/http-security.js'
 import {
   AccountController,
@@ -1667,6 +1667,103 @@ describe('HTTP gateway', () => {
     })
     expect(proxied.status).toBe(401)
     expect(inner.observations).toHaveLength(0)
+  })
+
+  // 0.3.41 日志面收紧：两条日志路由的凭据都不再是「写死在源码/App 里的静态令牌」。
+  it('takes the app log report on the account session and refuses static tokens', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const base = browserHeaders(instance)
+    const report = JSON.stringify({ tenant: 'mobile', service: 'dsh-mobile', level: 'info', message: 'hello' })
+
+    // 匿名 → 401（原先靠内置部署令牌就能写）
+    const anonymous = await request(instance.address().port, '/mobile-access/log-report', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain' },
+      body: report,
+    })
+    expect(anonymous.status).toBe(401)
+
+    // 退役的静态令牌（部署令牌 / 页面令牌）在这条路由上都没有效力
+    for (const stale of ['84153b5de2ef20c9b17b0504bafae573cb6dcd0d9cfca6bf', 'dshm-page-ingest-7f3a91c4e6b2d805']) {
+      const denied = await request(instance.address().port, '/mobile-access/log-report', {
+        method: 'POST',
+        headers: { ...base, 'content-type': 'text/plain', 'x-log-token': stale },
+        body: report,
+      })
+      expect(denied.status).toBe(401)
+    }
+
+    // 账号会话（Bearer 形态）→ 放行到转发步骤；本机 logstash 可达时 200，不可达 502。
+    const paired = await signIn(instance)
+    const allowed = await request(instance.address().port, '/mobile-access/log-report', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain', authorization: `Bearer ${paired.token}` },
+      body: report,
+    })
+    expect([200, 502]).toContain(allowed.status)
+
+    // 被撤销的凭据立刻失效
+    await accountOf(instance).revokeToken(paired.tokenId)
+    const revoked = await request(instance.address().port, '/mobile-access/log-report', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain', authorization: `Bearer ${paired.token}` },
+      body: report,
+    })
+    expect(revoked.status).toBe(401)
+  })
+
+  it('keeps the page-guard /log-ingest route on the page token only', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const base = browserHeaders(instance)
+
+    const anonymous = await request(instance.address().port, '/log-ingest', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain' },
+      body: '{}',
+    })
+    expect(anonymous.status).toBe(403)
+    // 退役的部署令牌不再放行（它就是 App 曾经内置的那一枚）
+    const deployToken = await request(instance.address().port, '/log-ingest', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain', 'x-log-token': '84153b5de2ef20c9b17b0504bafae573cb6dcd0d9cfca6bf' },
+      body: '{}',
+    })
+    expect(deployToken.status).toBe(403)
+    // 页面令牌（部署经 __DSH_INGEST_TOKEN__ 注入，只有登录后的页面拿得到）仍放行
+    const pageToken = await request(instance.address().port, '/log-ingest', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'text/plain', 'x-log-token': 'dshm-page-ingest-7f3a91c4e6b2d805' },
+      body: '{}',
+    })
+    expect([200, 502]).toContain(pageToken.status)
+  })
+
+  it('gates the log query on the account session and hands upstream the in-process key', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const base = browserHeaders(instance)
+
+    // 匿名查询 → 401（原先带 X-Log-Query 静态令牌即可读）
+    const anonymous = await request(instance.address().port, '/api/mobile-logs?limit=10', { headers: base })
+    expect(anonymous.status).toBe(401)
+    const staleToken = await request(instance.address().port, '/api/mobile-logs?limit=10', {
+      headers: { ...base, 'x-log-query': '8f2d6a41c9e7b305d4a8f1c276e5b90d' },
+    })
+    expect(staleToken.status).toBe(401)
+    expect(inner.observations).toHaveLength(0)
+
+    const paired = await signIn(instance)
+    const allowed = await request(instance.address().port, '/api/mobile-logs?limit=10', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(allowed.status).toBe(200) // 假上游是 catch-all 200：能到 200 就说明已过鉴权进了代理层
+    const forwarded = inner.observations.at(-1)
+    expect(forwarded?.url).toBe('/api/mobile-logs?limit=10')
+    // 注入的是**进程内随机键**，而不是那枚退役的静态常量
+    expect(forwarded?.headers[LOG_QUERY_HEADER]).toBe(LOG_QUERY_KEY)
+    expect(LOG_QUERY_KEY).not.toBe('8f2d6a41c9e7b305d4a8f1c276e5b90d')
   })
 })
 

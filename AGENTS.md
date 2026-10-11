@@ -13,9 +13,9 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | 项 | 事实 |
 |---|---|
 | git | 唯一 remote `origin=git@github.com:FeiyuEVE/dsh-mobile.git`（无 upstream；`origin/HEAD→origin/main`）；当前分支 `local/sse-keepalive`（非 main）；无 tag |
-| 包 | `@feiyueve/dsh-mobile@0.3.40`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
-| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）；本 fork 只发私源。⚠️ 仓库内已是 `0.3.40`，但**私源 `latest` 实测仍是 `0.3.39`**（2026-10-11 `npm view @feiyueve/dsh-mobile dist-tags` → `latest=0.3.39` / `next=0.3.38`）——`0.3.40` 尚未发私源，发版后再更新此行 |
-| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级——**以 `~/.dsh/profiles/*/package.json` 为准**（2026-10-11 快照：web 仍 pin `0.3.38`、staging pin `0.3.39`；部署后两台都应为 `0.3.40`） |
+| 包 | `@feiyueve/dsh-mobile@0.3.41`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
+| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）；本 fork 只发私源。`0.3.41` **已发私源**（2026-10-11 `npm view @feiyueve/dsh-mobile dist-tags` → `latest=0.3.41` / `next=0.3.38`）。profile 装包**不能走 npm**（devDeps 是 `link:` → EUNSUPPORTEDPROTOCOL）：`npm pack` → `tar -xzf <tgz> -C ~/.dsh/profiles/<prof>/node_modules/@feiyueve/dsh-mobile --strip-components=1`，旧版备份在 `/home/feiyueve/tmp/dsh-mobile-installed-backup/` |
+| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级——**以 `~/.dsh/profiles/*/package.json` 为准**（2026-10-11 快照：两台都 pin 且已装 `0.3.41`；**staging 已重启生效**，web 的 `dsh-web` 待重启） |
 | Android | **已退役（2026-10-11）**：原 Kotlin WebView 壳 App（`apps/mobile/`，`io.github.sayach.dshmobile`）已随账密登录改造整体删除——它的 `NativeAuthClient.pair/renew` 打的是已下线的配对端点（实测 404），且工作区不再分发它。Android 客户端见 `../dsh-mobile-flutter/`（Flutter 版，独立仓库） |
 
 ## 目录结构
@@ -61,10 +61,12 @@ npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x
 11. **文档口径陷阱**：本仓库 `README.md` 顶部与兼容性表停在 **0.3.2**（上游口径，勿当现状）；`CHANGELOG.md` 本地事实从 0.3.26 起，且有 0.3.23/0.3.24 顺序颠倒、0.3.14 重复、中段陈旧 `## Unreleased`。
 12. **APK 分发链路**：工作区 `~/dsh-apk-dl/` 当前 manifest 指向 **dsh-mobile-flutter** APK；父仓库 `dsh-apk-dl/` 只是服务源码。
 
-13. **`LOG_QUERY_TOKEN` / `LOG_INGEST_TOKENS` 是写在源码里的静态令牌，日志面免账号会话即可读写（已知存量问题，0.3.38 就有，未修复）**：两个常量都在 `src/gateway.ts` 顶部——`LOG_QUERY_TOKEN`（`:90`，明文十六进制常量）与 `LOG_INGEST_TOKENS`（`:97`，两条白名单：部署令牌 + 页面注入的 `__DSH_INGEST_TOKEN__`），**不经 `authorize()`**：
-    - `GET /api/mobile-logs` 只要请求头 `x-log-query` 等于 `LOG_QUERY_TOKEN`，网关就**合成一个固定会话**（`sessionKey`/`deviceId` 都是 `mobile-logs-query`、`expiresAt = now + 1h`，`gateway.ts:1496`）直接 `proxyHttp` 反代到 3080——**不需要账号、不需要 cookie**；
-    - `POST /log-ingest` 只要 `x-log-token` 命中白名单就转发到本地 logstash（`gateway.ts:1329`）。
-    实测（对**公网入口**的对抗性验证，记录见父仓库 `CHANGES.md` 2026-10-11 条目的「未决」）：不带任何账号会话时这两条都打通了——所以「配对删了、只剩账号 token」**不等于**日志面也收紧了。轮换必须**同时改四侧**：`src/gateway.ts` 的两个常量、frps nginx 的 `dsh-mobile.conf`、`scratch-supervisor`/profile 侧注入、以及 `dsh-mobile-flutter` 里内置的同名常量（`lib/features/logs/logs_page.dart:23`）。**不要在文档或结论里写「已修复」**：要不要改成按账号会话或按回环收紧，属**待用户拍板**的存量项。
+13. **日志面已收紧（0.3.41，2026-10-11）——改这块前先读这条**：原先写在源码里的两枚静态令牌（`LOG_QUERY_TOKEN` / `LOG_INGEST_TOKENS` 的「部署令牌」）**都不在了**，谁拿到 APK / 仓库就能读日志、写 ES 的存量洞已堵上。现在的凭据模型：
+    - **查询（读）** `GET /api/mobile-logs`：**账号会话**（Bearer / `dsh_ma_session` cookie），未登录/被踢/过期 → **401**。网关反代到 3080 时注入**进程内随机键**请求头 `x-log-query`（`LOG_QUERY_KEY = randomBytes(32)`，`gateway.ts` 导出），3080 侧插件路由比对同一值——两半同进程，所以键不落盘、不进客户端、**无需轮换**；客户端自带的同名头已在 `sanitizeRequestHeaders` 里移出放行列表，唯一写入点是 `proxyHttp(request, response, authorization, extraUpstreamHeaders)`（写在 sanitize 之后）。代理会话的 `expiresAt` 必须夹到 1 小时：30 天 token 的真实值超出 `setTimeout` 的 32 位毫秒上限，会被 Node 截断成 1ms 直接断连。
+    - **页面守护上报（写）** `POST /log-ingest`：**只认页面令牌** `dshm-page-ingest-…`（部署经 profile 的 `ingestPageToken` 注入为 `__DSH_INGEST_TOKEN__`，只有登录后的页面拿得到）。常量是 `gateway.ts` 的 `LOG_INGEST_PAGE_TOKEN`。
+    - **App 原生上报（写）** `POST /mobile-access/log-report`（0.3.41 新增）：凭账号会话、`text/plain`、≤1 MiB（413）、未登录 401，转发到本机 logstash `127.0.0.1:30080`。`dsh-mobile-flutter` 的 `AppLog` 打的就是这条（未登录停发但保留 ≤60 条队列）。
+    - **轮换只需一处**：页面令牌 = profile `ingestPageToken` + frps nginx `dsh-mobile.conf` **三处**白名单（`= /log-ingest`、`/log-ingest/`、`= /rescue-intake/report`）+ supervisor `/usr/local/sbin/dsh-web-supervisor` 的 `PAGE_LOG_TOKEN`。
+    - **不要退回静态令牌**：每条拒绝路径都有负向测试（`tests/gateway.test.ts` 的「App 上报只认账号会话」「`/log-ingest` 只认页面令牌」「查询路由要会话 + 只有进程内键能进 3080」）。**旧 App（≤ build 117）** 内置的是已退役的部署令牌 ⇒ 它的 ES 上报与 App 内日志页会失败（本地日志文件不受影响），修法随 build 118 出。
 
 ## 相关文档
 

@@ -1,3 +1,28 @@
+## 0.3.41 — 2026-10-11 · 日志面收紧：两条日志路由都改账号会话鉴权，**部署令牌整体退役**（App 不再内置任何静态日志令牌）
+
+**背景**：0.3.38 起日志面有两枚**写死在源码里**的静态令牌，谁都能从 APK / 仓库里读到（对抗性验证记录见父仓库 `CHANGES.md` 2026-10-11 条目）：
+
+1. `GET /api/mobile-logs` 只要带 `X-Log-Query: <LOG_QUERY_TOKEN>`，网关就**合成一个固定会话**直接反代到 3080 读 ES `logstash-mobile`——不要账号、不要 cookie；
+2. `POST /log-ingest` 只要 `X-Log-Token` 命中「部署令牌 + 页面令牌」白名单（同一份白名单还写在 frps nginx 与 `dsh-web-supervisor` 里）就把 body 转进本地 logstash **任意写入** ES。
+
+**改法**：
+
+- **查询面（读）改成账号会话**：`GET /api/mobile-logs` 现在走 `authorize()`——Bearer 或 `dsh_ma_session` cookie，未登录 / 被踢 / 过期一律 **401**（App 侧回登录页）。`LOG_QUERY_TOKEN` 静态常量**删除**。
+  网关反代给 3080 时改为注入**进程内随机键** `x-log-query`（`LOG_QUERY_KEY`，启动时 `randomBytes(32)`，不落盘、不进客户端）：两半在同一进程里，而 3080 那条插件路由不可能复用客户端凭据（网关是用自己那枚 upstream cookie 代理过去的），也不能裸奔（3080 监听 `0.0.0.0`，同网段直连者不该读得到移动端日志）。客户端给的同名头在 `sanitizeRequestHeaders` 里被**移出放行列表**，只有网关那一次显式注入（`proxyHttp` 新增的 `extraUpstreamHeaders`，写在 sanitize 之后）能写进这个头。
+  代理会话的 `expiresAt` 仍按 1 小时夹住（30 天 token 的真实 `expiresAt` 超出 `setTimeout` 的 32 位毫秒上限，会被 Node 截断成 1ms 而立刻断连）。
+- **上报面（写）拆成两条，凭据各不相同**：
+  - `POST /log-ingest`（页面错误守卫 / 移动端体检探针）：**只认页面令牌**（`dshm-page-ingest-…`，部署经 `__DSH_INGEST_TOKEN__` 注入，只有登录后的页面拿得到）。**部署令牌从白名单里移除**。
+  - `POST /mobile-access/log-report`（**新**，App 原生上报）：凭**账号会话**（Bearer / cookie），只写遥测、不要求 CSRF；未登录 **401**，body > 1 MiB **413**，logstash 不可达 **502**。App 因此不再内置任何静态日志令牌——公网 `/log-ingest/` 直连（frps nginx → 18447 隧道 → logstash）也就没有 App 侧使用者了。
+- **`LOG_INGEST_TOKENS` 常数集并成单个 `LOG_INGEST_PAGE_TOKEN`**。
+
+**破坏性变更 / 迁移**：
+
+- **部署令牌 `84153b5d…` 整体退役**：从 `src/gateway.ts`、frps nginx `dsh-mobile.conf`（`= /log-ingest`、`/log-ingest/`、`= /rescue-intake/report` 三处白名单）、`dsh-web-supervisor` 的 `checkReportAuth` 里都删掉。
+- **旧 App（≤ build 117）**：它写死的就是这枚部署令牌，收紧后 ES 上报与 App 内日志页都会失败（App 侧静默 / 报错，本地日志文件与设置页「复制日志」不受影响）——`dsh-mobile-flutter` 的对应用法要随**下一个 build** 一起发。**页面错误守卫与移动端探针不受影响**（它们用页面令牌）。
+- **轮换口径变了**：以后只需维护**页面令牌**一处（profile 的 `ingestPageToken` + nginx + supervisor）；查询键随进程随机生成，不与任何客户端同步。
+
+**验证**：`npm run verify` 退出 0，**250 测试**（23 文件）通过（0.3.40 是 247）。新增 / 改写：`tests/gateway.test.ts` 的「App 上报只认账号会话（匿名 401 / 两枚退役静态令牌都 401 / 被撤销凭据立刻 401）」「`/log-ingest` 只认页面令牌（匿名与部署令牌 403、页面令牌放行）」「查询路由要账号会话 + 只有进程内随机键能进 3080（匿名与旧静态令牌 401，转发头上是 `LOG_QUERY_KEY`）」；`tests/plugin.test.ts` 的查询路由用例改用共享键并断言旧常量已失效。
+
 ## 0.3.40 — 2026-10-11 · 把配对模式**真删干净**（设备凭据 / 配对端点 / 配对页全下）+ 修 0.3.39 的 token 表自锁 + 浏览器侧改账密登录页
 
 **背景**：0.3.39 只**新增**了账密端点，配对那套状态机整体还在。上线后一次对抗性验证把它坐实了：`~/.dsh/profiles/staging/mobile-access/devices.json` 里 **25 条设备凭据全部未撤销、未过期**（最早 2026-12-01 到期），而 `authorize()` 仍是「先查账号 token，查不到回落 `access.authorizeSession()`」，`POST /mobile-access/auth/renew` 公网可达且免 CSRF——**任何握着旧设备令牌的人（旧 APK、旧浏览器 cookie 里就有）不需要账号密码就能换到完整会话，全通 `/api/*`**。同时浏览器 `/mobile-access/login` 还是那张「This device is no longer paired → Open pairing」的旧页，它唯一的动作也是打 `renew`。也就是「去掉配对模式」当时只在 App 那条路上成立。
