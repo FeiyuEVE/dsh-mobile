@@ -21,6 +21,13 @@ import {
   MobileAccessGatewayController,
   type MobileAccessRuntime,
 } from './control.js'
+import {
+  AccountController,
+  DEFAULT_TOKEN_TTL_MS,
+  JsonAccountStore,
+  JsonTokenStore,
+  tokenSnapshotLimit,
+} from './account.js'
 import { LOG_QUERY_TOKEN, MobileAccessGateway } from './gateway.js'
 import { createMobileAccessService, type MobileAccessService } from './extensions.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
@@ -33,7 +40,6 @@ import {
   sendFailure,
   sendJson,
 } from './http-security.js'
-import { JsonDeviceStore } from './storage.js'
 import { FunnelController, funnelExecutable } from './funnel.js'
 import { CpolarController } from './cpolar.js'
 import { CpolarComponentManager, type CpolarComponentStatus } from './cpolar-component.js'
@@ -55,6 +61,29 @@ declare module '@deepseek-ai/dsh-llm' {
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-mobile'
+
+/** 一个月 token 表的资源上限：单账号场景够用，超出按 lastSeenAt 淘汰最旧一枚。 */
+const ACCOUNT_MAX_TOKENS = 32
+/** 登录尝试上限：按源地址的固定窗口限流，与配对尝试同一量级。 */
+const ACCOUNT_MAX_LOGIN_ATTEMPTS = 10
+
+/** 账号与一个月 token 落在同一 profile 的设备状态文件旁边（account.json / tokens.json）。 */
+function createAccountController(resolved: ResolvedGatewayConfig): AccountController {
+  const directory = dirname(resolved.stateFile)
+  return new AccountController(
+    new JsonAccountStore(join(directory, 'account.json')),
+    // 文件容量是「活跃上限 + 撤销保留余量」：撤销记录还要留 7 天给设备列表看，
+    // 直接拿 maxTokens 当文件上限会让「打满 → 踢一台 → 再登录」写出超长快照。
+    new JsonTokenStore(join(directory, 'tokens.json'), tokenSnapshotLimit(ACCOUNT_MAX_TOKENS)),
+    {
+      tokenTtlMs: DEFAULT_TOKEN_TTL_MS,
+      maxTokens: ACCOUNT_MAX_TOKENS,
+      rateLimitWindowMs: resolved.rateLimitWindowMs,
+      maxLoginAttempts: ACCOUNT_MAX_LOGIN_ATTEMPTS,
+      maxRateLimitKeys: resolved.maxRateLimitKeys,
+    },
+  )
+}
 
 /**
  * App 日志查询令牌（GET /api/mobile-logs）：App 内置常量，与上报令牌分离。
@@ -284,7 +313,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     const resolved = parseGatewayConfig(candidateConfig)
     const candidate = new MobileAccessGateway(
       resolved,
-      new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
+      createAccountController(resolved),
       mobileAccess,
       upstreamLoginUrl,
     )
@@ -340,9 +369,12 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         instanceId,
         listenPort,
       )
+      // ⚠️ 中转（Funnel/Cpolar）网关目前用的是 `remote/` 目录下的**另一套**
+      // account.json / tokens.json：启用那条入口时要在它自己的实例上再设一次账号，
+      // 局域网签发的 token 在那里不认（每条入口一套认证域）。当前未启用，见 AGENTS。
       const candidate = new MobileAccessGateway(
         resolved,
-        new JsonDeviceStore(resolved.stateFile, resolved.maxDevices),
+        createAccountController(resolved),
         mobileAccess,
         upstreamLoginUrl,
       )

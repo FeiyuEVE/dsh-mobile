@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { createTempDirectory } from './tmp-root.js'
 import { join } from 'node:path'
 import type { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -40,7 +40,7 @@ describe('mobile extension registry', () => {
   })
 
   it('loads local host actions and swaps generations without exposing traversal', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extensions-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extensions-'); directories.push(root)
     const directory = join(root, 'demo')
     await (await import('node:fs/promises')).mkdir(directory, { recursive: true })
     await writeFile(join(directory, 'extension.json'), JSON.stringify({ schemaVersion: 1, id: 'demo', name: 'Demo', version: '1.0.0' }))
@@ -69,7 +69,7 @@ describe('mobile extension registry', () => {
 
   it('keeps the immediately previous Host generation while the browser stages new UI', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout'] })
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-generations-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-generations-'); directories.push(root)
     const directory = await createExtension(root, 'export default async api => api.action("ping", { async run() { return { version: 1 } } })')
     const context = new Context(); contexts.push(context)
     const service = new MobileAccessService(context)
@@ -95,7 +95,7 @@ describe('mobile extension registry', () => {
   it('removes a deleted extension generation immediately', async () => {
     const globals = globalThis as typeof globalThis & { __removedCleanup?: number; __removedSignal?: AbortSignal }
     globals.__removedCleanup = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-delete-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-delete-'); directories.push(root)
     const directory = await createExtension(root, `export default async api => {
       globalThis.__removedSignal = api.signal
       api.effect(() => () => { globalThis.__removedCleanup += 1 })
@@ -121,7 +121,7 @@ describe('mobile extension registry', () => {
   it('keeps a route request lifetime until its response stream settles', async () => {
     const globals = globalThis as typeof globalThis & { __routeAborted?: number }
     globals.__routeAborted = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-stream-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-stream-'); directories.push(root)
     await createExtension(root, `import { PassThrough } from 'node:stream'
       export default async api => api.route({ method: 'GET', path: '/events', handle(request) {
         request.signal.addEventListener('abort', () => { globalThis.__routeAborted += 1 }, { once: true })
@@ -159,7 +159,7 @@ describe('mobile extension registry', () => {
     vi.useFakeTimers({ toFake: ['setTimeout'] })
     const globals = globalThis as typeof globalThis & { __disposeStarted?: number }
     globals.__disposeStarted = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-disposer-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-disposer-'); directories.push(root)
     const directory = await createExtension(root, 'export default async api => { api.effect(() => () => { globalThis.__disposeStarted += 1; return new Promise(() => {}) }); api.action("ping", { async run() { return 1 } }) }')
     const context = new Context(); contexts.push(context)
     const service = new MobileAccessService(context)
@@ -195,7 +195,7 @@ describe('mobile extension registry', () => {
     globals.__stopEffectCleanup = 0
     globals.__stopLateEffectSetup = 0
     globals.__stopLateRejected = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-stop-refresh-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-stop-refresh-'); directories.push(root)
     const directory = await createExtension(root, 'export default async api => api.action("ping", { async run() { return true } })')
     const context = new Context(); contexts.push(context)
     const service = new MobileAccessService(context)
@@ -246,7 +246,7 @@ describe('mobile extension registry', () => {
     globals.__startStopCleanup = 0
     globals.__startStopLateSetup = 0
     globals.__startStopLateRejected = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-start-stop-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-start-stop-'); directories.push(root)
     await createExtension(root, `export default async api => {
       globalThis.__startStopStarted += 1
       api.effect(() => {
@@ -283,7 +283,7 @@ describe('mobile extension registry', () => {
   })
 
   it('snapshots assets into the generation and refreshes on asset-only changes', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-assets-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-assets-'); directories.push(root)
     const directory = await createExtension(root, 'export default async () => undefined')
     await mkdir(join(directory, 'assets', 'nested'), { recursive: true })
     await writeFile(join(directory, 'assets', 'nested', 'value.txt'), 'one')
@@ -305,8 +305,8 @@ describe('mobile extension registry', () => {
   })
 
   it('rejects an assets symlink or junction that leaves the extension directory', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-asset-link-')); directories.push(root)
-    const outside = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-outside-')); directories.push(outside)
+    const root = await createTempDirectory('dsh-mobile-extension-asset-link-'); directories.push(root)
+    const outside = await createTempDirectory('dsh-mobile-extension-outside-'); directories.push(outside)
     const directory = await createExtension(root, 'export default async () => undefined')
     await writeFile(join(outside, 'secret.txt'), 'secret')
     await symlink(outside, join(directory, 'assets'), process.platform === 'win32' ? 'junction' : 'dir')
@@ -320,7 +320,7 @@ describe('mobile extension registry', () => {
   it('rejects registrations after activation timeout and cleans an effect that resolves late', async () => {
     const globals = globalThis as typeof globalThis & { __lateSetup?: number; __lateCleanup?: number; __lateRejected?: number }
     globals.__lateSetup = 0; globals.__lateCleanup = 0; globals.__lateRejected = 0
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-timeout-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-timeout-'); directories.push(root)
     await createExtension(root, `export default async api => {
       api.effect(async () => { await new Promise(resolve => setTimeout(resolve, 6000)); globalThis.__lateSetup += 1; return () => { globalThis.__lateCleanup += 1 } })
       await new Promise(resolve => setTimeout(resolve, 7000))
@@ -340,7 +340,7 @@ describe('mobile extension registry', () => {
   }, 12_000)
 
   it('keeps the complete previous client generation when a replacement host fails', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-extension-rollback-')); directories.push(root)
+    const root = await createTempDirectory('dsh-mobile-extension-rollback-'); directories.push(root)
     const directory = join(root, 'demo')
     await (await import('node:fs/promises')).mkdir(directory, { recursive: true })
     await writeFile(join(directory, 'extension.json'), JSON.stringify({ schemaVersion: 1, id: 'demo', name: 'Demo', version: '1.0.0' }))

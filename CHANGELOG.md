@@ -1,3 +1,55 @@
+## 0.3.40 — 2026-10-11 · 把配对模式**真删干净**（设备凭据 / 配对端点 / 配对页全下）+ 修 0.3.39 的 token 表自锁 + 浏览器侧改账密登录页
+
+**背景**：0.3.39 只**新增**了账密端点，配对那套状态机整体还在。上线后一次对抗性验证把它坐实了：`~/.dsh/profiles/staging/mobile-access/devices.json` 里 **25 条设备凭据全部未撤销、未过期**（最早 2026-12-01 到期），而 `authorize()` 仍是「先查账号 token，查不到回落 `access.authorizeSession()`」，`POST /mobile-access/auth/renew` 公网可达且免 CSRF——**任何握着旧设备令牌的人（旧 APK、旧浏览器 cookie 里就有）不需要账号密码就能换到完整会话，全通 `/api/*`**。同时浏览器 `/mobile-access/login` 还是那张「This device is no longer paired → Open pairing」的旧页，它唯一的动作也是打 `renew`。也就是「去掉配对模式」当时只在 App 那条路上成立。
+
+**改法（按用户口径「配对彻底删除」）**：
+
+- **删掉整条配对链**：`src/access.ts` 的 `AccessController`（配对窗口、设备表、短会话、续期）、`src/storage.ts`（`JsonDeviceStore`/`MemoryDeviceStore`/`DeviceSnapshot`）、`PAIR_PAGE`/`PAIR_SCRIPT`、`POST /mobile-access/auth/pair`、`POST /auth/renew`、`GET /mobile-access/pair(.js)`、管理面 `POST {prefix}/pairing/open`、`GET {prefix}/devices`、`POST {prefix}/devices/{revoke,reset}`。`access.ts` 只剩三样被账号链路复用的东西：`AccessError`、`SessionAuthorization`、`BoundedRateLimiter`。
+- **`authorize()` 不再回落设备会话**：凭据只有一种——账号 token（Bearer 或 `dsh_ma_session` cookie）。不认识的凭据一律 401，`devices.json` 再没被读过（旧令牌就此作废，文件可留档）。
+- **浏览器那条路改成账密**：`/mobile-access/login` 现在是**账密表单页**（POST `/auth/login` → Set-Cookie → 回跳 `return`），文案与错误码提示都按账号口径写；SPA bootstrap 从「401 → `renew` → 重放」改成「**401 → 导到登录页**」（也不再包 WebSocket 补丁：手工握手失败分不清掉登录还是网络抖动，误判会把整页踢走）。
+- **顺手修三个真 bug**：
+  1. **token 表容量算错会自锁**（0.3.39 引入）：`maxTokens` 只按「活跃 token」算淘汰，而 `tokens.json` 的解析上限用的是**同一个数字**（`parseTokenSnapshot(snapshot, maxTokens)`）。于是「活跃打满 32 → 踢掉一台（记录还要留 7 天）→ 再登录」写出的快照长度 33 → 解析直接抛错 → 登录回 500 `internal_error`，**最长 7 天登不进去**。现在快照上限与活跃上限分开（`tokenSnapshotLimit(maxTokens) = maxTokens + 64`），淘汰顺序是「先最久未用的活跃、再最旧的撤销记录」，`MemoryTokenStore` 也接受上限参数（测试才盖得到这条路径）。
+  2. **改密可能留下半成品**：原来是「先落新账号 → 再清 token 表」，第二步写盘失败就变成「新密码已生效、旧 token 仍可用」。现在顺序反过来（**先吊销并落盘 token，再落账号**），最坏情况是改密没成（旧密码仍可登录），不会出现吊销承诺落空。
+  3. **登出必然 400**：`authLogout` 不发 body，而服务端 `readJsonObject` 要求非空 JSON → `400 bad_request`，**服务端那枚 token 从来没被撤销过**。现在 `readJsonObject` 支持 `{allowEmpty:true}`（只给登出这种无参动作用），空体读成 `{}`。
+  4. **登录与改密竞态**：scrypt 期间账号可能已被替换，签发前在 `exclusive` 里复核 `this.account === account`，不让旧密码换到的新 token 落进刚清空的表。
+  5. **App 分发路由忽略查询串**：`GET /mobile-access/app/manifest.json?x=1` 不再 404（cache-busting 参数是客户端常用手法）。
+- **metadata 多回一个 `instanceId`**：App 拿它把「同一台实例的局域网 / IPv6 / 公网入口」认回同一个身份，从而**一枚 token 三条线路通用**；认不出来（老插件）就退回按 origin 存，也不会串到别的服务。
+
+**破坏性变更 / 迁移**：
+
+- 移除的端点：`/mobile-access/auth/pair`、`/auth/renew`、`/mobile-access/pair`、`/mobile-access/pair.js`、管理面 `{prefix}/pairing/open`、`{prefix}/devices`、`{prefix}/devices/revoke`、`{prefix}/devices/reset`。管理面 `{prefix}/status` 的 `pairing`/`deviceCount` 换成 `accountConfigured`/`tokenCount`。
+- **旧 App（≤ 0.5.1+116）**：IPv6 / 公网线路退化（它靠 `native-pair`/`native-renew` 取会话）→ 回落到仅局域网；局域网与「浏览器配对页」那条路本来就不在本次范围内，但**配对页已经删了**，浏览器侧现在必须用账号密码。
+- **同仓库的 Kotlin App（`apps/mobile`，`io.github.sayach.dshmobile`）**：它的 `NativeAuthClient.pair/renew` 打的就是这两条已删端点，**原生配对链路整体失效**；WebView 那条路仍可用（网关登录页现在是账密表单）。移植到账密登录**本次未做**，需要用户拍板「移植」还是「退役」；本次只跟着 `check:mobile-release` 的要求把 `versionName` 同步到 0.3.40（versionCode 75）。
+
+**配置侧（`~/.dsh/profiles/*/cordis.patch.yml`）**：web 与 staging 都放开 `listenHost: 0.0.0.0`、把本机局域网地址加进 `publicAuthorities`、`allowedCidrs` 收到 `[127.0.0.0/8, 192.168.0.0/24]`（局域网线路现在也走网关，所以必须能连上；但没必要把整个 /16 都放进信任面）。`maxDevices` / `pairingTtlMs` 留在配置里只为兼容旧 profile 的键，实际不再生效。
+
+**验证**：`npm run verify` 退出 0；`tests/access-storage.test.ts` 随设备表一起删除；`tests/gateway.test.ts` 的 `pair()` helper 整体换成「设账号 → `POST /auth/login`」，并新增：**旧设备令牌（cookie 与 Bearer 两种形态）一律 401**、`/auth/pair` 与 `/auth/renew` 回 **404**、**空体登出成功且随后 401**（证明服务端真撤销）、`?x=1` 的 App 清单不再是 404、`/mobile-access/login` 是账密表单页（不含 `Open pairing`）；`tests/account.test.ts` 新增 **token 表打满 → 踢一台 → 再登录必须成功** 的 JSON store 回归（就是上面第 1 条 bug）。
+
+**注意**：0.3.39 的 token 表容量 bug 已经跟着这一版修掉，但**已经装出去的 0.3.39 若在打满前没升级，仍会踩到**——staging 已就地更新到 0.3.40。
+
+## 0.3.39 — 2026-10-11 · 鉴权改成「单账号账密登录 + 一个月 token」：配对模式退役，一枚 token 通用局域网 / IPv6 / 公网
+
+**背景**：配对模式（配对码 → 设备令牌 90 天 + 会话 8h）有两个结构性问题。其一是**体验**：换机、清数据、换浏览域都要重新配对，用户口径是「和其他有账密的常规 APP 一样」。其二是**一枚凭据通用不了**——局域网线路直连 dsh-web 的 `dsh-auth-<sha256(authority)>` cookie **按 authority 签名**（同一令牌打 `127.0.0.1:3080` 与 `192.168.0.240:3080` 是两枚不同 cookie），而 IPv6/公网走网关的 `dsh_ma_*`，两条线路两套认证、各自会过期。
+
+**改法**（新增 `src/account.ts`，不动 `access.ts` 的配对状态机，把回归面压到最小）：
+
+- **账号**：单账号，密码只存 **scrypt(N=32768,r=8,p=1) 派生值 + 随机 salt**（`account.json`，0600，原子写）；明文永不落盘、不入日志、不回显。改密即吊销全部 token。
+- **token**：登录签发 43 字符不透明令牌，有效期 **30 天**，落 `tokens.json` 且**只存 sha256 摘要** + 独立 csrf 摘要；`lastSeenAt` 只在超过 1 小时后于内存推进（不做每请求写盘），退出时统一落盘。
+- **一枚 token 两种形态**：原生 API 走 `Authorization: Bearer`，WebView 走同名 cookie `dsh_ma_session`（csrf 走 `dsh_ma_csrf`）——三条线路同一个认证面。
+- **端点**：`POST /mobile-access/auth/login`（免会话，必须排在 `authorize` 兜底之前，否则鸡生蛋）、`GET /auth/session`（凭据自检）、`GET /auth/tokens` + `POST /auth/tokens/revoke`（已登录设备列表 / 踢下线）、`GET /mobile-access/app/{manifest.json,*.apk}`（**App 内更新先校 token** 再流式反代本地 APK 服务；nginx 那五个公开 dl 入口不动，浏览器下载页保持公开）。
+- **管理面**（仅回环 `assertLocalAdminTrust`）：`POST /api/mobile-access/account` 写账号、`GET /tokens` / `POST /tokens/revoke`。
+- **删除 App 专用配对端点** `native-pair` / `native-renew`；浏览器那条 `/auth/pair` + `/auth/renew` + 配对页**保持原样**（用户口径：浏览器保持现状）。
+
+**三条硬约束（都写进了注释，别再踩）**：
+
+1. **授权视界必须钳到 20 天以内**：网关 `allocateRequest` 用 `setTimeout(authorization.expiresAt - now)` 做请求/长连接的生命周期，超过 2^31-1 ms（≈24.8 天）会被 Node **截断成 1 ms** → 30 天的 token 若原样进授权对象，**每条请求都会被立刻 abort**。`AUTHORIZATION_HORIZON_MS = 20 天`，token 自身到期时间另行保留。
+2. **token 必须落盘**：老会话是内存 Map（`access.ts` 的 `sessions`），重启即掉；一个月有效期若沿用内存就等于从未兑现。
+3. **cookie 优先于 Authorization**：请求里另有一枚无关的 `authorization` 头是合法场景（上游 header 白名单会把它剥掉，`tests/gateway.test.ts` 就有这条用例），无条件把 Authorization 当凭据会把这类请求判成 401。
+
+**验证**：`npm run verify` 退出 0（24 文件 / **246 例**）；新增 `tests/account.test.ts` 13 例（scrypt 只存派生值、未配账号回 409、一个月时长判据、**跨重启仍有效**、视界钳位、到期拒绝、错密码/未知用户/按源限流、CSRF 绑定、撤销即失效并触发资源回收、改密吊销、`maxTokens` 按 lastSeenAt 淘汰、0600 与符号链接拒绝）；`tests/gateway.test.ts` 把原 native-pair 用例改写成账密契约（Bearer 与 cookie 两种形态、普通 authorization 头不抢 cookie、设备列表回包不含 token、缺 CSRF 403、撤销后 401）。
+
+**注意**：本版删掉 `native-pair`/`native-renew` 后，**尚未更新的 App（≤ 0.5.1+116）在 IPv6 / 公网线路上会退化**（其自动配对第三步拿不到端点，回落到「仅局域网」）；局域网线路与浏览器配对不受影响。新 App 用账密登录，不再需要这两条端点。
+
 ## 0.3.38 — 2026-10-09 · 客户端诊断 url 改对象形态 + dsh 0.2.1 兼容（版本门 / peer / `ctx.layout.panelInfo` 适配）：此前整类诊断被摄入管道静默丢弃
 
 **症状**：插件自带的 `reportClientDiagnostic`（文件资源提供者缺失、移动页状态等诊断）在真机上一条都查不到——ES 里 `mobile-page-state` 自上线以来零条，页面侧却没有任何报错。

@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configuredRemoteProvider, JsonRemoteProviderStore, parseRemoteProviderState } from '../src/remote.js'
+import { createTempDirectory } from './tmp-root.js'
 
 const temporaryDirectories: string[] = []
 
@@ -23,7 +23,7 @@ describe('remote provider selection', () => {
     expect(configuredRemoteProvider({ DSH_MOBILE_REMOTE_PROVIDER: 'cpolar' })).toBe('cpolar')
     expect(() => configuredRemoteProvider({ DSH_MOBILE_REMOTE_PROVIDER: 'invalid' })).toThrow('must be tailscale or cpolar')
 
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-remote-provider-'))
+    const directory = await createTempDirectory('dsh-mobile-remote-provider-')
     temporaryDirectories.push(directory)
     const file = join(directory, 'state', 'provider.json')
     const store = new JsonRemoteProviderStore(file, 'tailscale')

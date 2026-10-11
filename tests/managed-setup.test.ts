@@ -1,8 +1,7 @@
 import { X509Certificate } from 'node:crypto'
-import { mkdtemp, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   ensureManagedCa,
   materializeManagedSetup,
@@ -11,6 +10,13 @@ import {
   selectLanNetwork,
   type ManagedSetup,
 } from '../src/managed-setup.js'
+import { createTempDirectory } from './tmp-root.js'
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
 
 function interfaceTable(address: string) {
   return {
@@ -37,7 +43,8 @@ function interfaceEntry(address: string, prefix = 24) {
 }
 
 async function fixture(): Promise<ManagedSetup> {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-managed-'))
+  const directory = await createTempDirectory('dsh-mobile-managed-')
+  temporaryDirectories.push(directory)
   return {
     version: 2,
     networkInterface: 'WLAN',

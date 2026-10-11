@@ -2,9 +2,9 @@ import { Context } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { createServer, request as requestHttp } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
+import { TMP_ROOT, createTempDirectory } from './tmp-root.js'
 import { join } from 'node:path'
 import { LOG_QUERY_TOKEN } from '../src/plugin.js'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -60,7 +60,7 @@ async function invoke(route: WebRoute, method: 'GET' | 'POST', path: string, bod
 }
 
 async function mount(initiallyEnabled = false): Promise<{ context: Context; route: WebRoute; logsRoute: WebRoute; command: CommandDefinition }> {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-plugin-'))
+  const directory = await createTempDirectory('dsh-mobile-plugin-')
   temporaryDirectories.push(directory)
   let command: CommandDefinition | undefined
   const routes = new Map<string, WebRoute>()
@@ -107,14 +107,14 @@ describe('remote Funnel gateway configuration', () => {
       listenPort: 0,
       publicAuthorities: ['127.0.0.1'],
       allowedCidrs: ['127.0.0.0/8'],
-      stateFile: join(tmpdir(), 'dsh-mobile-remote-template.json'),
+      stateFile: join(TMP_ROOT, 'dsh-mobile-remote-template.json'),
       tls: { mode: 'disabled' },
     })
     const publicHost = 'dsh-14a71b788377-1.tail775400.ts.net'
     const config = remoteGatewayConfig(
       template,
       `https://${publicHost}`,
-      join(tmpdir(), 'dsh-mobile-remote-devices.json'),
+      join(TMP_ROOT, 'dsh-mobile-remote-devices.json'),
       'a'.repeat(64),
     )
     const policy = new RequestTrustPolicy(
@@ -138,13 +138,13 @@ describe('remote Funnel gateway configuration', () => {
       listenPort: 0,
       publicAuthorities: ['127.0.0.1'],
       allowedCidrs: ['127.0.0.0/8'],
-      stateFile: join(tmpdir(), 'dsh-mobile-remote-template.json'),
+      stateFile: join(TMP_ROOT, 'dsh-mobile-remote-template.json'),
       tls: { mode: 'disabled' },
     })
     const config = remoteGatewayConfig(
       template,
       'https://example.r8.cpolar.cn',
-      join(tmpdir(), 'dsh-mobile-cpolar-devices.json'),
+      join(TMP_ROOT, 'dsh-mobile-cpolar-devices.json'),
       'b'.repeat(64),
       45_321,
     )

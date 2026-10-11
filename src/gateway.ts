@@ -22,14 +22,9 @@ import { promisify } from 'node:util'
 import { createGzip, gzip } from 'node:zlib'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import Bonjour from 'bonjour-service'
-import * as QRCode from 'qrcode'
-import {
-  AccessController,
-  AccessError,
-  BoundedRateLimiter,
-  type DeviceSummary,
-  type SessionAuthorization,
-} from './access.js'
+import { AccessError, type SessionAuthorization } from './access.js'
+import type { AccountTokenSummary } from './account.js'
+import { AccountController } from './account.js'
 import type { ResolvedGatewayConfig } from './config.js'
 import { SERVICE_WORKER_PATH, SERVICE_WORKER_SOURCE, injectServiceWorkerRegistration } from './sw-cache.js'
 import {
@@ -39,7 +34,6 @@ import {
   cookie,
   CSRF_COOKIE,
   CSRF_HEADER,
-  DEVICE_COOKIE,
   HttpError,
   LOCAL_ADMIN_PREFIX,
   parseCookies,
@@ -57,7 +51,6 @@ import {
   MOBILE_METADATA_VERSION,
 } from './version.js'
 import { addressAllowed, isLoopbackAddress, type ParsedCidr, RequestTrustPolicy } from './network.js'
-import type { DeviceStore } from './storage.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
   EXTENSION_LIMITS,
@@ -110,6 +103,11 @@ const LOG_INGEST_MAX_BODY_BYTES = 1024 * 1024
 /** 本地 logstash HTTP 通道（http input，任意路径 200）：公网 nginx 的 18447
  *  隧道同指向该端口；直连网关（无 nginx 层）由此转发守卫上报，403 重试停止。 */
 const LOG_INGEST_TARGET = 'http://127.0.0.1:30080/'
+/** 本地 APK 分发服务（dsh-apk-dl，仅绑回环 8008）。App 内更新先经网关鉴权、
+ *  再由网关按文件名反代到这里；nginx 上那几个公开 dl 入口不受影响，浏览器
+ *  下载页保持公开（用户口径：只限 App 内更新要登录）。 */
+const APP_DISTRIBUTION_ORIGIN = 'http://127.0.0.1:8008'
+const APP_DOWNLOAD_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.apk$/u
 const DISCOVERY_QUERY = Buffer.from('DSH_MOBILE_DISCOVER_V1', 'ascii')
 const DISCOVERY_PROTOCOL = 1
 const DISCOVERY_INTERVAL_MS = 3_000
@@ -148,42 +146,22 @@ const MOBILE_LAYOUT_DEPENDENCY_PROFILES = Object.freeze([
   }),
 ])
 /**
- * Page bootstrap injected ahead of the boot manifest: CSRF header + session recovery.
+ * Page bootstrap injected ahead of the boot manifest: CSRF header + login redirect.
  *
- * Two responsibilities, both inherited from the same fact — the mobile page authenticates with a
- * **short-lived Session Cookie** bound to a **persistent device Cookie** (see `handleRenew`):
+ * 两条职责，都源自同一个事实——移动页面用**登录 token 的 cookie 形态**
+ * （`dsh_ma_session`，默认 30 天，见 `handleAccountLogin`）认证：
  *
- * 1. CSRF: every same-origin mutation carries `x-dsh-mobile-csrf` read from the readable cookie.
- * 2. Session recovery. The Session lives in the gateway's memory, so restarting the host (which
- *    also restarts this gateway) invalidates every open page's Session while the device Cookie
- *    stays valid. Without recovery the page keeps its DOM but every request answers
- *    401 `authentication_failed`, and the live channel (`/api/remote.mux`) retries forever — the
- *    user sees a permanent "自动重连中…" chip over a page that only *looks* alive because its
- *    projectons were rendered before the restart. (`/mobile-access/auth/renew` is dispatched
- *    before session auth on purpose, so it is reachable exactly when the Session is dead.)
+ * 1. CSRF：每个同源变更请求带上从可读 cookie 里读到的 `x-dsh-mobile-csrf`
+ *    （服务端 `requireCsrf` 与 token 绑定校验，fail-closed）。
+ * 2. 掉登录：token 过期 / 被别处踢下线 / 服务端换了账号之后，页面里的同源请求会拿到
+ *    401——这时把整页导到 `/mobile-access/login`（账密登录页，带 `return` 回跳），
+ *    而不是留一个「自动重连中…」的空壳给用户。
  *
- * Recovery is failure-driven, never periodic: `renew()` is coalesced and rate-limited, and only
- * a 401 (HTTP or WebSocket handshake) triggers it. A periodic renew would mint a new Session and
- * rewrite the device store on every tick, for no benefit while the Session is alive.
+ * 旧实现是「401 → `POST /mobile-access/auth/renew` 续设备会话后重放」；配对模式整体
+ * 删除后没有可续的东西了，所以只剩「去登录」这一条路（也不再包 WebSocket 补丁：
+ * 手工握手失败无法区分是掉登录还是网络抖动，误判会把整页踢走）。
  */
-const MOBILE_SESSION_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);const renewPath=${JSON.stringify(`${AUTH_PREFIX}/auth/renew`)};const loginPath=${JSON.stringify(`${AUTH_PREFIX}/login`)};let renewTask=null;let lastRenewAt=0;const renew=()=>{if(renewTask!==null)return renewTask;if(Date.now()-lastRenewAt<3000)return Promise.resolve(false);lastRenewAt=Date.now();renewTask=nativeFetch(renewPath,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:'{}'}).then(response=>{if(response.status===401){location.replace(loginPath+'?return='+encodeURIComponent(location.pathname+location.search));return false}return response.ok},()=>false).then(ok=>{renewTask=null;return ok});return renewTask};const sameOrigin=raw=>{try{const url=typeof raw==='string'?raw:raw instanceof URL?raw.href:raw?.url;return url!==undefined&&new URL(url,location.href).origin===location.origin}catch{return false}};window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;const local=raw!==undefined&&sameOrigin(raw);const method=String(init?.method??source?.method??'GET').toUpperCase();let nextInit=init;if(local&&method!=='GET'&&method!=='HEAD'){const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}nextInit={...init,headers}}return nativeFetch(input,nextInit).then(response=>{if(response.status!==401||!local)return response;return renew().then(ok=>ok?nativeFetch(input,nextInit):response)},error=>{throw error})};const NativeWebSocket=window.WebSocket;if(typeof NativeWebSocket==='function'){const Patched=function(...args){const socket=new NativeWebSocket(...args);socket.addEventListener('error',()=>{void renew()});return socket};Patched.prototype=NativeWebSocket.prototype;for(const key of ['CONNECTING','OPEN','CLOSING','CLOSED'])Patched[key]=NativeWebSocket[key];window.WebSocket=Patched}})();`
-const PAIR_PAGE = `<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Pair DSH mobile access</title>
-<main>
-  <h1>Pair this device</h1>
-  <form id="pair-form">
-    <label>Pairing code <input id="pair-token" autocomplete="one-time-code" required></label>
-    <label>Device name <input id="device-label" maxlength="64" autocomplete="off"></label>
-    <button type="submit">Pair</button>
-    <output id="pair-status"></output>
-  </form>
-</main>
-<script src="/mobile-access/pair.js" defer></script>
-</html>
-`
+const MOBILE_SESSION_BOOTSTRAP = `(()=>{const nativeFetch=window.fetch.bind(window);const loginPath=${JSON.stringify(`${AUTH_PREFIX}/login`)};let redirecting=false;const toLogin=()=>{if(redirecting)return;redirecting=true;location.replace(loginPath+'?return='+encodeURIComponent(location.pathname+location.search))};const sameOrigin=raw=>{try{const url=typeof raw==='string'?raw:raw instanceof URL?raw.href:raw?.url;return url!==undefined&&new URL(url,location.href).origin===location.origin}catch{return false}};window.fetch=(input,init)=>{const source=input instanceof Request?input:undefined;const raw=typeof input==='string'?input:input instanceof URL?input.href:source?.url;const local=raw!==undefined&&sameOrigin(raw);const method=String(init?.method??source?.method??'GET').toUpperCase();let nextInit=init;if(local&&method!=='GET'&&method!=='HEAD'){const headers=new Headers(init?.headers??source?.headers);if(!headers.has(${JSON.stringify(CSRF_HEADER)})){const prefix=${JSON.stringify(`${CSRF_COOKIE}=`)};const token=document.cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith(prefix))?.slice(prefix.length);if(token!==undefined)headers.set(${JSON.stringify(CSRF_HEADER)},token)}nextInit={...init,headers}}return nativeFetch(input,nextInit).then(response=>{if(response.status===401&&local)toLogin();return response},error=>{throw error})}})();`
 
 interface BootGraphEntry {
   id: string
@@ -379,51 +357,35 @@ export function rewriteMobileIndex(html: string): string {
   return rewriteMobileIndexWithBatch(html).html
 }
 
-const PAIR_SCRIPT = `(() => {
-  const form = document.getElementById('pair-form')
-  const token = document.getElementById('pair-token')
-  const label = document.getElementById('device-label')
-  const status = document.getElementById('pair-status')
-  const fragment = new URLSearchParams(location.hash.slice(1))
-  const supplied = fragment.get('token')
-  history.replaceState(null, '', location.pathname)
-  if (supplied) token.value = supplied
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault()
-    status.value = 'Pairing…'
-    const response = await fetch('/mobile-access/auth/pair', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: token.value, label: label.value || undefined }),
-    })
-    if (!response.ok) {
-      status.value = 'Pairing failed'
-      return
-    }
-    location.replace('/')
-  })
-})()
-`
-
+/**
+ * 手机浏览器那条路的登录页（账密，与 App 同一个账号）。
+ *
+ * 配对模式已整体删除：这里不再有「设备码 / 去电脑上开配对窗」的入口，凭据只有
+ * 一个来源——账号密码换来的一个月 token（`POST /mobile-access/auth/login`）。
+ */
 const LOGIN_PAGE = `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Reconnect DSH mobile access</title>
+<title>登录 DSH 移动访问</title>
 <main>
-  <h1>Reconnect this device</h1>
-  <p id="login-progress">Restoring the secure Session…</p>
-  <section id="login-failed" hidden>
-    <p>This device is no longer paired. Open pairing on the computer, then pair it again.</p>
-    <a href="/mobile-access/pair">Open pairing</a>
-  </section>
+  <h1>登录</h1>
+  <form id="login-form">
+    <label>用户名 <input id="login-username" autocomplete="username" required></label>
+    <label>密码 <input id="login-password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">登录</button>
+    <output id="login-status" role="status"></output>
+  </form>
 </main>
 <script src="/mobile-access/login.js" defer></script>
 </html>
 `
 
 const LOGIN_SCRIPT = `(() => {
+  const form = document.getElementById('login-form')
+  const username = document.getElementById('login-username')
+  const password = document.getElementById('login-password')
+  const status = document.getElementById('login-status')
   const candidate = new URL(location.href).searchParams.get('return')
   let returnPath = '/'
   if (candidate && candidate.startsWith('/')) {
@@ -438,20 +400,44 @@ const LOGIN_SCRIPT = `(() => {
       // Malformed untrusted return targets keep the safe root default.
     }
   }
-  fetch('/mobile-access/auth/renew', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  }).then((response) => {
+  const reasons = {
+    400: '请求不合法',
+    401: '用户名或密码不对',
+    403: '被网关拒绝（来源校验）',
+    404: '服务端没有这个接口（插件版本太旧？）',
+    409: '服务端还没配置账号',
+    429: '尝试太频繁，稍后再试',
+    503: '服务端暂时不可用',
+  }
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    status.value = '登录中…'
+    let response
+    try {
+      response = await fetch('/mobile-access/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: username.value, password: password.value, label: 'DSH Mobile (Web)' }),
+      })
+    } catch {
+      status.value = '连不上电脑'
+      return
+    }
     if (response.ok) {
       location.replace(returnPath)
       return
     }
-    document.getElementById('login-progress').hidden = true
-    document.getElementById('login-failed').hidden = false
-  }).catch(() => {
-    document.getElementById('login-progress').textContent = 'The computer is unavailable.'
+    let detail = ''
+    try {
+      const payload = await response.json()
+      if (payload && typeof payload.error === 'string') detail = payload.error
+    } catch {
+      // Non-JSON error bodies keep the status-code wording.
+    }
+    const reason = reasons[response.status] ?? ('HTTP ' + response.status)
+    status.value = detail ? (reason + '（' + detail + '）') : reason
+    password.value = ''
   })
 })()
 `
@@ -918,7 +904,6 @@ function extensionContentType(path: string): string {
 
 /** Authenticated TLS edge in front of the ordinary loopback-only DSH Web server. */
 export class MobileAccessGateway {
-  readonly access: AccessController
   private readonly listenerTlsEnabled: boolean
   private readonly tlsEnabled: boolean
   private policy: RequestTrustPolicy | undefined
@@ -945,34 +930,19 @@ export class MobileAccessGateway {
   private closing = false
   private started = false
   private closeTask: Promise<void> | undefined
-  private readonly removeSessionListener: () => void
+  private readonly removeTokenListener: () => void
   private readonly removeExtensionContentListener: () => void
-  private readonly renewLimiter: BoundedRateLimiter
 
   constructor(
     readonly config: ResolvedGatewayConfig,
-    store: DeviceStore,
+    /** 唯一的凭据来源：单账号 + 一个月 token（配对/设备会话已整体删除）。 */
+    private readonly account: AccountController,
     private readonly extensions?: MobileAccessService,
     private readonly upstreamAuthenticatedUrl?: string,
   ) {
     this.listenerTlsEnabled = config.tls.mode === 'provided'
     this.tlsEnabled = config.publicTls
-    this.access = new AccessController(store, {
-      pairingTtlMs: config.pairingTtlMs,
-      deviceTtlMs: config.deviceTtlMs,
-      sessionTtlMs: config.sessionTtlMs,
-      maxDevices: config.maxDevices,
-      maxSessions: config.maxSessions,
-      rateLimitWindowMs: config.rateLimitWindowMs,
-      maxPairingAttempts: config.maxPairingAttempts,
-      maxRateLimitKeys: config.maxRateLimitKeys,
-    })
-    this.renewLimiter = new BoundedRateLimiter(
-      Math.min(100, config.maxPairingAttempts * 4),
-      config.rateLimitWindowMs,
-      config.maxRateLimitKeys,
-    )
-    this.removeSessionListener = this.access.onSessionEnded(authorization => {
+    this.removeTokenListener = this.account.onTokenEnded(authorization => {
       this.abortSessionResources(authorization.sessionKey)
     })
     this.removeExtensionContentListener = this.extensions?.onContentChanged(() => {
@@ -984,7 +954,7 @@ export class MobileAccessGateway {
   async start(): Promise<void> {
     if (this.started || this.server !== undefined) throw new Error('mobile-access gateway cannot be started twice')
     this.started = true
-    await this.access.initialize()
+    await this.account.initialize()
     try {
       if (this.config.pairingCaFile !== undefined) {
         const certificate = new X509Certificate(await readFile(this.config.pairingCaFile))
@@ -1129,7 +1099,6 @@ export class MobileAccessGateway {
     if (server?.listening === true) {
       await new Promise<void>(resolve => { server.close(() => resolve()) })
     }
-    await this.access.close()
   }
 
   private async closeBonjour(): Promise<void> {
@@ -1154,15 +1123,38 @@ export class MobileAccessGateway {
     return this.policy
   }
 
+  /**
+   * 唯一的凭据入口。一元 API 走 `Authorization: Bearer <token>`，WebView 页面走
+   * `dsh_ma_session` cookie——同一个登录 token 的两种形态，所以三条线路
+   * （局域网 / IPv6 / 公网）共用一套认证，不再有「每 origin 一枚 cookie」。
+   *
+   * 配对/设备短会话的回落已随配对模式整体删除：不认识的凭据一律 401，
+   * 不存在「旧设备令牌也能换到会话」这条旁路。
+   */
   private authorize(request: IncomingMessage): SessionAuthorization {
-    const sessionToken = requestCookies(request).get(SESSION_COOKIE)
-    if (sessionToken === undefined) throw new HttpError(401, 'authentication_failed')
-    return this.access.authorizeSession(sessionToken)
+    const credential = this.credentialOf(request)
+    if (credential === undefined) throw new HttpError(401, 'authentication_failed')
+    const account = this.account.tryAuthorize(credential)
+    if (account === undefined) throw new HttpError(401, 'authentication_failed')
+    return account
+  }
+
+  private credentialOf(request: IncomingMessage): string | undefined {
+    // cookie 优先：浏览器/WebView 本来就带 cookie，而请求里另有一枚无关的
+    // Authorization 头是合法场景（上游白名单会把它剥掉，不该在这里判 401）。
+    const cookie = requestCookies(request).get(SESSION_COOKIE)
+    if (cookie !== undefined) return cookie
+    const header = headerValue(request.headers, 'authorization')
+    if (header === undefined) return undefined
+    const match = /^Bearer[ ]+(\S+)$/iu.exec(header.trim())
+    const token = match?.[1]
+    if (token === undefined) throw new HttpError(401, 'authentication_failed')
+    return token
   }
 
   private requireCsrf(request: IncomingMessage, authorization: SessionAuthorization): void {
-    const value = headerValue(request.headers, CSRF_HEADER)
-    this.access.assertCsrf(authorization, value)
+    // 只有账号 token 一种凭据了：CSRF 与那枚 token 绑定（account.assertCsrf 是 fail-closed）。
+    this.account.assertCsrf(authorization, headerValue(request.headers, CSRF_HEADER))
   }
 
   private setSessionCookies(response: ServerResponse, result: {
@@ -1177,104 +1169,158 @@ export class MobileAccessGateway {
     ])
   }
 
-  private async handlePair(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  /** 账号登录：账密换一个月 token（免会话路由，必须排在 authorize 兜底之前）。 */
+  private async handleAccountLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-    if (typeof body.token !== 'string' || (body.label !== undefined && typeof body.label !== 'string')) {
+    if (typeof body.username !== 'string' || typeof body.password !== 'string'
+      || (body.label !== undefined && typeof body.label !== 'string')) {
       throw new HttpError(400, 'bad_request')
     }
-    const result = await this.access.pair(request.socket.remoteAddress ?? 'unknown', body.token, body.label as string | undefined)
-    const now = Date.now()
-    this.setSessionCookies(response, result, now)
-    const sessionCookies = response.getHeader('Set-Cookie') as string[]
-    response.setHeader('Set-Cookie', [
-      ...sessionCookies,
-      cookie(DEVICE_COOKIE, result.deviceToken, {
-        tls: this.tlsEnabled,
-        httpOnly: true,
-        path: '/mobile-access/auth/renew',
-        maxAgeSeconds: (result.deviceExpiresAt - now) / 1000,
-      }),
-    ])
-    sendJson(response, 201, {
-      paired: true,
-      deviceId: result.deviceId,
-      csrfToken: result.csrfToken,
-      sessionExpiresAt: result.sessionExpiresAt,
-    }, this.tlsEnabled)
-  }
-
-  private async handleRenew(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (!this.renewLimiter.take(request.socket.remoteAddress ?? 'unknown', Date.now())) {
-      throw new HttpError(429, 'rate_limited')
-    }
-    await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-    const deviceToken = requestCookies(request).get(DEVICE_COOKIE)
-    if (deviceToken === undefined) throw new HttpError(401, 'authentication_failed')
-    let result
-    try {
-      result = await this.access.renew(deviceToken)
-    } catch (error) {
-      if (error instanceof AccessError && error.status === 401) {
-        response.setHeader('Set-Cookie', cookie(DEVICE_COOKIE, '', {
-          tls: this.tlsEnabled,
-          httpOnly: true,
-          path: '/mobile-access/auth/renew',
-          maxAgeSeconds: 0,
-        }))
-      }
-      throw error
-    }
-    this.setSessionCookies(response, result, Date.now())
-    sendJson(response, 200, {
-      renewed: true,
-      deviceId: result.deviceId,
-      csrfToken: result.csrfToken,
-      sessionExpiresAt: result.sessionExpiresAt,
-    }, this.tlsEnabled)
-  }
-
-  private async handleNativePair(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-    if (typeof body.token !== 'string' || (body.label !== undefined && typeof body.label !== 'string')) {
-      throw new HttpError(400, 'bad_request')
-    }
-    const result = await this.access.pair(
+    const result = await this.account.login(
       request.socket.remoteAddress ?? 'unknown',
-      body.token,
+      body.username,
+      body.password,
       body.label as string | undefined,
     )
-    sendJson(response, 201, {
-      instanceId: this.config.instanceId,
-      deviceId: result.deviceId,
-      deviceToken: result.deviceToken,
-      deviceExpiresAt: result.deviceExpiresAt,
-      sessionToken: result.sessionToken,
+    this.setSessionCookies(response, {
+      sessionToken: result.token,
       csrfToken: result.csrfToken,
-      sessionExpiresAt: result.sessionExpiresAt,
+      sessionExpiresAt: result.expiresAt,
+    }, Date.now())
+    sendJson(response, 200, {
+      ok: true,
+      loggedIn: true,
+      instanceId: this.config.instanceId,
+      username: result.username,
+      label: result.label,
+      tokenId: result.tokenId,
+      token: result.token,
+      csrfToken: result.csrfToken,
+      expiresAt: result.expiresAt,
     }, this.tlsEnabled)
   }
 
-  private async handleNativeRenew(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (!this.renewLimiter.take(request.socket.remoteAddress ?? 'unknown', Date.now())) {
-      throw new HttpError(429, 'rate_limited')
+  /**
+   * 凭据自检：App 启动时判断缓存 token 还有效吗、还剩多久。
+   *
+   * **完全没带凭据 = 200 且 `username: null`**（「这台服务端现在没有你的会话」不是
+   * 错误——登录页的「检查」按钮、App 启动自检都可能在没有 token 时问一次）。
+   * 但**带了**凭据却不认（撤销 / 过期 / 伪造）仍然是 401：那是「你的 token 死了」，
+   * 与「你还没登录」是两件事，客户端必须能分开（否则一枚失效 token 会被读成
+   * 「一切正常但没登录」，界面就停在原地不提示重新登录）。
+   */
+  private async handleAccountSession(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.credentialOf(request) === undefined) {
+      sendJson(response, 200, {
+        ok: true,
+        kind: 'anonymous',
+        username: null,
+        tokenId: null,
+        label: null,
+        expiresAt: null,
+      }, this.tlsEnabled)
+      return
     }
-    const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-    if (typeof body.deviceToken !== 'string') throw new HttpError(400, 'bad_request')
-    const result = await this.access.renew(body.deviceToken)
+    const authorization = this.authorize(request)
+    const tokenId = this.account.tokenIdOf(authorization.sessionKey)
+    const summary = tokenId === undefined ? undefined : this.account.listTokens().find(token => token.id === tokenId)
     sendJson(response, 200, {
-      instanceId: this.config.instanceId,
-      deviceId: result.deviceId,
-      sessionToken: result.sessionToken,
-      csrfToken: result.csrfToken,
-      sessionExpiresAt: result.sessionExpiresAt,
+      ok: true,
+      kind: 'account',
+      username: this.account.currentUsername() ?? null,
+      tokenId: tokenId ?? null,
+      label: summary?.label ?? null,
+      expiresAt: summary?.expiresAt ?? authorization.expiresAt,
     }, this.tlsEnabled)
+  }
+
+  /** 已登录设备列表：自己那枚标 current，供「踢下线」用。 */
+  private async handleAccountTokens(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const authorization = this.authorize(request)
+    if (this.account.owns(authorization.sessionKey) !== true) throw new HttpError(403, 'forbidden')
+    const currentId = this.account.tokenIdOf(authorization.sessionKey)
+    sendJson(response, 200, {
+      ok: true,
+      tokens: this.account.listTokens().map(token => ({ ...token, current: token.id === currentId })),
+    }, this.tlsEnabled)
+  }
+
+  /** 撤销某一枚 token（body `{all:true}` 或省略 id 时撤销自己）。 */
+  private async handleAccountRevoke(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const authorization = this.authorize(request)
+    if (this.account.owns(authorization.sessionKey) !== true) throw new HttpError(403, 'forbidden')
+    this.requireCsrf(request, authorization)
+    const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
+    if (body.all === true) {
+      sendJson(response, 200, { ok: true, revoked: await this.account.revokeAll() }, this.tlsEnabled)
+      return
+    }
+    const id = typeof body.id === 'string' ? body.id : this.account.tokenIdOf(authorization.sessionKey)
+    if (id === undefined || !/^[a-f\d]{32}$/u.test(id)) throw new HttpError(400, 'bad_request')
+    if (!await this.account.revokeToken(id)) throw new HttpError(404, 'not_found')
+    sendJson(response, 200, { ok: true, revoked: 1 }, this.tlsEnabled)
+  }
+
+  /** App 内更新：先校 token，再按文件名反代本地 APK 服务（流式，不整包进内存）。 */
+  private async handleAppDistribution(request: IncomingMessage, response: ServerResponse, file: string): Promise<void> {
+    this.authorize(request)
+    if (file === 'manifest.json') {
+      let upstream: Response
+      try {
+        upstream = await fetch(`${APP_DISTRIBUTION_ORIGIN}/manifest.json`)
+      } catch {
+        throw new HttpError(502, 'distribution_unreachable')
+      }
+      if (!upstream.ok) throw new HttpError(502, `distribution_${String(upstream.status)}`)
+      const body = Buffer.from(await upstream.arrayBuffer())
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': body.length,
+        'Cache-Control': 'no-store',
+      })
+      response.end(body)
+      return
+    }
+    if (!APP_DOWNLOAD_FILE.test(file)) throw new HttpError(404, 'not_found')
+    let upstream: Response
+    try {
+      upstream = await fetch(`${APP_DISTRIBUTION_ORIGIN}/${file}`)
+    } catch {
+      throw new HttpError(502, 'distribution_unreachable')
+    }
+    const stream = upstream.body
+    if (!upstream.ok || stream === null) throw new HttpError(502, `distribution_${String(upstream.status)}`)
+    setSecurityHeaders(response, this.tlsEnabled)
+    const declared = upstream.headers.get('content-length')
+    response.writeHead(200, {
+      'Content-Type': 'application/vnd.android.package-archive',
+      ...(declared === null ? {} : { 'Content-Length': Number(declared) }),
+      'Cache-Control': 'no-store',
+    })
+    const reader = stream.getReader()
+    try {
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        if (chunk.value === undefined) continue
+        if (!response.write(Buffer.from(chunk.value))) {
+          await new Promise<void>(resolve => { response.once('drain', () => { resolve() }) })
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    response.end()
   }
 
   private async handleLogout(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
+    // 空体是合法的：登出没有参数，客户端（含 `fetch(..., {method:'POST'})` 不写 body）
+    // 不该因为「没带 JSON」被 400 挡掉——那会让 token 永远撤不掉。
+    await readJsonObject(request, MAX_CONTROL_BODY_BYTES, { allowEmpty: true })
     const authorization = this.authorize(request)
     this.requireCsrf(request, authorization)
-    this.access.logout(authorization)
+    await this.account.logout(authorization)
     response.setHeader('Set-Cookie', [
       cookie(SESSION_COOKIE, '', { tls: this.tlsEnabled, httpOnly: true, path: '/', maxAgeSeconds: 0 }),
       cookie(CSRF_COOKIE, '', { tls: this.tlsEnabled, httpOnly: false, path: '/', maxAgeSeconds: 0 }),
@@ -1337,6 +1383,7 @@ export class MobileAccessGateway {
         pluginVersion: DSH_MOBILE_VERSION,
         minimumAndroidAppVersion: MINIMUM_ANDROID_APP_VERSION,
         discoveryProtocol: DISCOVERY_PROTOCOL,
+        accountConfigured: this.account.hasAccount(),
       }, this.tlsEnabled)
       return
     }
@@ -1362,18 +1409,6 @@ export class MobileAccessGateway {
       response.end(body)
       return
     }
-    if (target.search === '' && request.method === 'GET'
-      && (target.decodedPathname === `${AUTH_PREFIX}/pair` || target.decodedPathname === `${AUTH_PREFIX}/pair.js`)) {
-      if (!this.access.pairingStatus().open) throw new HttpError(404, 'not_found')
-      setSecurityHeaders(response, this.tlsEnabled)
-      const body = target.decodedPathname.endsWith('.js') ? PAIR_SCRIPT : PAIR_PAGE
-      response.writeHead(200, {
-        'Content-Type': target.decodedPathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
-        'Content-Length': Buffer.byteLength(body),
-      })
-      response.end(body)
-      return
-    }
     if (request.method === 'GET'
       && (target.decodedPathname === `${AUTH_PREFIX}/login` || target.decodedPathname === `${AUTH_PREFIX}/login.js`)) {
       if (target.decodedPathname.endsWith('.js') && target.search !== '') throw new HttpError(400, 'bad_request')
@@ -1384,10 +1419,6 @@ export class MobileAccessGateway {
         'Content-Length': Buffer.byteLength(body),
       })
       response.end(body)
-      return
-    }
-    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/pair`) {
-      await this.handlePair(request, response)
       return
     }
     if (this.config.staticCacheWorker && request.method === 'GET' && target.search === ''
@@ -1405,16 +1436,25 @@ export class MobileAccessGateway {
       response.end(SERVICE_WORKER_SOURCE)
       return
     }
-    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/renew`) {
-      await this.handleRenew(request, response)
+    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/login`) {
+      await this.handleAccountLogin(request, response)
       return
     }
-    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/native-pair`) {
-      await this.handleNativePair(request, response)
+    if (target.search === '' && request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/auth/session`) {
+      await this.handleAccountSession(request, response)
       return
     }
-    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/native-renew`) {
-      await this.handleNativeRenew(request, response)
+    if (target.search === '' && request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/auth/tokens`) {
+      await this.handleAccountTokens(request, response)
+      return
+    }
+    if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/tokens/revoke`) {
+      await this.handleAccountRevoke(request, response)
+      return
+    }
+    // App 分发是静态文件路由：忽略查询串（客户端加 cache-busting 参数不该 404）。
+    if (request.method === 'GET' && target.decodedPathname.startsWith(`${AUTH_PREFIX}/app/`)) {
+      await this.handleAppDistribution(request, response, target.decodedPathname.slice(`${AUTH_PREFIX}/app/`.length))
       return
     }
     if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/logout`) {
@@ -2407,8 +2447,8 @@ export class MobileAccessGateway {
           if (request.method === 'GET' && target.decodedPathname === `${prefix}/status`) {
             sendJson(response, 200, {
               gateway: this.address(),
-              pairing: this.access.pairingStatus(),
-              deviceCount: this.access.listDevices().length,
+              accountConfigured: this.account.hasAccount(),
+              tokenCount: this.account.listTokens().length,
               resources: {
                 connections: this.connectedSockets.size,
                 activeRequests: this.activeRequests.size,
@@ -2417,47 +2457,31 @@ export class MobileAccessGateway {
             }, false)
             return
           }
-          if (request.method === 'GET' && target.decodedPathname === `${prefix}/devices`) {
-            sendJson(response, 200, { devices: this.access.listDevices() }, false)
+          if (request.method === 'POST' && target.decodedPathname === `${prefix}/account`) {
+                    const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
+            if (typeof body.username !== 'string' || typeof body.password !== 'string') {
+              throw new HttpError(400, 'bad_request')
+            }
+            const result = await this.account.setAccount(body.username, body.password)
+            sendJson(response, 200, { configured: true, ...result }, false)
             return
           }
-          if (request.method === 'POST' && target.decodedPathname === `${prefix}/pairing/open`) {
-            const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-            if (body.ttlMs !== undefined && typeof body.ttlMs !== 'number') throw new HttpError(400, 'bad_request')
-            const opened = await this.access.openPairing(body.ttlMs as number | undefined)
-            const pairUrl = `${this.address().origin}/mobile-access/pair#instance=${this.config.instanceId}&token=${opened.token}`
-            const appPairUrl = pairUrl
-            // The QR code is an enhancement; a failed render must not waste an opened window.
-            let qrSvg = ''
-            try {
-              qrSvg = await QRCode.toString(appPairUrl, { type: 'svg', margin: 1 })
-            } catch {
-              // keep qrSvg empty
-            }
-            sendJson(response, 201, {
-              ...opened,
-              appKey: `dsh1.${this.config.instanceId}.${opened.token}`,
-              pairUrl,
-              appPairUrl,
-              qrSvg,
+          if (request.method === 'GET' && target.decodedPathname === `${prefix}/tokens`) {
+            sendJson(response, 200, {
+              account: this.account.currentUsername() ?? null,
+              tokens: this.account.listTokens() ?? [],
             }, false)
             return
           }
-          if (request.method === 'POST' && target.decodedPathname === `${prefix}/devices/revoke`) {
-            const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-            if (typeof body.deviceId !== 'string' || !/^[a-f\d]{32}$/u.test(body.deviceId)) {
-              throw new HttpError(400, 'bad_request')
+          if (request.method === 'POST' && target.decodedPathname === `${prefix}/tokens/revoke`) {
+                    const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
+            if (body.all === true) {
+              sendJson(response, 200, { revoked: await this.account.revokeAll() }, false)
+              return
             }
-            const revoked = await this.access.revokeDevice(body.deviceId)
-            if (!revoked) throw new HttpError(404, 'not_found')
-            sendJson(response, 200, { revoked: true }, false)
-            return
-          }
-          if (request.method === 'POST' && target.decodedPathname === `${prefix}/devices/reset`) {
-            const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
-            if (body.confirm !== true) throw new HttpError(400, 'bad_request')
-            await this.access.resetDevices()
-            sendJson(response, 200, { reset: true }, false)
+            if (typeof body.id !== 'string' || !/^[a-f\d]{32}$/u.test(body.id)) throw new HttpError(400, 'bad_request')
+            if (!await this.account.revokeToken(body.id)) throw new HttpError(404, 'not_found')
+            sendJson(response, 200, { revoked: 1 }, false)
             return
           }
           throw new HttpError(404, 'not_found')
@@ -2484,8 +2508,8 @@ export class MobileAccessGateway {
     this.removeExtensionContentListener()
     this.upstreamAuthRequest?.destroy()
     this.upstreamAuthRequest = undefined
-    this.removeSessionListener()
-    const accessClose = this.access.close()
+    this.removeTokenListener()
+    const accountClose = this.account.close()
     for (const request of this.activeRequests.values()) request.abort()
     for (const websocket of this.activeWebSockets.values()) {
       websocket.client.destroy()
@@ -2506,7 +2530,7 @@ export class MobileAccessGateway {
       server.closeAllConnections()
       await new Promise<void>(resolve => { server.close(() => resolve()) })
     }
-    await accessClose
+    await accountClose
     this.activeRequests.clear()
     this.activeWebSockets.clear()
     this.connectedSockets.clear()
@@ -2515,8 +2539,8 @@ export class MobileAccessGateway {
   }
 
   /** Safe metadata helper for direct loopback integrations. */
-  devices(): readonly DeviceSummary[] {
-    return this.access.listDevices()
+  tokens(): readonly AccountTokenSummary[] {
+    return this.account.listTokens()
   }
 
   /** Status shown by the loopback mobile-access control card. */

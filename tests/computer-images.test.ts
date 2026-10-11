@@ -1,12 +1,25 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { listComputerImages, readComputerImage, resolveComputerImagePath } from '../src/computer-images.js'
+import { createTempDirectory } from './tmp-root.js'
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
+
+/** 测试工作目录落仓库根 `.tmp/`，不写 /tmp。 */
+async function tempDirectory(prefix: string): Promise<string> {
+  const directory = await createTempDirectory(prefix)
+  temporaryDirectories.push(directory)
+  return directory
+}
 
 describe('authenticated computer image browser', () => {
   it('lists directories and supported images while omitting other files', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-images-'))
+    const root = await tempDirectory('dsh-mobile-images-')
     await Promise.all([
       mkdir(join(root, 'album')),
       writeFile(join(root, 'photo.PNG'), 'png'),
@@ -23,7 +36,7 @@ describe('authenticated computer image browser', () => {
   })
 
   it('reads supported regular images and rejects relative or non-image paths', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-image-'))
+    const root = await tempDirectory('dsh-mobile-image-')
     const image = join(root, 'photo.webp')
     await writeFile(image, 'webp')
     await expect(readComputerImage(image)).resolves.toMatchObject({ contentType: 'image/webp', name: 'photo.webp' })
@@ -32,7 +45,7 @@ describe('authenticated computer image browser', () => {
   })
 
   it('stops directory and file reads when device authorization is revoked', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mobile-image-abort-'))
+    const root = await tempDirectory('dsh-mobile-image-abort-')
     const image = join(root, 'photo.png')
     await writeFile(image, 'png')
     const controller = new AbortController()

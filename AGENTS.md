@@ -4,7 +4,7 @@
 
 DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，`package.json` 的 repository 字段仍指上游）：把电脑里的 DSH Web UI 以移动形态服务给手机浏览器与 Android App，不改 dsh 源码。
 
-- **Host 半边**：认证 LAN 网关——配对/设备/Session、会话 Cookie 失败驱动续期（HTTP 401 / WS error → renew 后重放）、回环代理到 3080、移动 index 重写（viewport/去上游 preload/boot 批次）、CSP/缓存/Service Worker。
+- **Host 半边**：认证 LAN 网关——**单账号账密登录 + 一个月 token**（`src/account.ts` 是唯一凭据来源；同一枚 token 两种形态：原生 API 走 `Authorization: Bearer`，WebView 走同名 cookie `dsh_ma_session`，变更请求再带 `dsh_ma_csrf`/`x-dsh-mobile-csrf`）、回环代理到 3080、移动 index 重写（viewport/去上游 preload/boot 批次）、CSP/缓存/Service Worker。**配对模式已整体删除**：`AccessController`（配对窗/设备表/短会话/续期）、`src/storage.ts`、`PAIR_PAGE`/`PAIR_SCRIPT`、`auth/pair`·`auth/renew`·`mobile-access/pair(.js)`、管理面 `pairing/open`·`devices*` 全没了，`src/access.ts` 只剩被账号链路复用的 `AccessError`/`SessionAuthorization`/`BoundedRateLimiter`（`src/access.ts:14/21/33`）；`/mobile-access/login` 现在是**账密表单页**。**401/WS 失败不再续期重放**——SPA bootstrap 改成「401 → 导到账密登录页（带 `return` 回跳）」（`src/gateway.ts:150-160` 的实现说明）。
 - **Client 半边**：专用移动布局（**替换**官方 `@deepseek-ai/dsh-client-ui-layout` 模块）+ native surface + 设计系统。
 - 生态：dsh 核心 `../deepseek-harness/`；Flutter 重写版 App `../dsh-mobile-flutter/`（独立仓库，工作区 APK 链路当前分发的是它）。`docs/backstop-design.md` 的「后盾」是 **App 原生层**（监控/自救）设计、P1 未开工，与 `native/funnel-host` 无关。
 
@@ -13,19 +13,19 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | 项 | 事实 |
 |---|---|
 | git | 唯一 remote `origin=git@github.com:FeiyuEVE/dsh-mobile.git`（无 upstream；`origin/HEAD→origin/main`）；当前分支 `local/sse-keepalive`（非 main）；无 tag |
-| 包 | `@feiyueve/dsh-mobile@0.3.31`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
-| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）`latest=0.3.31`；本 fork 只发私源 |
-| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级（当前 web / staging 均 pin `0.3.31`，以 `~/.dsh/profiles/*/package.json` 为准） |
-| Android | `apps/mobile/android`：`io.github.sayach.dshmobile`，minSdk 29 / targetSdk·compileSdk 36；`versionName` 必须等于 package.version，`versionCode` 只需正整数递增（当前 0.3.31 / 66） |
+| 包 | `@feiyueve/dsh-mobile@0.3.40`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
+| 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）；本 fork 只发私源。⚠️ 仓库内已是 `0.3.40`，但**私源 `latest` 实测仍是 `0.3.39`**（2026-10-11 `npm view @feiyueve/dsh-mobile dist-tags` → `latest=0.3.39` / `next=0.3.38`）——`0.3.40` 尚未发私源，发版后再更新此行 |
+| 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级——**以 `~/.dsh/profiles/*/package.json` 为准**（2026-10-11 快照：web 仍 pin `0.3.38`、staging pin `0.3.39`；部署后两台都应为 `0.3.40`） |
+| Android | `apps/mobile/android`：`io.github.sayach.dshmobile`，minSdk 29 / targetSdk·compileSdk 36；`versionName` 必须等于 package.version，`versionCode` 只需正整数递增（当前 `0.3.40` / **75**，`app/build.gradle.kts:25`） |
 
 ## 目录结构
 
 | 路径 | 职责 |
 |---|---|
 | `src/plugin.ts` | Cordis 入口（`name=dsh-mobile`，`inject=[webServer,commands,connection]`）、`/api/mobile-access/*` 管理面、`/mobile` 命令 |
-| `src/gateway.ts` | 网关核心：`/mobile-access/*` 路由、index 重写（viewport/preload/boot 批次）、CSP、SSE/WS 代理 |
+| `src/gateway.ts` | 网关核心：`/mobile-access/*` 路由（**账密登录页 `/login` + `/login.js`**、`auth/login`·`auth/session`·`auth/tokens`·`auth/tokens/revoke`·`auth/logout`、公开的 `metadata`（回 `accountConfigured`）与 `discovery`（回 `instanceId`）、**需账号 token 的 App 分发 `/app/{manifest.json,*.apk}`**、设备/token 列表）、index 重写（viewport/preload/boot 批次）、CSP、SSE/WS 代理 |
 | `src/client.ts`·`mobile-layout.ts`·`native-mobile.ts` | Client 半边：移动布局、消息、native surface CSS/同步 |
-| `src/config.ts`·`access.ts`·`control.ts`·`storage.ts`·`network.ts`·`http-security.ts` | 配置校验与资源上限、配对/设备/Session、持久化、CIDR、CSRF 与 loopback 信任策略 |
+| `src/config.ts`·`account.ts`·`access.ts`·`control.ts`·`network.ts`·`http-security.ts` | 配置校验与资源上限、**账号与 token 表（`account.ts`，唯一凭据来源；快照上限 `tokenSnapshotLimit(maxTokens) = maxTokens + 64`）**、会话授权原语（`access.ts` 只剩 `AccessError`/`SessionAuthorization`/`BoundedRateLimiter`；**`storage.ts` 已删**）、CIDR、CSRF 与 loopback 信任策略 |
 | `src/funnel.ts`·`cpolar*.ts`·`remote.ts`·`diagnostics.ts`·`extensions.ts` | 远程通道、诊断、扩展注册表 |
 | `src/cli.ts` | `dsh-mobile` bin：`setup [--address\|--port 3443\|--dsh-port 3080\|--no-firewall]`、`purge --yes`、`extension create <id>` |
 | `tests/` | vitest（`vitest.config.ts` include 仅 `tests/**/*.test.ts`）；`tests/*.test.js`·`.d.ts`·`.map` 是陈旧 tsc 副产物（多数已跟踪），勿改 |
@@ -56,11 +56,16 @@ cd apps/mobile/android && bash ./gradlew --no-daemon lintDebug testDebugUnitTest
 5. **发版先查号段**：`git log` + `npm view @feiyueve/dsh-mobile versions`，避免同分支多会话撞号。`.github/workflows/release.yml` 是上游链路（`registry.npmjs.org` + 无 scope 包名 `dsh-mobile`），与本 fork 的私源 `@feiyueve/dsh-mobile` 不匹配。
 6. **替换官方 `ui-layout` 模块要承接其全部职责**（`provideRoot({hooks:{panelInfo}})`、槽 children、`reflect.provide('layout')`）；每次同步 dsh 都 diff 官方 `packages/client/ui-layout/src/client/index.ts`，漏掉会让抽屉会话列表为空。
 7. **WebView 兼容垫片归 App 独占**：服务端不再注入这些垫片，`tests/mobile-layout.test.ts` 的反向断言是哨兵，**禁止加回**。
-8. **管理面与网关访问**：`/api/mobile-access/*` 全部经 `assertLocalAdminTrust`（仅 loopback + 同源 + Host 回环）；经 docker 端口映射从宿主访问时源 IP 是网桥网关 → 403，容器里须 `run-in-netns.sh`。网关 18443/18452 对非移动/未配对请求返回 401/403。
+8. **管理面与网关访问**：`/api/mobile-access/*` 全部经 `assertLocalAdminTrust`（仅 loopback + 同源 + Host 回环）；经 docker 端口映射从宿主访问时源 IP 是网桥网关 → 403，容器里须 `run-in-netns.sh`。网关 18443/18452 对非移动/**未登录**（或凭据不认）请求返回 401/403。
 9. **`check:mobile-release` 覆盖很宽**：品牌/图标 PNG 尺寸与 alpha（含各密度 mipmap）、Android manifest（禁明文、权限、AndroidKeyStore、CA 固定）、`versionName`==package.version、各语言 string/plurals 对齐、funnel `go.mod`（go 1.26.6 / tailscale v1.102.3）+ `bin/*.exe` MZ 头且 <40MiB、npm `files` 清单——动这些会红。
 10. **凭据不入库**：不提交签名密钥/凭据/令牌（`CONTRIBUTING.md`）；稳定版 Android 签名 secrets 只进 CI runner（`release.yml` 实际读 `ANDROID_KEYSTORE_BASE64` + `DSH_ANDROID_KEYSTORE_PASSWORD`/`DSH_ANDROID_KEY_ALIAS`/`DSH_ANDROID_KEY_PASSWORD`，与 CONTRIBUTING 写的后三个名字不同）。每个拒绝路径要有负向测试。
 11. **文档口径陷阱**：本仓库 `README.md` 顶部与兼容性表停在 **0.3.2**（上游口径，勿当现状）；`CHANGELOG.md` 本地事实从 0.3.26 起，且有 0.3.23/0.3.24 顺序颠倒、0.3.14 重复、中段陈旧 `## Unreleased`。
 12. **APK 分发链路**：工作区 `~/dsh-apk-dl/` 当前 manifest 指向 **dsh-mobile-flutter** APK；父仓库 `dsh-apk-dl/` 只是服务源码。
+
+13. **`LOG_QUERY_TOKEN` / `LOG_INGEST_TOKENS` 是写在源码里的静态令牌，日志面免账号会话即可读写（已知存量问题，0.3.38 就有，未修复）**：两个常量都在 `src/gateway.ts` 顶部——`LOG_QUERY_TOKEN`（`:90`，明文十六进制常量）与 `LOG_INGEST_TOKENS`（`:97`，两条白名单：部署令牌 + 页面注入的 `__DSH_INGEST_TOKEN__`），**不经 `authorize()`**：
+    - `GET /api/mobile-logs` 只要请求头 `x-log-query` 等于 `LOG_QUERY_TOKEN`，网关就**合成一个固定会话**（`sessionKey`/`deviceId` 都是 `mobile-logs-query`、`expiresAt = now + 1h`，`gateway.ts:1496`）直接 `proxyHttp` 反代到 3080——**不需要账号、不需要 cookie**；
+    - `POST /log-ingest` 只要 `x-log-token` 命中白名单就转发到本地 logstash（`gateway.ts:1329`）。
+    实测（对**公网入口**的对抗性验证，记录见父仓库 `CHANGES.md` 2026-10-11 条目的「未决」）：不带任何账号会话时这两条都打通了——所以「配对删了、只剩账号 token」**不等于**日志面也收紧了。轮换必须**同时改四侧**：`src/gateway.ts` 的两个常量、frps nginx 的 `dsh-mobile.conf`、`scratch-supervisor`/profile 侧注入、以及 `dsh-mobile-flutter` 里内置的同名常量（`lib/features/logs/logs_page.dart:23`）。**不要在文档或结论里写「已修复」**：要不要改成按账号会话或按回环收紧，属**待用户拍板**的存量项。
 
 ## 相关文档
 

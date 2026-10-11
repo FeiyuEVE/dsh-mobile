@@ -1,19 +1,25 @@
-import { createHash, X509Certificate } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto'
 import { createSocket } from 'node:dgram'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, request as requestHttp, type IncomingHttpHeaders, type IncomingMessage, type Server } from 'node:http'
 import { request as requestHttps } from 'node:https'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseGatewayConfig } from '../src/config.js'
 import { MobileAccessGateway } from '../src/gateway.js'
 import { CSRF_HEADER, DEVICE_COOKIE, SESSION_COOKIE } from '../src/http-security.js'
-import { MemoryDeviceStore } from '../src/storage.js'
+import {
+  AccountController,
+  DEFAULT_TOKEN_TTL_MS,
+  MemoryAccountStore,
+  MemoryTokenStore,
+  type AccountControllerOptions,
+} from '../src/account.js'
 import { DSH_MOBILE_VERSION, MINIMUM_ANDROID_APP_VERSION } from '../src/version.js'
 import { createTestTlsChain } from './tls-fixtures.js'
+import { TMP_ROOT, createTempDirectory } from './tmp-root.js'
 
 interface HttpResult {
   readonly status: number
@@ -43,6 +49,19 @@ const HISTORY_RESPONSE = JSON.stringify({
   type: 'client-response',
   result: { ok: true, value: { events: [{ event: { type: 'assistant/chunk', content: 'history '.repeat(2_048) } }] } },
 })
+
+// 项目产物不落 /tmp：测试工作目录一律放仓库根 `.tmp/`（已在 .gitignore），
+// 每个用例结束时由 cleanups 清理自己建的那份。
+const [TEST_USERNAME, TEST_PASSWORD] = ['feiyueve', 'hmw-correct-horse-battery'] as const
+
+/** 记录 helper 为每个网关实例建的 AccountController（构造函数把它设为私有）。 */
+const gatewayAccounts = new WeakMap<MobileAccessGateway, AccountController>()
+
+async function tempDirectory(prefix: string): Promise<string> {
+  const directory = await createTempDirectory(prefix)
+  cleanups.push(() => rm(directory, { recursive: true, force: true }))
+  return directory
+}
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
@@ -137,8 +156,7 @@ async function tlsFixtureFiles(): Promise<{
   readonly rootCert: string
   readonly key: string
 }> {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-access-tls-'))
-  cleanups.push(() => rm(directory, { recursive: true, force: true }))
+  const directory = await tempDirectory('dsh-mobile-access-tls-')
   const chain = createTestTlsChain()
   const files = {
     leaf: join(directory, 'leaf.pem'),
@@ -328,20 +346,32 @@ async function gateway(
   overrides: Record<string, unknown> = {},
   testSessionTtlMs?: number,
   upstreamAuthenticatedUrl?: string,
+  accountOverrides: Partial<AccountControllerOptions> = {},
 ): Promise<MobileAccessGateway> {
+  await mkdir(TMP_ROOT, { recursive: true })
   const resolved = parseGatewayConfig({
     listenHost: '127.0.0.1',
     listenPort: TEST_GATEWAY_PORT,
     upstreamOrigin: `http://127.0.0.1:${String(upstreamPort)}`,
     publicAuthorities: ['127.0.0.1'],
     allowedCidrs: ['127.0.0.0/8'],
-    stateFile: join(tmpdir(), `dsh-mobile-access-${crypto.randomUUID()}.json`),
+    stateFile: join(TMP_ROOT, `dsh-mobile-access-${randomUUID()}.json`),
     tls: { mode: 'disabled' },
     ...overrides,
   })
   const effective = testSessionTtlMs === undefined ? resolved : Object.freeze({ ...resolved, sessionTtlMs: testSessionTtlMs })
-  const instance = new MobileAccessGateway(effective, new MemoryDeviceStore(), undefined, upstreamAuthenticatedUrl)
+  const account = new AccountController(new MemoryAccountStore(), new MemoryTokenStore(), {
+    tokenTtlMs: DEFAULT_TOKEN_TTL_MS,
+    maxTokens: 8,
+    rateLimitWindowMs: 60_000,
+    maxLoginAttempts: 5,
+    maxRateLimitKeys: 64,
+    ...accountOverrides,
+  })
+  // 第二参现在是必填的 AccountController；extensions 省略，第四参是上游认证 URL。
+  const instance = new MobileAccessGateway(effective, account, undefined, upstreamAuthenticatedUrl)
   await instance.start()
+  gatewayAccounts.set(instance, account)
   cleanups.push(() => instance.close())
   return instance
 }
@@ -355,25 +385,42 @@ function browserHeaders(instance: MobileAccessGateway): Record<string, string> {
   }
 }
 
-async function pair(instance: MobileAccessGateway): Promise<{
-  deviceId: string
+function accountOf(instance: MobileAccessGateway): AccountController {
+  const account = gatewayAccounts.get(instance)
+  if (account === undefined) throw new Error('gateway was not created by the test helper')
+  return account
+}
+
+/** 幂等地配置单账号（旧 `openPairing()` 的替代：凭据只有一个来源）。 */
+async function configureAccount(instance: MobileAccessGateway): Promise<AccountController> {
+  const account = accountOf(instance)
+  if (!account.hasAccount()) await account.setAccount(TEST_USERNAME, TEST_PASSWORD)
+  return account
+}
+
+/**
+ * 账号登录 helper：替掉旧的 `pair()`（`openPairing()` + `POST /auth/pair`）。
+ * 返回的 `session` 就是 `SESSION_COOKIE` 里的那枚 token（同一枚凭据的两种形态）。
+ */
+async function signIn(instance: MobileAccessGateway, label = 'Test phone'): Promise<{
+  token: string
+  tokenId: string
   session: string
-  device: string
   csrf: string
 }> {
-  const opened = await instance.access.openPairing()
-  const result = await request(instance.address().port, '/mobile-access/auth/pair', {
+  await configureAccount(instance)
+  const result = await request(instance.address().port, '/mobile-access/auth/login', {
     method: 'POST',
     headers: { ...browserHeaders(instance), 'content-type': 'application/json' },
-    body: JSON.stringify({ token: opened.token, label: 'Test phone' }),
+    body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD, label }),
   })
-  expect(result.status).toBe(201)
-  const body = JSON.parse(result.body) as { deviceId: string; csrfToken: string }
+  expect(result.status).toBe(200)
+  const body = JSON.parse(result.body) as { token: string; tokenId: string; csrfToken: string }
   const cookies = cookiesByName(result.headers)
   return {
-    deviceId: body.deviceId,
-    session: cookies.get(SESSION_COOKIE) ?? '',
-    device: cookies.get(DEVICE_COOKIE) ?? '',
+    token: body.token,
+    tokenId: body.tokenId,
+    session: cookies.get(SESSION_COOKIE) ?? body.token,
     csrf: body.csrfToken,
   }
 }
@@ -412,7 +459,7 @@ async function openWebSocket(
         'Connection: Upgrade',
         `Sec-WebSocket-Key: ${key}`,
         'Sec-WebSocket-Version: 13',
-        `Cookie: ${SESSION_COOKIE}=${session}; ${DEVICE_COOKIE}=must-strip; attacker=outside`,
+        `Cookie: ${SESSION_COOKIE}=${session}; attacker=outside`,
         '',
         '',
       ].join('\r\n'))
@@ -428,7 +475,7 @@ describe('HTTP gateway', () => {
     // `renderSlot('root') before any 'root' registration (boot order)` → React 树崩、白屏。
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const body = await new Promise<string>((resolve, reject) => {
       const outgoing = requestHttp({
         host: '127.0.0.1',
@@ -437,7 +484,7 @@ describe('HTTP gateway', () => {
         method: 'GET',
         headers: {
           ...browserHeaders(instance),
-          cookie: `${SESSION_COOKIE}=${paired.session}; ${DEVICE_COOKIE}=${paired.device}`,
+          cookie: `${SESSION_COOKIE}=${paired.session}`,
           accept: 'text/event-stream',
         },
         agent: false,
@@ -466,7 +513,7 @@ describe('HTTP gateway', () => {
     // 上游空闲超时压到 1s：修复前本用例会在 1s 后断流（线上 upstreamTimeoutMs=300s，
     // 表现为移动端每 5 分钟一次 ERR_INCOMPLETE_CHUNKED_ENCODING → 整页重连）。
     const instance = await gateway(inner.port, { upstreamTimeoutMs: 1_000 })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const response = await new Promise<IncomingMessage>((resolve, reject) => {
       const outgoing = requestHttp({
         host: '127.0.0.1',
@@ -475,7 +522,7 @@ describe('HTTP gateway', () => {
         method: 'GET',
         headers: {
           ...browserHeaders(instance),
-          cookie: `${SESSION_COOKIE}=${paired.session}; ${DEVICE_COOKIE}=${paired.device}`,
+          cookie: `${SESSION_COOKIE}=${paired.session}`,
           accept: 'text/event-stream',
           'accept-encoding': 'gzip',
         },
@@ -511,12 +558,11 @@ describe('HTTP gateway', () => {
 
   it('serves authenticated computer image browsing without proxying filesystem paths', async () => {
     const inner = await upstream()
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-computer-files-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-computer-files-')
     await mkdir(join(directory, 'album'))
     await writeFile(join(directory, 'photo.png'), 'mobile-image')
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       cookie: `${SESSION_COOKIE}=${paired.session}`,
@@ -540,8 +586,7 @@ describe('HTTP gateway', () => {
 
   it('serves the latest authenticated mobile Web assets without caching them', async () => {
     const inner = await upstream()
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-css-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-css-')
     const customCssFile = join(directory, 'mobile.css')
     const customScriptFile = join(directory, 'mobile.js')
     const mobileLayoutFile = join(directory, 'mobile-layout.js')
@@ -549,7 +594,7 @@ describe('HTTP gateway', () => {
     await writeFile(customScriptFile, 'window.dshMobile.register(() => undefined)\n', 'utf8')
     await writeFile(mobileLayoutFile, 'window.__ModuleLoader__.load({ id: "@deepseek-ai/dsh-client-ui-layout" })\n', 'utf8')
     const instance = await gateway(inner.port, { customCssFile, customScriptFile, mobileLayoutFile })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       cookie: `${SESSION_COOKIE}=${paired.session}`,
@@ -589,7 +634,7 @@ describe('HTTP gateway', () => {
   it('serves the dedicated layout at the authenticated root while retaining a stock escape hatch', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -617,12 +662,11 @@ describe('HTTP gateway', () => {
     // URL 去掉了前导斜杠，`readUpstreamClientBundle` 只认 `/plugins/` 会让整份批次 502
     // （`upstream_unavailable`），专用移动前端因此起不来。
     const inner = await upstream('relative')
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-relative-layout-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-relative-layout-')
     const mobileLayoutFile = join(directory, 'mobile-layout.js')
     await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
     const instance = await gateway(inner.port, { mobileLayoutFile })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -646,12 +690,11 @@ describe('HTTP gateway', () => {
 
   it('serves a DSH 0.1.2 mobile application batch without the stock layout factory', async () => {
     const inner = await upstream('batched')
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-batched-layout-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-batched-layout-')
     const mobileLayoutFile = join(directory, 'mobile-layout.js')
     await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
     const instance = await gateway(inner.port, { mobileLayoutFile })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -710,12 +753,11 @@ describe('HTTP gateway', () => {
 
   it('registers the opt-in static cache Service Worker from the mobile index', async () => {
     const inner = await upstream('batched')
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-sw-on-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-sw-on-')
     const mobileLayoutFile = join(directory, 'mobile-layout.js')
     await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
     const instance = await gateway(inner.port, { mobileLayoutFile, staticCacheWorker: true })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -739,12 +781,11 @@ describe('HTTP gateway', () => {
 
   it('keeps the static cache worker disabled by default', async () => {
     const inner = await upstream('batched')
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-sw-off-'))
-    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const directory = await tempDirectory('dsh-mobile-sw-off-')
     const mobileLayoutFile = join(directory, 'mobile-layout.js')
     await writeFile(mobileLayoutFile, 'globalThis.__dedicatedMobileLayout = true;\n', 'utf8')
     const instance = await gateway(inner.port, { mobileLayoutFile })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -763,7 +804,7 @@ describe('HTTP gateway', () => {
     const inner = await upstream('batched', true)
     const authenticatedUrl = `http://127.0.0.1:${String(inner.port)}/?token=${UPSTREAM_LAUNCH_TOKEN}`
     const instance = await gateway(inner.port, {}, undefined, authenticatedUrl)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       accept: 'text/html,application/xhtml+xml',
@@ -788,7 +829,7 @@ describe('HTTP gateway', () => {
     expect(inner.upgradeObservations[0]?.cookie).toBe(UPSTREAM_BROWSER_COOKIE)
   })
 
-  it('keeps pairing and device management on a loopback Host-fenced route', async () => {
+  it('keeps account and token management on a loopback Host-fenced route', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
     const route = instance.localAdminRoute()
@@ -799,77 +840,118 @@ describe('HTTP gateway', () => {
     cleanups.push(() => closeServer(adminServer))
     const host = `127.0.0.1:${String(adminPort)}`
 
+    // Host 围栏：非回环 Host（DNS rebinding 用的域名与 LAN IP）一律 403。
     const rebound = await request(adminPort, '/api/mobile-access/status', {
       headers: { host: 'attacker.example' },
     })
     expect(rebound.status).toBe(403)
-    const opened = await request(adminPort, '/api/mobile-access/pairing/open', {
+    const lanHost = await request(adminPort, '/api/mobile-access/status', {
+      headers: { host: '192.168.0.5' },
+    })
+    expect(lanHost.status).toBe(403)
+
+    // 旧的配对/设备面已整体删除。
+    for (const removed of ['/api/mobile-access/pairing/open', '/api/mobile-access/devices']) {
+      const gone = await request(adminPort, removed, {
+        method: removed.endsWith('open') ? 'POST' : 'GET',
+        headers: { host, 'content-type': 'application/json' },
+        ...(removed.endsWith('open') ? { body: '{}' } : {}),
+      })
+      expect(gone.status).toBe(404)
+    }
+
+    // 设账号（回环管理面）→ 登录拿一枚 token → 列表 → 按 id / all 撤销。
+    const created = await request(adminPort, '/api/mobile-access/account', {
       method: 'POST',
       headers: { host, 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
     })
-    expect(opened.status).toBe(201)
-    const pairing = JSON.parse(opened.body) as { token: string; appKey: string; pairUrl: string; appPairUrl: string; qrSvg?: string }
-    expect(pairing.token).toMatch(/^[\w-]{43}$/)
-    expect(pairing.appKey).toBe(`dsh1.${instance.config.instanceId}.${pairing.token}`)
-    expect(pairing.pairUrl).toBe(`${instance.address().origin}/mobile-access/pair#instance=${instance.config.instanceId}&token=${pairing.token}`)
-    expect(pairing.pairUrl).not.toContain(`?token=${pairing.token}`)
-    expect(pairing.appPairUrl).toBe(pairing.pairUrl)
-    expect(pairing.qrSvg).toContain('<svg')
+    expect(created.status).toBe(200)
+    expect(JSON.parse(created.body)).toMatchObject({ configured: true, username: TEST_USERNAME })
+    expect(created.body).not.toContain(TEST_PASSWORD)
 
-    const paired = await request(instance.address().port, '/mobile-access/auth/pair', {
+    const issued = await request(instance.address().port, '/mobile-access/auth/login', {
       method: 'POST',
       headers: { ...browserHeaders(instance), 'content-type': 'application/json' },
-      body: JSON.stringify({ token: pairing.token, label: 'Managed phone' }),
+      body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD, label: 'Managed phone' }),
     })
-    expect(paired.status).toBe(201)
-    const pairedBody = JSON.parse(paired.body) as { deviceId: string }
-    const listed = await request(adminPort, '/api/mobile-access/devices', { headers: { host } })
-    expect(listed.status).toBe(200)
-    expect(listed.body).toContain('Managed phone')
-    expect(listed.body).not.toContain('tokenDigest')
-    expect(listed.body).not.toContain(pairing.token)
+    expect(issued.status).toBe(200)
+    const issuedBody = JSON.parse(issued.body) as { token: string; tokenId: string }
 
-    const revoked = await request(adminPort, '/api/mobile-access/devices/revoke', {
+    const listed = await request(adminPort, '/api/mobile-access/tokens', { headers: { host } })
+    expect(listed.status).toBe(200)
+    expect(JSON.parse(listed.body)).toMatchObject({
+      account: TEST_USERNAME,
+      tokens: [expect.objectContaining({ id: issuedBody.tokenId, label: 'Managed phone' })],
+    })
+    expect(listed.body).not.toContain('tokenDigest')
+    expect(listed.body).not.toContain(issuedBody.token)
+
+    // 管理面状态回的是账号口径，不再有 pairing / deviceCount。
+    const status = await request(adminPort, '/api/mobile-access/status', { headers: { host } })
+    expect(status.status).toBe(200)
+    expect(JSON.parse(status.body)).toMatchObject({
+      accountConfigured: true,
+      tokenCount: 1,
+      resources: {
+        connections: expect.any(Number),
+        activeRequests: expect.any(Number),
+        webSockets: expect.any(Number),
+      },
+      gateway: { host: '127.0.0.1', port: instance.address().port, origin: instance.address().origin },
+    })
+    expect(JSON.parse(status.body)).not.toHaveProperty('pairing')
+    expect(JSON.parse(status.body)).not.toHaveProperty('deviceCount')
+
+    const revoked = await request(adminPort, '/api/mobile-access/tokens/revoke', {
       method: 'POST',
       headers: { host, 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceId: pairedBody.deviceId }),
+      body: JSON.stringify({ id: issuedBody.tokenId }),
     })
     expect(revoked.status).toBe(200)
-    const resetWithoutConfirmation = await request(adminPort, '/api/mobile-access/devices/reset', {
+    expect(JSON.parse(revoked.body)).toEqual({ revoked: 1 })
+
+    // 再登录两枚，然后用 `{all:true}` 把这 2 枚活跃 token 一并踢掉。
+    for (const label of ['Second phone', 'Third phone']) {
+      const extra = await request(instance.address().port, '/mobile-access/auth/login', {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), 'content-type': 'application/json' },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD, label }),
+      })
+      expect(extra.status).toBe(200)
+    }
+    const revokedAll = await request(adminPort, '/api/mobile-access/tokens/revoke', {
       method: 'POST',
       headers: { host, 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ all: true }),
     })
-    expect(resetWithoutConfirmation.status).toBe(400)
-    const reset = await request(adminPort, '/api/mobile-access/devices/reset', {
-      method: 'POST',
-      headers: { host, 'content-type': 'application/json' },
-      body: '{"confirm":true}',
-    })
-    expect(reset.status).toBe(200)
+    expect(revokedAll.status).toBe(200)
+    expect(JSON.parse(revokedAll.body)).toEqual({ revoked: 2 })
+    const afterAll = await request(adminPort, '/api/mobile-access/tokens', { headers: { host } })
+    expect(JSON.parse(afterAll.body).tokens.every((token: { revokedAt?: number }) => typeof token.revokedAt === 'number')).toBe(true)
   })
 
-  it('never trusts X-Forwarded-For for pairing rate-limit identity', async () => {
+  it('never trusts X-Forwarded-For for login rate-limit identity', async () => {
     const inner = await upstream()
-    const instance = await gateway(inner.port, { maxPairingAttempts: 2 })
+    const instance = await gateway(inner.port, {}, undefined, undefined, { maxLoginAttempts: 2 })
+    await configureAccount(instance)
     const statuses: number[] = []
     for (const forwarded of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
-      const attempted = await request(instance.address().port, '/mobile-access/auth/pair', {
+      const attempted = await request(instance.address().port, '/mobile-access/auth/login', {
         method: 'POST',
         headers: {
           ...browserHeaders(instance),
           'content-type': 'application/json',
           'x-forwarded-for': forwarded,
         },
-        body: JSON.stringify({ token: 'invalid' }),
+        body: JSON.stringify({ username: TEST_USERNAME, password: 'not-the-password' }),
       })
       statuses.push(attempted.status)
     }
     expect(statuses).toEqual([401, 401, 429])
   })
 
-  it('discovers one instance and renews a native long-lived device credential', async () => {
+  it('signs in with the account password and carries one credential across every route', async () => {
     const inner = await upstream()
     const instanceId = 'a'.repeat(64)
     const instance = await gateway(inner.port, { instanceId })
@@ -892,26 +974,106 @@ describe('HTTP gateway', () => {
       instanceId,
     })
 
-    const opened = await instance.access.openPairing()
-    const paired = await request(instance.address().port, '/mobile-access/auth/native-pair', {
-      method: 'POST',
-      headers: { ...browserHeaders(instance), 'content-type': 'application/json' },
-      body: JSON.stringify({ token: opened.token, label: 'DeepSeek Harness Android' }),
-    })
-    expect(paired.status).toBe(201)
-    expect(paired.headers['set-cookie']).toBeUndefined()
-    const credential = JSON.parse(paired.body) as { instanceId: string; deviceToken: string; sessionToken: string }
-    expect(credential.instanceId).toBe(instanceId)
-    expect(credential.deviceToken).toMatch(/^[\w-]{43}$/u)
-    expect(credential.sessionToken).toMatch(/^[\w-]{43}$/u)
+    const base = browserHeaders(instance)
+    const port = instance.address().port
+    const password = 'hmw-correct-horse-battery'
 
-    const renewed = await request(instance.address().port, '/mobile-access/auth/native-renew', {
+    // 账号还没设：登录必须明确说「未配置」，而不是含糊的 401。
+    const unconfigured = await request(port, '/mobile-access/auth/login', {
       method: 'POST',
-      headers: { ...browserHeaders(instance), 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceToken: credential.deviceToken }),
+      headers: { ...base, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'feiyueve', password }),
     })
-    expect(renewed.status).toBe(200)
-    expect(JSON.parse(renewed.body)).toMatchObject({ instanceId, deviceId: expect.any(String) })
+    expect(unconfigured.status).toBe(409)
+
+    // 服务端（回环管理面）写账号；明文密码绝不回显、绝不落库。
+    const route = instance.localAdminRoute()
+    const adminServer = createServer((incoming, response) => { void route.handler(incoming, response) })
+    const adminPort = await listen(adminServer)
+    cleanups.push(() => closeServer(adminServer))
+    const adminHost = `127.0.0.1:${String(adminPort)}`
+    const created = await request(adminPort, '/api/mobile-access/account', {
+      method: 'POST',
+      headers: { host: adminHost, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'feiyueve', password }),
+    })
+    expect(created.status).toBe(200)
+    expect(created.body).not.toContain(password)
+
+    const rejected = await request(port, '/mobile-access/auth/login', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'feiyueve', password: 'not-the-password' }),
+    })
+    expect(rejected.status).toBe(401)
+    const wrongUser = await request(port, '/mobile-access/auth/login', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'someone-else', password }),
+    })
+    expect(wrongUser.status).toBe(401)
+
+    const login = await request(port, '/mobile-access/auth/login', {
+      method: 'POST',
+      headers: { ...base, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'feiyueve', password, label: 'Pixel' }),
+    })
+    expect(login.status).toBe(200)
+    const issued = JSON.parse(login.body) as { token: string; csrfToken: string; expiresAt: number; tokenId: string }
+    expect(issued.token).toMatch(/^[\w-]{43}$/u)
+    expect(issued.csrfToken).toMatch(/^[\w-]{43}$/u)
+    // 「一个月」是判据：至少 29 天，且落盘可跨重启（见 account.test.ts）。
+    expect(issued.expiresAt - Date.now()).toBeGreaterThan(29 * 24 * 60 * 60_000)
+    expect(String(login.headers['set-cookie'])).toContain(`dsh_ma_session=${issued.token}`)
+
+    // 原生 API：Bearer 直接过（App 那条路）。
+    const session = await request(port, '/mobile-access/auth/session', {
+      headers: { ...base, authorization: `Bearer ${issued.token}` },
+    })
+    expect(session.status).toBe(200)
+    expect(JSON.parse(session.body)).toMatchObject({ ok: true, kind: 'account', username: 'feiyueve', label: 'Pixel' })
+
+    // WebView：同名 cookie 也过——同一枚 token 的两种形态，不是两套凭据。
+    const viaCookie = await request(port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `dsh_ma_session=${issued.token}` },
+    })
+    expect(viaCookie.status).toBe(200)
+
+    // 无关的 Authorization 头不该抢在 cookie 前面（上游白名单会把它剥掉）。
+    const cookieWins = await request(port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `dsh_ma_session=${issued.token}`, authorization: 'Bearer must-strip' },
+    })
+    expect(cookieWins.status).toBe(200)
+
+    const tokens = await request(port, '/mobile-access/auth/tokens', {
+      headers: { ...base, authorization: `Bearer ${issued.token}` },
+    })
+    expect(tokens.status).toBe(200)
+    expect(tokens.body).toContain('Pixel')
+    expect(tokens.body).not.toContain(issued.token)
+
+    // 变更请求要 CSRF；撤销自己之后立刻失效。
+    const withoutCsrf = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: { ...base, authorization: `Bearer ${issued.token}`, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(withoutCsrf.status).toBe(403)
+    const revoked = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: {
+        ...base,
+        authorization: `Bearer ${issued.token}`,
+        'content-type': 'application/json',
+        'x-dsh-mobile-csrf': issued.csrfToken,
+      },
+      body: '{}',
+    })
+    expect(revoked.status).toBe(200)
+    const afterRevoke = await request(port, '/mobile-access/auth/session', {
+      headers: { ...base, authorization: `Bearer ${issued.token}` },
+    })
+    expect(afterRevoke.status).toBe(401)
   })
 
   it('keeps discovery metadata-only and offers the CA on a separate endpoint', async () => {
@@ -942,44 +1104,49 @@ describe('HTTP gateway', () => {
     expect(metadata.status).toBe(200)
     expect(JSON.parse(metadata.body)).toEqual({
       version: 1,
+      accountConfigured: false,
       pluginVersion: DSH_MOBILE_VERSION,
       minimumAndroidAppVersion: MINIMUM_ANDROID_APP_VERSION,
       discoveryProtocol: 1,
     })
   })
 
-  it('pairs only from the exact origin, hides local admin, and preserves authenticated remote authority', async () => {
+  it('signs in only from the exact origin, hides local admin, and preserves authenticated remote authority', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const opened = await instance.access.openPairing()
     const base = browserHeaders(instance)
 
-    const wrongHost = await request(instance.address().port, '/mobile-access/auth/pair', {
+    // 变更请求（登录也是 POST）必须在精确 Host + 精确 Origin + 同源 Fetch Metadata 下才放行。
+    const wrongHost = await request(instance.address().port, '/mobile-access/auth/login', {
       method: 'POST',
       headers: { ...base, host: 'attacker.example', 'content-type': 'application/json' },
-      body: JSON.stringify({ token: opened.token }),
+      body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
     })
     expect(wrongHost.status).toBe(403)
-    const wrongOrigin = await request(instance.address().port, '/mobile-access/auth/pair', {
+    const wrongOrigin = await request(instance.address().port, '/mobile-access/auth/login', {
       method: 'POST',
       headers: { ...base, origin: 'http://attacker.example', 'content-type': 'application/json' },
-      body: JSON.stringify({ token: opened.token }),
+      body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
     })
     expect(wrongOrigin.status).toBe(403)
 
-    const paired = await request(instance.address().port, '/mobile-access/auth/pair', {
+    const issued = await configureAccount(instance)
+    expect(issued.hasAccount()).toBe(true)
+    // 登录响应就带网关自有的安全头（与旧配对响应同口径）。
+    const loginResponse = await request(instance.address().port, '/mobile-access/auth/login', {
       method: 'POST',
       headers: { ...base, 'content-type': 'application/json' },
-      body: JSON.stringify({ token: opened.token, label: 'Phone' }),
+      body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD, label: 'Phone' }),
     })
-    expect(paired.status).toBe(201)
-    expect(paired.headers['strict-transport-security']).toBeUndefined()
-    expect(paired.headers['content-security-policy']).toContain("default-src 'self'")
-    expect(paired.headers['content-security-policy']).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'")
-    expect(paired.headers['content-security-policy']).toContain("style-src 'self' 'unsafe-inline'")
-    const body = JSON.parse(paired.body) as { csrfToken: string }
-    const cookies = cookiesByName(paired.headers)
-    const session = cookies.get(SESSION_COOKIE) ?? ''
+    expect(loginResponse.status).toBe(200)
+    expect(loginResponse.headers['strict-transport-security']).toBeUndefined()
+    expect(loginResponse.headers['content-security-policy']).toContain("default-src 'self'")
+    expect(loginResponse.headers['content-security-policy']).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'")
+    expect(loginResponse.headers['content-security-policy']).toContain("style-src 'self' 'unsafe-inline'")
+    const body = JSON.parse(loginResponse.body) as { csrfToken: string; token: string }
+    const session = cookiesByName(loginResponse.headers).get(SESSION_COOKIE) ?? ''
+    expect(session).toBe(body.token)
+    expect(session).toMatch(/^[\w-]{43}$/u)
 
     const admin = await request(instance.address().port, '/api/mobile-access/status', { headers: base })
     expect(admin.status).toBe(404)
@@ -1004,7 +1171,7 @@ describe('HTTP gateway', () => {
       headers: {
         ...base,
         authorization: 'Bearer must-strip',
-        cookie: `${SESSION_COOKIE}=${session}; ${DEVICE_COOKIE}=must-strip; upstream=must-strip`,
+        cookie: `${SESSION_COOKIE}=${session}; upstream=must-strip`,
         'content-type': 'application/json',
         [CSRF_HEADER]: body.csrfToken,
         'x-forwarded-for': '203.0.113.5',
@@ -1047,7 +1214,7 @@ describe('HTTP gateway', () => {
       headers: {
         ...base,
         authorization: 'Bearer must-strip',
-        cookie: `${SESSION_COOKIE}=${session}; ${DEVICE_COOKIE}=must-strip; upstream=must-strip`,
+        cookie: `${SESSION_COOKIE}=${session}; upstream=must-strip`,
         'x-forwarded-host': 'attacker.example',
       },
     })
@@ -1096,7 +1263,7 @@ describe('HTTP gateway', () => {
   it('compresses text assets when the authenticated client accepts gzip', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       cookie: `${SESSION_COOKIE}=${paired.session}`,
@@ -1132,7 +1299,7 @@ describe('HTTP gateway', () => {
   it('uses mobile-sized pages and compresses session history', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const headers = {
       ...browserHeaders(instance),
       cookie: `${SESSION_COOKIE}=${paired.session}`,
@@ -1142,7 +1309,7 @@ describe('HTTP gateway', () => {
     }
     const historyRequest = (maxMessages: number): string => JSON.stringify({
       type: 'client-request',
-      rpcId: crypto.randomUUID(),
+      rpcId: randomUUID(),
       method: 'session.history',
       payload: { sessionId: 'session-example', maxMessages },
     })
@@ -1169,37 +1336,34 @@ describe('HTTP gateway', () => {
     expect(JSON.parse(inner.observations.at(-1)?.body ?? '{}')).toMatchObject({ payload: { maxMessages: 5 } })
   })
 
-  it('renews, logs out, and revokes without exposing the persistent credential to the app path', async () => {
+  it('logs out, revokes, and never exposes credential digests on the app path', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const base = browserHeaders(instance)
-
-    const renewed = await request(instance.address().port, '/mobile-access/auth/renew', {
-      method: 'POST',
-      headers: { ...base, cookie: `${DEVICE_COOKIE}=${paired.device}`, 'content-type': 'application/json' },
-      body: '{}',
-    })
-    expect(renewed.status).toBe(200)
-    const renewedBody = JSON.parse(renewed.body) as { csrfToken: string }
-    const renewedSession = cookiesByName(renewed.headers).get(SESSION_COOKIE) ?? ''
 
     const logout = await request(instance.address().port, '/mobile-access/auth/logout', {
       method: 'POST',
       headers: {
         ...base,
-        cookie: `${SESSION_COOKIE}=${renewedSession}`,
+        cookie: `${SESSION_COOKIE}=${paired.session}`,
         'content-type': 'application/json',
-        [CSRF_HEADER]: renewedBody.csrfToken,
+        [CSRF_HEADER]: paired.csrf,
       },
       body: '{}',
     })
     expect(logout.status).toBe(200)
+    expect(JSON.parse(logout.body)).toEqual({ loggedOut: true })
+    const cleared = logout.headers['set-cookie']?.join(';') ?? ''
+    expect(cleared).toContain(`${SESSION_COOKIE}=;`)
+    expect(cleared).toContain('dsh_ma_csrf=;')
     const afterLogout = await request(instance.address().port, '/', {
-      headers: { ...base, cookie: `${SESSION_COOKIE}=${renewedSession}` },
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
     })
     expect(afterLogout.status).toBe(401)
+    expect(instance.tokens().find(token => token.id === paired.tokenId)?.revokedAt).toBeTypeOf('number')
 
+    // 未登录顶层导航 → 账密表单页（不再有「Reconnect this device / 去配对」）。
     const landing = await request(instance.address().port, '/workspace/current', {
       headers: {
         ...base,
@@ -1211,65 +1375,54 @@ describe('HTTP gateway', () => {
     expect(landing.headers.location).toBe('/mobile-access/login?return=%2Fworkspace%2Fcurrent')
     const login = await request(instance.address().port, landing.headers.location!, { headers: base })
     expect(login.status).toBe(200)
-    expect(login.body).toContain('pair it again')
+    expect(login.body).toContain('login-form')
+    expect(login.body).toContain('login-username')
+    expect(login.body).toContain('login-password')
+    expect(login.body).toContain('/mobile-access/login.js')
+    expect(login.body).not.toContain('Open pairing')
+    expect(login.body).not.toContain('auth/renew')
+    expect(login.body).not.toContain('Reconnect this device')
     const loginScript = await request(instance.address().port, '/mobile-access/login.js', { headers: base })
     expect(loginScript.status).toBe(200)
     expect(() => new Function(loginScript.body)).not.toThrow()
+    expect(loginScript.body).toContain('/mobile-access/auth/login')
     expect(loginScript.body).toContain('resolved.origin === location.origin')
 
-    expect(await instance.access.revokeDevice(paired.deviceId)).toBe(true)
-    const afterRevoke = await request(instance.address().port, '/mobile-access/auth/renew', {
-      method: 'POST',
-      headers: { ...base, cookie: `${DEVICE_COOKIE}=${paired.device}`, 'content-type': 'application/json' },
-      body: '{}',
-    })
-    expect(afterRevoke.status).toBe(401)
-    expect(afterRevoke.headers['set-cookie']?.join(';')).toContain(`${DEVICE_COOKIE}=;`)
-    expect(JSON.stringify(instance.devices())).not.toContain('tokenDigest')
+    // 「已登录设备」列表只暴露安全元数据：不含摘要、不发明文 token。
+    const summaries = JSON.stringify(instance.tokens())
+    expect(summaries).not.toContain('tokenDigest')
+    expect(summaries).not.toContain('csrfDigest')
+    expect(summaries).not.toContain(paired.token)
   })
 
-  it('uses the login landing to renew an expired Session without widening the device Cookie', async () => {
+  it('sends an unauthenticated top-level navigation to the account login page', async () => {
     const inner = await upstream()
-    const instance = await gateway(inner.port, {}, 80)
+    const instance = await gateway(inner.port)
     const base = browserHeaders(instance)
+
     const initial = await request(instance.address().port, '/', {
       headers: { ...base, accept: 'text/html', 'sec-fetch-dest': 'document' },
     })
     expect(initial.status).toBe(302)
     expect(initial.headers.location).toBe('/mobile-access/login?return=%2F')
-    const noDevice = await request(instance.address().port, '/mobile-access/auth/renew', {
+
+    // 无凭据的登出是 401：不会误清别人的 cookie，也不会假装成功。
+    const noCredential = await request(instance.address().port, '/mobile-access/auth/logout', {
       method: 'POST',
       headers: { ...base, 'content-type': 'application/json' },
-      body: '{}',
     })
-    expect(noDevice.status).toBe(401)
+    expect(noCredential.status).toBe(401)
 
-    const paired = await pair(instance)
-    await new Promise(resolve => setTimeout(resolve, 100))
-    const expired = await request(instance.address().port, '/', {
-      headers: {
-        ...base,
-        accept: 'text/html',
-        cookie: `${SESSION_COOKIE}=${paired.session}`,
-        'sec-fetch-dest': 'document',
-      },
-    })
-    expect(expired.status).toBe(302)
+    // 一元 API 不参与 HTML 跳转：同样 401，但没有 Location。
     const apiDoesNotRedirect = await request(instance.address().port, '/api/session.list', {
-      headers: { ...base, accept: 'text/html', cookie: `${SESSION_COOKIE}=${paired.session}` },
+      headers: { ...base, accept: 'text/html' },
     })
     expect(apiDoesNotRedirect.status).toBe(401)
     expect(apiDoesNotRedirect.headers.location).toBeUndefined()
 
-    const renewed = await request(instance.address().port, '/mobile-access/auth/renew', {
-      method: 'POST',
-      headers: { ...base, cookie: `${DEVICE_COOKIE}=${paired.device}`, 'content-type': 'application/json' },
-      body: '{}',
-    })
-    expect(renewed.status).toBe(200)
-    const session = cookiesByName(renewed.headers).get(SESSION_COOKIE) ?? ''
+    const paired = await signIn(instance)
     const restored = await request(instance.address().port, '/', {
-      headers: { ...base, cookie: `${SESSION_COOKIE}=${session}` },
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
     })
     expect(restored.status).toBe(200)
   })
@@ -1317,14 +1470,21 @@ describe('HTTP gateway', () => {
       upstreamOrigin: `http://127.0.0.1:${String(inner.port)}`,
       publicAuthorities: ['127.0.0.1'],
       allowedCidrs: ['127.0.0.0/8'],
-      stateFile: join(tmpdir(), `dsh-mobile-access-${crypto.randomUUID()}.json`),
+      stateFile: join(TMP_ROOT, `dsh-mobile-access-${randomUUID()}.json`),
       tls: {
         mode: 'provided',
-        certFile: join(tmpdir(), `missing-${crypto.randomUUID()}.crt`),
-        keyFile: join(tmpdir(), `missing-${crypto.randomUUID()}.key`),
+        certFile: join(TMP_ROOT, `missing-${randomUUID()}.crt`),
+        keyFile: join(TMP_ROOT, `missing-${randomUUID()}.key`),
       },
     })
-    const instance = new MobileAccessGateway(resolved, new MemoryDeviceStore())
+    const account = new AccountController(new MemoryAccountStore(), new MemoryTokenStore(), {
+      tokenTtlMs: DEFAULT_TOKEN_TTL_MS,
+      maxTokens: 8,
+      rateLimitWindowMs: 60_000,
+      maxLoginAttempts: 5,
+      maxRateLimitKeys: 64,
+    })
+    const instance = new MobileAccessGateway(resolved, account)
     await expect(instance.start()).rejects.toMatchObject({ code: 'ENOENT' })
     await instance.close()
   })
@@ -1332,7 +1492,7 @@ describe('HTTP gateway', () => {
   it('aborts an in-flight proxy request and waits for listener teardown', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const pending = request(instance.address().port, '/hold', {
       headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` },
     }).catch(error => error as Error)
@@ -1348,19 +1508,164 @@ describe('HTTP gateway', () => {
   it('rejects a disallowed client CIDR before opening upstream work', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port, { allowedCidrs: ['192.0.2.0/24'] })
-    const opened = await instance.access.openPairing()
-    const paired = await instance.access.pair('test', opened.token)
+    // 直接发一枚「服务端真实签发」的凭据，确认拒绝来自 CIDR 围栏而不是「凭据不认识」。
+    const account = accountOf(instance)
+    await account.setAccount(TEST_USERNAME, TEST_PASSWORD)
+    const issued = await account.login('127.0.0.1', TEST_USERNAME, TEST_PASSWORD)
     const rejected = await request(instance.address().port, '/api/run', {
       method: 'POST',
       headers: {
         ...browserHeaders(instance),
-        cookie: `${SESSION_COOKIE}=${paired.sessionToken}`,
+        cookie: `${SESSION_COOKIE}=${issued.token}`,
         'content-type': 'application/json',
-        [CSRF_HEADER]: paired.csrfToken,
+        [CSRF_HEADER]: issued.csrfToken,
       },
       body: '{}',
     })
     expect(rejected.status).toBe(403)
+    expect(inner.observations).toHaveLength(0)
+  })
+
+  it('refuses a retired device token as a credential on every carrier', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    // 先把账号立起来，确认下面拒绝的是「不认识这枚凭据」而不是「没配账号」。
+    const account = await configureAccount(instance)
+    const live = await signIn(instance)
+    expect(account.tryAuthorize(live.token)).toBeDefined()
+
+    const retired = randomBytes(32).toString('base64url')
+    const bearer = await request(instance.address().port, '/api/session.list', {
+      headers: { ...browserHeaders(instance), authorization: `Bearer ${retired}` },
+    })
+    expect(bearer.status).toBe(401)
+    const sessionCookie = await request(instance.address().port, '/api/session.list', {
+      headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${retired}` },
+    })
+    expect(sessionCookie.status).toBe(401)
+    // DEVICE_COOKIE 常量还在，但它不再是任何东西的凭据（也不是回落旁路）。
+    const deviceCookie = await request(instance.address().port, '/api/session.list', {
+      headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${retired}; ${DEVICE_COOKIE}=${retired}` },
+    })
+    expect(deviceCookie.status).toBe(401)
+    const deviceOnly = await request(instance.address().port, '/api/session.list', {
+      headers: { ...browserHeaders(instance), cookie: `${DEVICE_COOKIE}=${retired}` },
+    })
+    expect(deviceOnly.status).toBe(401)
+    // 真凭据照旧可用：上面的 401 是拒绝，不是路由断了。
+    const authorized = await request(instance.address().port, '/api/session.list', {
+      headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${live.session}` },
+    })
+    expect(authorized.status).toBe(200)
+  })
+
+  it('no longer serves the retired pairing and renewal routes', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const base = browserHeaders(instance)
+    for (const path of ['/mobile-access/auth/pair', '/mobile-access/auth/renew']) {
+      const gone = await request(instance.address().port, path, {
+        method: 'POST',
+        headers: { ...base, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(gone.status, path).toBe(404)
+      expect(JSON.parse(gone.body)).toEqual({ error: 'not_found' })
+    }
+    const page = await request(instance.address().port, '/mobile-access/pair', { headers: base })
+    expect(page.status).toBe(404)
+    const script = await request(instance.address().port, '/mobile-access/pair.js', { headers: base })
+    expect(script.status).toBe(404)
+  })
+
+  it('accepts an empty logout body and revokes the presented credential', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const base = browserHeaders(instance)
+    const logout = await request(instance.address().port, '/mobile-access/auth/logout', {
+      method: 'POST',
+      headers: {
+        ...base,
+        cookie: `${SESSION_COOKIE}=${paired.session}`,
+        'content-type': 'application/json',
+        [CSRF_HEADER]: paired.csrf,
+      },
+      // 刻意不写 body：客户端 `fetch(..., {method:'POST'})` 就是这样，不该被 400 挡掉。
+    })
+    expect(logout.status).toBe(200)
+    expect(JSON.parse(logout.body)).toEqual({ loggedOut: true })
+    const reused = await request(instance.address().port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(reused.status).toBe(401)
+  })
+
+  it('serves the app manifest with or without a cache-busting query string', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+    const bare = await request(instance.address().port, '/mobile-access/app/manifest.json', { headers })
+    const busted = await request(instance.address().port, '/mobile-access/app/manifest.json?x=1', { headers })
+    expect(busted.status).toBe(bare.status)
+    // manifest 走 APP_DISTRIBUTION_ORIGIN（127.0.0.1:8008）的本地代理；测试环境里
+    // 那个 APK 分发服务通常不可达，于是拿到 502 distribution_unreachable——
+    // 关键回归点是「不再 404」（查询串被忽略），不是上游一定在。
+    expect(busted.status).not.toBe(404)
+    if (busted.status === 502) expect(JSON.parse(busted.body)).toEqual({ error: 'distribution_unreachable' })
+    else expect(busted.status).toBe(200)
+    const anonymous = await request(instance.address().port, '/mobile-access/app/manifest.json?x=1', {
+      headers: browserHeaders(instance),
+    })
+    expect(anonymous.status).toBe(401)
+  })
+
+  it('answers an anonymous session probe without side effects and rejects revoked credentials', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const base = browserHeaders(instance)
+
+    const anonymous = await request(instance.address().port, '/mobile-access/auth/session', { headers: base })
+    expect(anonymous.status).toBe(200)
+    expect(JSON.parse(anonymous.body)).toMatchObject({ ok: true, username: null, tokenId: null })
+    expect(anonymous.headers['set-cookie']).toBeUndefined()
+
+    const paired = await signIn(instance)
+    const live = await request(instance.address().port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(live.status).toBe(200)
+    expect(JSON.parse(live.body)).toMatchObject({ kind: 'account', username: TEST_USERNAME })
+
+    await accountOf(instance).revokeToken(paired.tokenId)
+    const revoked = await request(instance.address().port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(revoked.status).toBe(401)
+  })
+
+  it('rejects an expired credential at the gateway', async () => {
+    const inner = await upstream()
+    let clock = 1_700_000_000_000
+    const instance = await gateway(inner.port, {}, undefined, undefined, { now: () => clock })
+    const paired = await signIn(instance)
+    const base = browserHeaders(instance)
+    const live = await request(instance.address().port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(live.status).toBe(200)
+
+    clock += DEFAULT_TOKEN_TTL_MS + 1
+    const expired = await request(instance.address().port, '/mobile-access/auth/session', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(expired.status).toBe(401)
+    // 过期不是「回落」：同一枚凭据在代理路径上也不再放行。
+    const proxied = await request(instance.address().port, '/api/session.list', {
+      headers: { ...base, cookie: `${SESSION_COOKIE}=${paired.session}` },
+    })
+    expect(proxied.status).toBe(401)
     expect(inner.observations).toHaveLength(0)
   })
 })
@@ -1369,7 +1674,7 @@ describe('WebSocket gateway', () => {
   it('accepts an exact-origin Android WebView upgrade without Fetch Metadata', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const opened = await openWebSocket(instance, '/api/events.mux', paired.session, undefined, undefined)
     expect(opened.response).toContain('101 Switching Protocols')
     opened.socket.destroy()
@@ -1378,7 +1683,7 @@ describe('WebSocket gateway', () => {
   it('keeps the gateway alive when a mobile WebSocket resets abruptly', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
     expect(opened.response).toContain('101 Switching Protocols')
     opened.socket.resetAndDestroy()
@@ -1396,7 +1701,7 @@ describe('WebSocket gateway', () => {
   it('allows only the known DSH event and Remote paths, forwards only the Session Cookie, and closes all on revocation', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port, { maxWebSockets: 3 })
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     const first = await openWebSocket(instance, '/api/events.mux', paired.session)
     const second = await openWebSocket(instance, '/api/events.host', paired.session)
     const third = await openWebSocket(instance, '/api/remote.mux', paired.session)
@@ -1413,7 +1718,8 @@ describe('WebSocket gateway', () => {
     const firstClosed = new Promise<void>(resolve => { first.socket.once('close', () => resolve()) })
     const secondClosed = new Promise<void>(resolve => { second.socket.once('close', () => resolve()) })
     const thirdClosed = new Promise<void>(resolve => { third.socket.once('close', () => resolve()) })
-    await instance.access.revokeDevice(paired.deviceId)
+    // 撤销凭据（旧 `revokeDevice`）必须掐断挂在它上面的每一条长连接。
+    expect(await accountOf(instance).revokeToken(paired.tokenId)).toBe(true)
     await Promise.all([firstClosed, secondClosed, thirdClosed])
 
     const unknown = await openWebSocket(instance, '/api/events.unknown', paired.session)
@@ -1424,7 +1730,7 @@ describe('WebSocket gateway', () => {
   it('rejects a wrong WebSocket Origin on every allowed path before opening upstream work', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)
-    const paired = await pair(instance)
+    const paired = await signIn(instance)
     for (const path of ['/api/events.mux', '/api/events.host', '/api/remote.mux']) {
       const rejected = await openWebSocket(instance, path, paired.session, 'http://attacker.example')
       expect(rejected.response).toContain('403')
@@ -1433,18 +1739,21 @@ describe('WebSocket gateway', () => {
     expect(inner.upgradeObservations).toHaveLength(0)
   })
 
-  it('closes an established WebSocket when its short Session expires', async () => {
+  it('closes an established WebSocket when its credential is revoked', async () => {
     const inner = await upstream()
-    const instance = await gateway(inner.port, {}, 80)
-    const paired = await pair(instance)
+    const instance = await gateway(inner.port)
+    const account = await configureAccount(instance)
+    const paired = await signIn(instance)
     const opened = await openWebSocket(instance, '/api/events.mux', paired.session)
     expect(opened.response).toContain('101 Switching Protocols')
+    await account.revokeToken(paired.tokenId)
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('expired WebSocket remained open')), 1_000)
+      const timeout = setTimeout(() => reject(new Error('revoked WebSocket remained open')), 1_000)
       opened.socket.once('close', () => { clearTimeout(timeout); resolve() })
     })
     await vi.waitFor(() => {
-      expect(() => instance.access.authorizeSession(paired.session)).toThrow()
+      expect(() => account.tryAuthorize(paired.session)).toThrow(/authentication_failed/u)
     })
+    expect(instance.tokens().find(token => token.id === paired.tokenId)?.revokedAt).toBeTypeOf('number')
   })
 })

@@ -1,5 +1,4 @@
-import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { lstat, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -7,6 +6,7 @@ import {
   CpolarComponentManager,
   validateCpolarAuthtoken,
 } from '../src/cpolar-component.js'
+import { createTempDirectory } from './tmp-root.js'
 
 const temporaryDirectories: string[] = []
 
@@ -25,7 +25,7 @@ describe('managed cpolar component', () => {
   })
 
   it('keeps the token in private component state and purges all owned files', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-cpolar-component-'))
+    const directory = await createTempDirectory('dsh-mobile-cpolar-component-')
     temporaryDirectories.push(directory)
     const manager = new CpolarComponentManager({ stateDirectory: directory, platform: 'win32', arch: 'x64' })
     await manager.initialize()
@@ -47,7 +47,7 @@ describe('managed cpolar component', () => {
   })
 
   it('reports unsupported hosts without attempting a download', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-cpolar-component-'))
+    const directory = await createTempDirectory('dsh-mobile-cpolar-component-')
     temporaryDirectories.push(directory)
     const manager = new CpolarComponentManager({ stateDirectory: directory, platform: 'linux', arch: 'x64' })
     await manager.initialize()

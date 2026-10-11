@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { TMP_ROOT } from './tmp-root.js'
 import { describe, expect, it } from 'vitest'
 import { Config, parseControlFile, parseGatewayConfig } from '../src/config.js'
 import {
@@ -10,8 +10,8 @@ import {
   resolveAuthority,
 } from '../src/network.js'
 
-const stateFile = join(tmpdir(), 'dsh-mobile-access-config-test.json')
-const controlFile = join(tmpdir(), 'dsh-mobile-access-control-test.json')
+const stateFile = join(TMP_ROOT, 'dsh-mobile-access-config-test.json')
+const controlFile = join(TMP_ROOT, 'dsh-mobile-access-control-test.json')
 
 describe('gateway configuration', () => {
   it('keeps an additional TLS chain optional in the Loader schema', () => {
@@ -21,8 +21,8 @@ describe('gateway configuration', () => {
       initiallyEnabled: false,
       tls: {
         mode: 'provided',
-        certFile: join(tmpdir(), 'server-cert.pem'),
-        keyFile: join(tmpdir(), 'server-key.pem'),
+        certFile: join(TMP_ROOT, 'server-cert.pem'),
+        keyFile: join(TMP_ROOT, 'server-key.pem'),
       },
     })
 
@@ -35,8 +35,8 @@ describe('gateway configuration', () => {
     })
     expect(resolved.upstreamOrigin.origin).toBe('http://127.0.0.1:3080')
     expect(resolved.allowedCidrs).toHaveLength(2)
-    expect(resolved.customCssFile).toBe(join(tmpdir(), 'mobile.css'))
-    expect(resolved.customScriptFile).toBe(join(tmpdir(), 'mobile.js'))
+    expect(resolved.customCssFile).toBe(join(TMP_ROOT, 'mobile.css'))
+    expect(resolved.customScriptFile).toBe(join(TMP_ROOT, 'mobile.js'))
   })
 
   it('keeps durable device state required at the Loader boundary', () => {
@@ -67,8 +67,8 @@ describe('gateway configuration', () => {
       initiallyEnabled: true,
       tls: {
         mode: 'provided',
-        certFile: join(tmpdir(), 'quick-cert.pem'),
-        keyFile: join(tmpdir(), 'quick-key.pem'),
+        certFile: join(TMP_ROOT, 'quick-cert.pem'),
+        keyFile: join(TMP_ROOT, 'quick-key.pem'),
       },
     })
     expect(quick.publicAuthorities).toBeUndefined()
@@ -84,8 +84,8 @@ describe('gateway configuration', () => {
       stateFile,
       tls: {
         mode: 'provided',
-        certFile: join(tmpdir(), 'default-port-cert.pem'),
-        keyFile: join(tmpdir(), 'default-port-key.pem'),
+        certFile: join(TMP_ROOT, 'default-port-cert.pem'),
+        keyFile: join(TMP_ROOT, 'default-port-key.pem'),
       },
     })
     expect(defaultPort.listenPort).toBe(443)
@@ -106,8 +106,8 @@ describe('gateway configuration', () => {
       stateFile,
       tls: {
         mode: 'provided',
-        certFile: join(tmpdir(), 'invalid-origin-cert.pem'),
-        keyFile: join(tmpdir(), 'invalid-origin-key.pem'),
+        certFile: join(TMP_ROOT, 'invalid-origin-cert.pem'),
+        keyFile: join(TMP_ROOT, 'invalid-origin-key.pem'),
       },
     })).toThrow(/publicOrigin/)
   })
@@ -115,8 +115,8 @@ describe('gateway configuration', () => {
   it('rejects ambiguous quick and advanced public network configuration', () => {
     const tls = {
       mode: 'provided' as const,
-      certFile: join(tmpdir(), 'conflict-cert.pem'),
-      keyFile: join(tmpdir(), 'conflict-key.pem'),
+      certFile: join(TMP_ROOT, 'conflict-cert.pem'),
+      keyFile: join(TMP_ROOT, 'conflict-key.pem'),
     }
     expect(() => parseGatewayConfig({
       publicOrigin: 'https://192.168.50.23:3443',
@@ -182,7 +182,7 @@ describe('gateway configuration', () => {
       upstreamOrigin: 'http://127.0.0.1:3080',
       allowedCidrs: ['192.168.0.0/16'],
       stateFile,
-      tls: { mode: 'provided', certFile: join(tmpdir(), 'cert.pem'), keyFile: join(tmpdir(), 'key.pem') },
+      tls: { mode: 'provided', certFile: join(TMP_ROOT, 'cert.pem'), keyFile: join(TMP_ROOT, 'key.pem') },
     })).toThrow(/publicAuthorities/)
 
     expect(() => parseGatewayConfig({
@@ -191,7 +191,7 @@ describe('gateway configuration', () => {
       upstreamOrigin: 'http://127.0.0.1:3080',
       publicAuthorities: ['192.168.1.2:3443'],
       stateFile,
-      tls: { mode: 'provided', certFile: join(tmpdir(), 'cert.pem'), keyFile: join(tmpdir(), 'key.pem') },
+      tls: { mode: 'provided', certFile: join(TMP_ROOT, 'cert.pem'), keyFile: join(TMP_ROOT, 'key.pem') },
     })).toThrow(/allowedCidrs/)
 
     expect(() => parseGatewayConfig({

@@ -1,5 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -10,6 +9,7 @@ import {
   type MobileAccessControlStore,
   type MobileAccessRuntime,
 } from '../src/control.js'
+import { createTempDirectory } from './tmp-root.js'
 
 const temporaryDirectories: string[] = []
 
@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 async function controlFile(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-mobile-control-'))
+  const directory = await createTempDirectory('dsh-mobile-control-')
   temporaryDirectories.push(directory)
   return join(directory, 'nested', 'control.json')
 }

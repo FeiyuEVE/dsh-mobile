@@ -35,7 +35,7 @@ describe('dedicated mobile layout boot', () => {
     expect(output).toContain('viewport-fit=cover')
   })
 
-  it('injects session recovery ahead of the boot manifest', () => {
+  it('injects the login-redirect and CSRF bootstrap ahead of the boot manifest', () => {
     const output = rewriteMobileIndex(index([
       { id: '@deepseek-ai/dsh-client-runtime', url: '/runtime.js', rev: 'runtime' },
       {
@@ -46,17 +46,18 @@ describe('dedicated mobile layout boot', () => {
       },
     ]))
 
-    // The page's Session Cookie lives in the gateway's memory, so restarting the host kills it while
-    // the open page keeps its DOM. Every request then answers 401 and the live channel retries
-    // forever; the injected bootstrap is what turns that state back into a working session.
-    expect(output).toContain('/mobile-access/auth/renew')
-    expect(output).toContain("credentials:'same-origin'")
-    expect(output).toContain('window.WebSocket')
-    expect(output).toContain("addEventListener('error'")
+    // 配对模式整体删除后没有可续的东西：同源请求拿到 401 时把整页导到账密登录页
+    // （带 return 回跳），不再有 `auth/renew` 续期，也不再手工补 WebSocket。
     expect(output).toContain('"/mobile-access/login"')
     expect(output).toContain("'?return='+encodeURIComponent(location.pathname+location.search)")
-    expect(output).toContain('response.status!==401')
-    expect(output.indexOf('/mobile-access/auth/renew')).toBeLessThan(output.indexOf('window.__DSH_BOOT__'))
+    expect(output).toContain('response.status===401')
+    // CSRF：从可读的 `dsh_ma_csrf` cookie 读出值，塞进变更请求的 `x-dsh-mobile-csrf`。
+    expect(output).toContain('dsh_ma_csrf=')
+    expect(output).toContain('x-dsh-mobile-csrf')
+    expect(output).not.toContain('/mobile-access/auth/renew')
+    expect(output).not.toContain('window.WebSocket')
+    expect(output).not.toContain("addEventListener('error'")
+    expect(output.indexOf('/mobile-access/login')).toBeLessThan(output.indexOf('window.__DSH_BOOT__'))
   })
 
   it('leaves old-WebView polyfills to the host app instead of injecting a second copy', () => {

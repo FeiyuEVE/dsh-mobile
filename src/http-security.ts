@@ -91,8 +91,17 @@ export function sendFailure(response: ServerResponse, status: number, code: stri
   sendJson(response, status, { error: code }, tls)
 }
 
-/** Read and parse one bounded JSON object. */
-export async function readJsonObject(request: IncomingMessage, maximumBytes: number): Promise<Record<string, unknown>> {
+/**
+ * Read and parse one bounded JSON object.
+ *
+ * `allowEmpty` 只给「无参数的动作」用（目前只有登出）：允许零长度请求体并读成 `{}`，
+ * 这样客户端不写 body 也能把 token 撤销掉；带内容但不是合法 JSON 仍然 400。
+ */
+export async function readJsonObject(
+  request: IncomingMessage,
+  maximumBytes: number,
+  options: { readonly allowEmpty?: boolean } = {},
+): Promise<Record<string, unknown>> {
   const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
   if (contentType !== 'application/json') throw new HttpError(415, 'unsupported_media_type')
   const declared = request.headers['content-length']
@@ -107,9 +116,11 @@ export async function readJsonObject(request: IncomingMessage, maximumBytes: num
     if (total > maximumBytes) throw new HttpError(413, 'payload_too_large')
     chunks.push(buffer)
   }
+  const text = Buffer.concat(chunks).toString('utf8')
+  if (text.trim() === '' && options.allowEmpty === true) return {}
   let parsed: unknown
   try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+    parsed = JSON.parse(text) as unknown
   } catch {
     throw new HttpError(400, 'bad_request')
   }
