@@ -1,4 +1,5 @@
-import { lstat, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
+import { lstat, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AccessError } from '../src/access.js'
@@ -454,5 +455,113 @@ describe('shared account directory', () => {
 
     await expect(web.login('lan-web', USERNAME, PASSWORD)).resolves.toMatchObject({ username: USERNAME })
     await expect(lstat(lock)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  /**
+   * 2026-10-11 真机事故的回归：staging 撤销一枚 token，300 ms 后 **web 关闭**时的整表
+   * 写回把这条撤销整条抹掉（盘上那枚凭据复活了 26 分钟）。关闭路径从前是「拿内存表直接
+   * save」，既不看盘、也不拿锁——凡是「另一台刚写过、这台内存还停在之前」都会中招。
+   */
+  it('一台关闭时的整表写回不得抹掉另一台刚签发的 token', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    const staging = shared(directory)
+    await web.initialize()
+    await staging.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+
+    // web 的内存停在「登录之前」，staging 刚签发一枚，紧接着 web 关闭。
+    const issued = await staging.login('lan-staging', USERNAME, PASSWORD, 'staging')
+    await web.close()
+
+    const raw = JSON.parse(await readFile(join(directory, 'tokens.json'), 'utf8')) as { tokens: Array<{ id: string }> }
+    expect(raw.tokens.map(token => token.id)).toContain(issued.tokenId)
+    const restarted = shared(directory)
+    await restarted.initialize()
+    expect(restarted.tryAuthorize(issued.token)).toMatchObject({ sessionKey: `acct:${issued.tokenId}` })
+  })
+
+  it('一台关闭时的整表写回不得让已撤销的 token 复活', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    await web.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    const issued = await web.login('lan-web', USERNAME, PASSWORD)
+    // 另一台的内存停在「撤销之前」：它的关闭写回就是复活那条路径。
+    const stale = shared(directory)
+    await stale.initialize()
+    await web.logout(web.tryAuthorize(issued.token)!)
+
+    await stale.close()
+    const raw = JSON.parse(await readFile(join(directory, 'tokens.json'), 'utf8')) as { tokens: Array<{ revokedAt?: number }> }
+    expect(raw.tokens[0]?.revokedAt).toBeTypeOf('number')
+    const restarted = shared(directory)
+    await restarted.initialize()
+    expect(() => restarted.tryAuthorize(issued.token)).toThrow(AccessError)
+  })
+
+  it('读不出盘时既不在关闭路径写盘、也不在变更路径写盘（宁可失败，不覆盖）', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    await web.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    await web.login('lan-web', USERNAME, PASSWORD)
+    const file = join(directory, 'tokens.json')
+    const garbage = 'not json at all'
+    await writeFile(file, garbage)
+
+    // 变更路径：503（可重试）而不是拿陈旧内存整表覆盖
+    await expect(web.login('lan-web', USERNAME, PASSWORD)).rejects.toMatchObject({ status: 503 })
+    expect(await readFile(file, 'utf8')).toBe(garbage)
+    // 关闭路径：同样是「不写」
+    await web.close()
+    expect(await readFile(file, 'utf8')).toBe(garbage)
+  })
+
+  it('陈旧锁删不掉时按拿不到锁收口，不空转（deadline 必须生效）', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    await web.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    // 目录冒充锁文件：`unlinkSync` 必然失败（EISDIR），而它又是陈旧的 → 回收分支失败后
+    // 必须落到 deadline，而不是 `continue` 死循环。
+    const lock = join(directory, '.account.lock')
+    await mkdir(lock)
+    const past = new Date(Date.now() - 60_000)
+    await utimes(lock, past, past)
+
+    const started = Date.now()
+    await expect(web.login('lan-web', USERNAME, PASSWORD)).rejects.toMatchObject({ status: 503 })
+    expect(Date.now() - started).toBeLessThan(8_000)
+  }, 20_000)
+})
+
+/**
+ * 文件指纹是「另一台进程有没有改过盘」的唯一判据（每个请求都要比对一次，所以不能哈希
+ * 全文）。它必须能区分**同一毫秒内、长度也相同**的两次写盘，否则那一次改动会被当成
+ * 「没变」，进程继续拿陈旧内存表整表写回。
+ */
+describe('state fingerprint', () => {
+  it('内容与长度相同、mtime 完全相同（同一毫秒）的两次写，指纹仍然不同（ino 参与）', async () => {
+    const directory = await tempDirectory('account-fingerprint-')
+    const file = join(directory, 'tokens.json')
+    const store = new JsonTokenStore(file)
+    // 整数毫秒的时间戳：ext4 存到 ns，写回去再读出来能精确相同，前提才可复现。
+    const stamp = new Date(1_700_000_000_000)
+
+    await store.save({ version: 1, tokens: [] })
+    await utimes(file, stamp, stamp)
+    const first = store.revision()
+    expect(first).toBeTypeOf('string')
+    const before = statSync(file)
+    expect(before.mtimeMs).toBe(stamp.getTime())
+
+    await store.save({ version: 1, tokens: [] })
+    await utimes(file, stamp, stamp)
+    const after = statSync(file)
+    // 前提：只靠 `mtimeMs:size` 完全看不出盘被重写过（这正是旧指纹的漏点）
+    expect(`${after.mtimeMs}:${after.size}`).toBe(`${before.mtimeMs}:${before.size}`)
+
+    expect(store.revision()).not.toBe(first)
   })
 })

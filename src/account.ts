@@ -407,25 +407,34 @@ const STATE_LOCK_RETRY_MS = 40
 async function withStateLock<T>(lockPath: string | undefined, operation: () => Promise<T>): Promise<T> {
   if (lockPath === undefined) return operation()
   const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS
+  const nonce = randomBytes(8).toString('hex')
   for (;;) {
     try {
       const handle = openSync(lockPath, 'wx', 0o600)
       try {
-        writeSync(handle, `${process.pid}\n`)
+        writeSync(handle, `${process.pid} ${nonce}\n`)
       } catch {
-        // pid 只是给人看的：写不进去不影响锁的语义
+        // pid/nonce 只是给人看的与自我保护：写不进去不影响锁的语义
       }
       closeSync(handle)
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      let stale = false
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
-          unlinkSync(lockPath)
-          continue
-        }
+        stale = Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS
       } catch {
         continue // 锁刚被持有者释放：立刻重试
+      }
+      if (stale) {
+        try {
+          unlinkSync(lockPath)
+          continue
+        } catch {
+          // 陈旧锁**删不掉**（权限 / 类型异常，例如 root 留下的锁遇上别的 uid）：
+          // 这里绝不能 `continue` —— 那会变成一个既不等待、也不看 deadline 的死循环，
+          // 把进程卡在一次登录上。落下去按「拿不到锁」收口。
+        }
       }
       if (Date.now() >= deadline) throw new AccessError(503, 'state_busy')
       await delay(STATE_LOCK_RETRY_MS)
@@ -434,20 +443,28 @@ async function withStateLock<T>(lockPath: string | undefined, operation: () => P
   try {
     return await operation()
   } finally {
+    // 只释放**自己**那把锁：超过 [STATE_LOCK_STALE_MS] 后陈旧锁会被别人回收并重新持有，
+    // 这时无条件 unlink 会把别人的锁删掉（第三个进程于是能同时进来写）。
     try {
-      unlinkSync(lockPath)
+      if (readFileSync(lockPath, 'utf8').includes(nonce)) unlinkSync(lockPath)
     } catch {
       // 已被回收（陈旧锁路径）时不必报错
     }
   }
 }
 
-/** 便宜的文件指纹：mtime(ms)+size；文件不存在 / 不是常规文件 → undefined。 */
+/**
+ * 便宜的文件指纹：ino + mtime(ms) + size；文件不存在 / 不是常规文件 → undefined。
+ *
+ * **ino 是必须的**：写盘是「临时文件 + rename」，每次写入都换一个 inode，所以 ino 能
+ * 区分「同一毫秒内、长度也相同的两次写」。只看 `mtimeMs:size` 会把后一次当成「没变」，
+ * 于是进程继续拿陈旧内存表整表写回——别人的撤销被抹掉、刚签发的 token 被吞掉。
+ */
 function stateFingerprint(file: string): string | undefined {
   try {
     const stat = statSync(file)
     if (!stat.isFile()) return undefined
-    return `${stat.mtimeMs}:${stat.size}`
+    return `${stat.ino}:${stat.mtimeMs}:${stat.size}`
   } catch {
     return undefined
   }
@@ -564,12 +581,15 @@ export class AccountController {
    * 场景：web 与 staging 共用同一个账号目录（`accountDir`），用户在其中一台登录后
    * 立刻切到另一台——那一台必须马上认这枚 token，否则又变成「切服即掉登录」。
    * 读盘异常（半截内容等）**保留内存快照**：宁可暂时用旧表，也不能把所有人登出。
+   *
+   * @param force 连指纹相同也重读（关闭路径的整表写回只跑一次，指纹撞车就再没机会补救）
+   * @returns 内存是否与盘一致；`false` = 需要重读但读失败了，**调用方不得借此写盘**
    */
-  private refreshSync(): void {
-    if (!this.initialized || this.closing) return
+  private refreshSync(force = false): boolean {
+    if (!this.initialized || (this.closing && !force)) return true
     try {
       const accountRevision = this.accountStore.revision?.()
-      if (accountRevision !== undefined && accountRevision !== this.accountRevision) {
+      if (force || (accountRevision !== undefined && accountRevision !== this.accountRevision)) {
         const snapshot = this.accountStore.loadSync?.()
         if (snapshot !== undefined) {
           this.accountRevision = accountRevision
@@ -577,15 +597,17 @@ export class AccountController {
         }
       }
       const tokenRevision = this.tokenStore.revision?.()
-      if (tokenRevision !== undefined && tokenRevision !== this.tokenRevision) {
+      if (force || (tokenRevision !== undefined && tokenRevision !== this.tokenRevision)) {
         const snapshot = this.tokenStore.loadSync?.()
         if (snapshot !== undefined) {
           this.tokenRevision = tokenRevision
           this.tokens = [...snapshot.tokens]
         }
       }
+      return true
     } catch {
       // 见方法说明：读盘异常不改变内存状态（下一次请求会重试）
+      return false
     }
   }
 
@@ -603,17 +625,29 @@ export class AccountController {
     let release!: () => void
     this.mutation = new Promise<void>(resolve => { release = resolve })
     await prior
+    let completed = false
     try {
-      return await withStateLock(this.options.lockPath, async () => {
+      const result = await withStateLock(this.options.lockPath, async () => {
         // 锁内先对齐盘上最新状态，再让调用方基于它做读改写：否则两个进程各自的
         // 「整份快照替换」会互相覆盖（丢 token / 复活已撤销 token）。
-        this.refreshSync()
-        const result = await operation()
-        return result
+        // 读不出来就**不写**：拿陈旧内存整表覆盖，比这次操作失败严重得多。
+        if (!this.refreshSync()) throw new AccessError(503, 'state_busy')
+        const value = await operation()
+        completed = true
+        return value
       })
+      return result
     } finally {
-      this.accountRevision = this.accountStore.revision?.()
-      this.tokenRevision = this.tokenStore.revision?.()
+      if (completed) {
+        this.accountRevision = this.accountStore.revision?.()
+        this.tokenRevision = this.tokenStore.revision?.()
+      } else {
+        // 失败（含拿不到锁 / 读盘失败）时**不能**把内存当成与盘同步：否则下一次写盘
+        // 会认为「无需重读」，直接拿这份陈旧内存整表覆盖别人的改动。
+        // 置空 = 下一次读路径必定重读。
+        this.accountRevision = undefined
+        this.tokenRevision = undefined
+      }
       release()
     }
   }
@@ -887,7 +921,15 @@ export class AccountController {
     await this.mutation
     if (this.initialized) {
       try {
-        await this.tokenStore.save(this.snapshot(this.prune(this.now())))
+        await withStateLock(this.options.lockPath, async () => {
+          // 关闭时要把内存表整表写回（只为落 `lastSeenAt` 与清过期记录），**必须先无条件
+          // 重读盘上最新状态**：别的进程可能刚签发或刚撤销过 token。指纹比对在这里不够用
+          // （同一毫秒 + 同样长度的两次写会撞车），而这里只有一次机会——2026-10-11 实测：
+          // staging 撤销了一枚 token，300 ms 后 web 关闭时的写回把这次撤销整条抹掉，
+          // 那枚被撤销的凭据在盘上复活了 26 分钟，直到再次撤销。
+          if (!this.refreshSync(true)) return
+          await this.tokenStore.save(this.snapshot(this.prune(this.now())))
+        })
       } catch {
         // 关闭路径尽力而为：落盘失败不应阻止进程退出。
       }

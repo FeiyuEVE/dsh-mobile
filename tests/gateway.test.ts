@@ -1076,6 +1076,63 @@ describe('HTTP gateway', () => {
     expect(afterRevoke.status).toBe(401)
   })
 
+  /**
+   * 2026-10-11 实测踩到的坑：把 body 写成 `{tokenId}`（正确键是 `id`）时，旧实现会落进
+   * 「省略 id 就撤销自己」那条兜底——回 `{"ok":true,"revoked":1}` 却把**调用方自己**撤了，
+   * 之后每个请求 401。看起来像「撤销不可靠」，实际是请求把自己踢下线了。
+   */
+  it('撤销接口只认 id/all/self：拼错的键必须 400，绝不静默撤销调用方自己', async () => {
+    const inner = await upstream()
+    const instance = await gateway(inner.port)
+    const port = instance.address().port
+    const base = browserHeaders(instance)
+    const caller = await signIn(instance, 'Caller')
+    const other = await signIn(instance, 'Other phone')
+    const mutation = (session: { token: string; csrf: string }): Record<string, string> => ({
+      ...base,
+      authorization: `Bearer ${session.token}`,
+      'content-type': 'application/json',
+      'x-dsh-mobile-csrf': session.csrf,
+    })
+    const alive = async (session: { token: string }): Promise<number> =>
+      (await request(port, '/mobile-access/auth/session', {
+        headers: { ...base, authorization: `Bearer ${session.token}` },
+      })).status
+
+    const typo = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: mutation(caller),
+      body: JSON.stringify({ tokenId: other.tokenId }),
+    })
+    expect(typo.status).toBe(400)
+    expect(await alive(caller)).toBe(200)
+    expect(await alive(other)).toBe(200)
+
+    const revoked = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: mutation(caller),
+      body: JSON.stringify({ id: other.tokenId }),
+    })
+    expect(revoked.status).toBe(200)
+    expect(await alive(other)).toBe(401)
+    expect(await alive(caller)).toBe(200)
+
+    const missing = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: mutation(caller),
+      body: JSON.stringify({ id: '0'.repeat(32) }),
+    })
+    expect(missing.status).toBe(404)
+
+    const self = await request(port, '/mobile-access/auth/tokens/revoke', {
+      method: 'POST',
+      headers: mutation(caller),
+      body: JSON.stringify({ self: true }),
+    })
+    expect(self.status).toBe(200)
+    expect(await alive(caller)).toBe(401)
+  })
+
   it('keeps discovery metadata-only and offers the CA on a separate endpoint', async () => {
     const inner = await upstream()
     const files = await tlsFixtureFiles()

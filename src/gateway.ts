@@ -1248,17 +1248,25 @@ export class MobileAccessGateway {
     }, this.tlsEnabled)
   }
 
-  /** 撤销某一枚 token（body `{all:true}` 或省略 id 时撤销自己）。 */
+  /** 撤销某一枚 token（body `{id}` / `{all:true}` / `{}` 或 `{self:true}` = 撤销自己）。 */
   private async handleAccountRevoke(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const authorization = this.authorize(request)
     if (this.account.owns(authorization.sessionKey) !== true) throw new HttpError(403, 'forbidden')
     this.requireCsrf(request, authorization)
     const body = await readJsonObject(request, MAX_CONTROL_BODY_BYTES)
+    // 只认 `id` / `all` / `self` 三个键，别的键一律 400。**这是安全边界，不是洁癖**：
+    // 「省略 id 就撤销自己」那条兜底很危险——拼错的键（例如 `tokenId`）原本会落进它，
+    // 调用方拿到 `{"ok":true,"revoked":1}`，实际被撤的是自己那枚，之后每个请求都 401
+    // （2026-10-11 实测踩到：现象像「撤销不可靠」，真相是请求把自己踢下线了）。
+    const unknown = Object.keys(body).filter(key => key !== 'id' && key !== 'all' && key !== 'self')
+    if (unknown.length > 0) throw new HttpError(400, 'bad_request')
     if (body.all === true) {
       sendJson(response, 200, { ok: true, revoked: await this.account.revokeAll() }, this.tlsEnabled)
       return
     }
-    const id = typeof body.id === 'string' ? body.id : this.account.tokenIdOf(authorization.sessionKey)
+    const requested = typeof body.id === 'string' ? body.id : undefined
+    const selfRequested = body.self === true || Object.keys(body).length === 0
+    const id = requested ?? (selfRequested ? this.account.tokenIdOf(authorization.sessionKey) : undefined)
     if (id === undefined || !/^[a-f\d]{32}$/u.test(id)) throw new HttpError(400, 'bad_request')
     if (!await this.account.revokeToken(id)) throw new HttpError(404, 'not_found')
     sendJson(response, 200, { ok: true, revoked: 1 }, this.tlsEnabled)
