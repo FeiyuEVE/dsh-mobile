@@ -76,11 +76,12 @@ const ACCOUNT_MAX_LOGIN_ATTEMPTS = 10
  */
 function createAccountController(resolved: ResolvedGatewayConfig): AccountController {
   const directory = resolved.accountDir
+  const mode = resolved.accountFileMode
   return new AccountController(
-    new JsonAccountStore(join(directory, 'account.json')),
+    new JsonAccountStore(join(directory, 'account.json'), mode),
     // 文件容量是「活跃上限 + 撤销保留余量」：撤销记录还要留 7 天给设备列表看，
     // 直接拿 maxTokens 当文件上限会让「打满 → 踢一台 → 再登录」写出超长快照。
-    new JsonTokenStore(join(directory, 'tokens.json'), tokenSnapshotLimit(ACCOUNT_MAX_TOKENS)),
+    new JsonTokenStore(join(directory, 'tokens.json'), tokenSnapshotLimit(ACCOUNT_MAX_TOKENS), mode),
     {
       tokenTtlMs: DEFAULT_TOKEN_TTL_MS,
       maxTokens: ACCOUNT_MAX_TOKENS,

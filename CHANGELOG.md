@@ -1,3 +1,37 @@
+## 0.3.43 — 2026-10-11 · **账号表可跨 uid 共用**：新增 `accountFileMode`，读方 chmod 失败不再让整棵插件起不来
+
+**背景**：0.3.42 让三服可以指向同一个 `accountDir`，但本机形态是**自救服务跑 root、
+正式服/测试服跑 feiyueve**。一旦某个 uid 写过 `account.json` / `tokens.json`，另一个 uid
+下次启动时 `readStateFile()` 会先对这份**别人属主**的文件 chmod → `EPERM`；而
+`Gateway.start()` 又把 `account.initialize()` 放在 `try` 之外，于是**整个 dsh-mobile
+插件加载失败**（18443 / 18452 网关直接起不来）。这不是数据损坏，只是权限位问题：模式该由
+**写方**决定，读方读得到就行。
+
+**改法**：
+
+- `src/private-file.ts`：`restrictPrivateFile()` 容忍 `EPERM` / `EACCES`（返回而不是抛，
+  每个路径只刷一条 `process.emitWarning`，避免每次读盘都刷屏）；**其它错误照旧抛**
+  （`ENOENT` 之类才是真问题）。Windows 侧的 icacls 收紧不变。
+- `src/config.ts`：新增 `accountFileMode`（默认 `0o600`，单进程老行为逐字节不变），白名单
+  只有 `0o600` / `0o620` / `0o640` / `0o660`——属主 rw 必选、共享组可选 r/w、**other 位
+  一律不许**（账号表对 other 可写 = 任何人能给自己签 token；可读 = 密码 scrypt 摘要与
+  token 摘要外泄）。写错（例如把 `0640` 写成十进制 `640`）**当场报错**，不静默落一个
+  谁都没预期的模式。
+- `src/account.ts`：`JsonAccountStore` / `JsonTokenStore` 的落盘模式（原先写死 `0600`）
+  改为构造参数，`readStateFile` / `writeStateFile` 都按它走。
+- `src/plugin.ts`：`createAccountController` 把 `resolved.accountFileMode` 传给两个 store。
+
+**测试**（265 例全过；本轮新增 9 例）：新增 `tests/private-file-tolerance.test.ts` 7 例
+（EPERM/EACCES 容忍且每路径只警告一次、`ENOENT` 与「无 code」错误照旧抛、成功不刷警告、
+成功/失败交替互不影响——与同名 `private-file.test.ts` 分开放，因为那支要真实 chmod 才能
+断言 `0600` 生效，mock 会让它失真）；`tests/config-network.test.ts` 新增 1 例（四个合法值
+逐个接受、十类误写逐个拒绝）；`tests/account.test.ts` 新增 1 例（`0o640` 落盘 + 另一进程按
+同模式读回仍认这枚 token + 不配模式的仍是 `0600`）。
+
+**部署**：三服 `cordis.patch.yml` 的 `mobile-access` 块共用一份账号表（`accountDir` +
+`accountFileMode: 0o640`），账号目录 setgid 到共享组 `dsh-shared`；重启顺序
+staging → rescue → web（web 最后）。
+
 ## 0.3.42 — 2026-10-11 · **三服统一鉴权**：账号与令牌表可跨进程共用（`accountDir`），一台登录另一台立刻认
 
 **背景**：0.3.39 起每个 profile 各有一份 `account.json` / `tokens.json`，而三个网关

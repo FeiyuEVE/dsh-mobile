@@ -45,6 +45,19 @@ export interface PluginConfig {
    * 撤销，另一台立刻失效。省略 = 沿用 `stateFile` 所在目录（单进程老行为）。
    */
   accountDir?: string
+  /**
+   * 账号 / 令牌表的文件模式（八进制，默认 `0o600`）。
+   *
+   * 只有**跨 uid 共用 `accountDir`** 时才需要改：本机形态是自救服务跑 root、
+   * 正式服/测试服跑 feiyueve，root 写出的 `account.json`/`tokens.json` 若保持
+   * 0600，feiyueve 就读不到。配 `0o640` 并让目录 setgid 到共享组（新文件继承组）
+   * 即可；读方 chmod 失败被容忍（见 `private-file.ts`），不会再让网关起不来。
+   *
+   * 只接受 `0o600` / `0o620` / `0o640` / `0o660`：属主 rw 必选，共享组可选 r/w，
+   * **永不**对 other 开口。比 0600 松是**故意**的（跨 uid 共享就靠组位），但账号表
+   * 一旦其他人可写，等于谁都能给自己签一枚 token——那正是这条白名单要挡的。
+   */
+  accountFileMode?: number
   /** Internal persisted on/off preference managed by the DSH plugin card. */
   controlFile: string
   /** Optional user stylesheet served to the authenticated mobile UI. */
@@ -103,6 +116,8 @@ export interface ResolvedGatewayConfig {
    * 并在授权热路径上按文件指纹同步刷新。
    */
   readonly accountDir: string
+  /** 账号 / 令牌表的落盘模式（见 raw 配置的 `accountFileMode`）。 */
+  readonly accountFileMode: number
   /** Local extension root adjacent to the mobile-access state file. */
   readonly extensionsDir: string
   readonly customCssFile: string
@@ -197,6 +212,33 @@ function absoluteFile(value: unknown, name: string): string {
 /** Resolve the hidden runtime-control file independently from gateway configuration. */
 export function parseControlFile(value: unknown): string {
   return absoluteFile(value, 'controlFile')
+}
+
+/** 允许的落盘模式白名单（见 [parseAccountFileMode]）。 */
+const ACCOUNT_FILE_MODES: ReadonlySet<number> = new Set([0o600, 0o620, 0o640, 0o660])
+
+/**
+ * 账号 / 令牌表的落盘模式（`accountFileMode`，默认 `0o600`）。
+ *
+ * YAML 里写 `0o640` 这种八进制字面量：**十进制 `640`（本想写 0640 的常见误写）会被
+ * 这条白名单拒掉并报错**，写错就当场炸、不会悄悄落一个谁都没预期的模式。
+ * 白名单只有四个值：属主 rw 必选（没有它写方都读不回自己的表），共享组 r/w 可选
+ * （跨 uid 共用账号目录的正当需求：自救服务 root 写、正式服/测试服 feiyueve 读），
+ * **other 位一律不许**——账号表是凭据权威，对 other 可写 = 任何人能给自己签 token，
+ * 对 other 可读 = 密码 scrypt 摘要与 token 摘要外泄。
+ */
+export function parseAccountFileMode(value: unknown): number {
+  if (value === undefined) return 0o600
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error('accountFileMode must be an integer file mode such as 0o640')
+  }
+  if (!ACCOUNT_FILE_MODES.has(value)) {
+    throw new Error(
+      'accountFileMode must be one of 0o600, 0o620, 0o640, 0o660 '
+      + '(owner read/write, optional shared-group read/write, never other)',
+    )
+  }
+  return value
 }
 
 function parseUpstream(value: unknown): URL {
@@ -317,6 +359,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     accountDir: value.accountDir === undefined
       ? dirname(absoluteFile(value.stateFile, 'stateFile'))
       : absoluteFile(value.accountDir, 'accountDir'),
+    accountFileMode: parseAccountFileMode(value.accountFileMode),
     extensionsDir: join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'extensions'),
     customCssFile: value.customCssFile === undefined
       ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.css')

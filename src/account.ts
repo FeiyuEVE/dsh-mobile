@@ -286,7 +286,7 @@ export function parseTokenSnapshot(value: unknown, maximumTokens = 256): TokenSn
   return Object.freeze({ version: 1, tokens: Object.freeze(tokens) })
 }
 
-async function readStateFile(file: string): Promise<unknown> {
+async function readStateFile(file: string, mode: number): Promise<unknown> {
   let stat
   try {
     stat = await lstat(file)
@@ -297,7 +297,7 @@ async function readStateFile(file: string): Promise<unknown> {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
     throw new Error('account state must be a regular file no larger than 1 MiB')
   }
-  await restrictPrivateFile(file)
+  await restrictPrivateFile(file, mode)
   try {
     return JSON.parse(await readFile(file, 'utf8')) as unknown
   } catch (error) {
@@ -305,7 +305,7 @@ async function readStateFile(file: string): Promise<unknown> {
   }
 }
 
-async function writeStateFile(file: string, validated: unknown): Promise<void> {
+async function writeStateFile(file: string, validated: unknown, mode: number): Promise<void> {
   const directory = dirname(file)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   try {
@@ -316,9 +316,9 @@ async function writeStateFile(file: string, validated: unknown): Promise<void> {
   }
   const temporary = join(directory, `.${basename(file)}.${randomBytes(12).toString('hex')}.tmp`)
   try {
-    await writeFile(temporary, `${JSON.stringify(validated)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    await writeFile(temporary, `${JSON.stringify(validated)}\n`, { encoding: 'utf8', flag: 'wx', mode })
     await rename(temporary, file)
-    await restrictPrivateFile(file)
+    await restrictPrivateFile(file, mode)
   } catch (error) {
     try {
       await rm(temporary, { force: true })
@@ -329,18 +329,24 @@ async function writeStateFile(file: string, validated: unknown): Promise<void> {
   }
 }
 
-/** Atomic JSON account store with symlink refusal and owner-only file creation. */
+/**
+ * Atomic JSON account store with symlink refusal and owner-only file creation.
+ *
+ * `mode` 默认 0600；**跨 uid 共用账号目录**时（自救服务 root + 正式服/测试服
+ * feiyueve）配成 0640 并让目录 setgid 到共享组——否则 root 写出的表对方读不到。
+ * 见 `docs/` 与仓库 AGENTS.md 的「三服统一鉴权」一条。
+ */
 export class JsonAccountStore implements AccountStore {
-  constructor(private readonly file: string) {}
+  constructor(private readonly file: string, private readonly mode = 0o600) {}
 
   async load(): Promise<AccountSnapshot> {
-    const parsed = await readStateFile(this.file)
+    const parsed = await readStateFile(this.file, this.mode)
     if (parsed === undefined) return Object.freeze({ version: 1 })
     return parseAccountSnapshot(parsed)
   }
 
   async save(snapshot: AccountSnapshot): Promise<void> {
-    await writeStateFile(this.file, parseAccountSnapshot(snapshot))
+    await writeStateFile(this.file, parseAccountSnapshot(snapshot), this.mode)
   }
 
   revision(): string | undefined {
@@ -354,18 +360,22 @@ export class JsonAccountStore implements AccountStore {
   }
 }
 
-/** Atomic JSON token store with symlink refusal and owner-only file creation. */
+/** Atomic JSON token store with symlink refusal; `mode` 语义同 `JsonAccountStore`. */
 export class JsonTokenStore implements TokenStore {
-  constructor(private readonly file: string, private readonly maximumTokens = 256) {}
+  constructor(
+    private readonly file: string,
+    private readonly maximumTokens = 256,
+    private readonly mode = 0o600,
+  ) {}
 
   async load(): Promise<TokenSnapshot> {
-    const parsed = await readStateFile(this.file)
+    const parsed = await readStateFile(this.file, this.mode)
     if (parsed === undefined) return Object.freeze({ version: 1, tokens: Object.freeze([]) })
     return parseTokenSnapshot(parsed, this.maximumTokens)
   }
 
   async save(snapshot: TokenSnapshot): Promise<void> {
-    await writeStateFile(this.file, parseTokenSnapshot(snapshot, this.maximumTokens))
+    await writeStateFile(this.file, parseTokenSnapshot(snapshot, this.maximumTokens), this.mode)
   }
 
   revision(): string | undefined {

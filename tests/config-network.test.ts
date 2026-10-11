@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { TMP_ROOT } from './tmp-root.js'
 import { describe, expect, it } from 'vitest'
-import { Config, parseControlFile, parseGatewayConfig } from '../src/config.js'
+import { Config, parseAccountFileMode, parseControlFile, parseGatewayConfig } from '../src/config.js'
 import {
   addressAllowed,
   parseAuthority,
@@ -51,6 +51,29 @@ describe('gateway configuration', () => {
     const shared = join(TMP_ROOT, 'shared-mobile-access')
     const pointing = Config({ ...base, accountDir: shared })
     expect(parseGatewayConfig(pointing).accountDir).toBe(shared)
+  })
+
+  it('accountFileMode 白名单：默认 0600，只认「属主 rw + 可选共享组」，不许对 other 开口', () => {
+    const tls = {
+      mode: 'provided' as const,
+      certFile: join(TMP_ROOT, 'server-cert.pem'),
+      keyFile: join(TMP_ROOT, 'server-key.pem'),
+    }
+    const base = Config({ stateFile, controlFile, initiallyEnabled: false, tls })
+    // 不配 = 单进程老行为。
+    expect(parseGatewayConfig(base).accountFileMode).toBe(0o600)
+
+    // 跨 uid 共用账号目录的唯一正当松绑方向：往共享组开 r/w。
+    for (const allowed of [0o600, 0o620, 0o640, 0o660]) {
+      expect(parseAccountFileMode(allowed)).toBe(allowed)
+      expect(parseGatewayConfig({ ...base, accountFileMode: allowed }).accountFileMode).toBe(allowed)
+    }
+
+    // 逐类拒绝：十进制 640（把 0640 写错的常见形态）、对 other 可读、对 other 可写（= 谁都能签 token）、
+    // 带执行位、比属主 rw 更紧（写方自己都读不回）、非整数、字符串、setuid 位。
+    for (const rejected of [640, 0o644, 0o666, 0o755, 0o400, 0o6000, 640.5, '0o640', null, Number.NaN]) {
+      expect(() => parseAccountFileMode(rejected)).toThrow(/accountFileMode/u)
+    }
   })
 
   it('keeps durable device state required at the Loader boundary', () => {

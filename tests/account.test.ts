@@ -229,6 +229,50 @@ describe('account authority', () => {
     await expect(new JsonAccountStore(link).load()).rejects.toThrow(/regular file/u)
   })
 
+  it('跨 uid 共用账号目录：模式按构造参数落盘（0o640），共享组可读写、other 什么也没有', async () => {
+    // 部署形态 = 自救服务（root）与正式服/测试服（feiyueve）读同一份账号表，
+    // 所以写方必须落得出 0640（目录 setgid 到共享组，新文件继承组）。
+    const directory = await tempDirectory('dsh-mobile-account-shared-')
+    const accountFile = join(directory, 'account.json')
+    const tokenFile = join(directory, 'tokens.json')
+    const maximum = 4
+    const shared = new AccountController(
+      new JsonAccountStore(accountFile, 0o640),
+      new JsonTokenStore(tokenFile, tokenSnapshotLimit(maximum), 0o640),
+      options({ maxTokens: maximum }),
+    )
+    await shared.initialize()
+    await shared.setAccount(USERNAME, PASSWORD)
+    const issued = await shared.login('127.0.0.1', USERNAME, PASSWORD, 'Shared')
+    await shared.close()
+
+    expect((await lstat(accountFile)).mode & 0o777).toBe(0o640)
+    expect((await lstat(tokenFile)).mode & 0o777).toBe(0o640)
+
+    // 另一个进程按同一模式接手（= 另一台服务读同一份表）：模式只影响落盘，
+    // 不影响读回与授权，token 照旧有效。
+    const reader = new AccountController(
+      new JsonAccountStore(accountFile, 0o640),
+      new JsonTokenStore(tokenFile, tokenSnapshotLimit(maximum), 0o640),
+      options({ maxTokens: maximum }),
+    )
+    await reader.initialize()
+    expect(reader.tryAuthorize(issued.token)?.deviceId).toBe(`acct:${issued.tokenId}`)
+    await reader.close()
+
+    // 不配模式的那份仍是 0600——共享改造不许把默认口径带松。
+    const soloAccount = join(directory, 'solo-account.json')
+    const solo = new AccountController(
+      new JsonAccountStore(soloAccount),
+      new JsonTokenStore(join(directory, 'solo-tokens.json'), tokenSnapshotLimit(maximum)),
+      options({ maxTokens: maximum }),
+    )
+    await solo.initialize()
+    await solo.setAccount(USERNAME, PASSWORD)
+    await solo.close()
+    expect((await lstat(soloAccount)).mode & 0o777).toBe(0o600)
+  })
+
   it('keeps issuing tokens after the active ceiling is hit and one is revoked (B1 regression)', async () => {
     // B1：`maxTokens` 是「活跃上限」，不是 tokens.json 的长度上限。曾经 JsonTokenStore
     // 拿活跃上限当解析上限，于是「活跃打满 → 踢掉一枚 → 再登录」写出 N+1 条快照，
