@@ -39,6 +39,20 @@ describe('gateway configuration', () => {
     expect(resolved.customScriptFile).toBe(join(TMP_ROOT, 'mobile.js'))
   })
 
+  it('默认账号目录 = stateFile 所在目录；配了 accountDir 就用它（三服统一鉴权）', () => {
+    const tls = {
+      mode: 'provided' as const,
+      certFile: join(TMP_ROOT, 'server-cert.pem'),
+      keyFile: join(TMP_ROOT, 'server-key.pem'),
+    }
+    const base = Config({ stateFile, controlFile, initiallyEnabled: false, tls })
+    expect(parseGatewayConfig(base).accountDir).toBe(TMP_ROOT)
+
+    const shared = join(TMP_ROOT, 'shared-mobile-access')
+    const pointing = Config({ ...base, accountDir: shared })
+    expect(parseGatewayConfig(pointing).accountDir).toBe(shared)
+  })
+
   it('keeps durable device state required at the Loader boundary', () => {
     expect(() => Config()).toThrow(/stateFile missing required value/)
   })

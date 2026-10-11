@@ -67,9 +67,15 @@ const ACCOUNT_MAX_TOKENS = 32
 /** 登录尝试上限：按源地址的固定窗口限流，与配对尝试同一量级。 */
 const ACCOUNT_MAX_LOGIN_ATTEMPTS = 10
 
-/** 账号与一个月 token 落在同一 profile 的设备状态文件旁边（account.json / tokens.json）。 */
+/**
+ * 账号与一个月 token 的存放位置（account.json / tokens.json）。
+ *
+ * 默认在 profile 的设备状态文件旁边；配了 `accountDir` 就多进程共用同一份 ——
+ * **这是「三服统一鉴权」的落点**：正式服 / 测试服（将来还有自救服务）指向同一个
+ * 目录，在任意一台登录，另一台立刻认这枚 token。
+ */
 function createAccountController(resolved: ResolvedGatewayConfig): AccountController {
-  const directory = dirname(resolved.stateFile)
+  const directory = resolved.accountDir
   return new AccountController(
     new JsonAccountStore(join(directory, 'account.json')),
     // 文件容量是「活跃上限 + 撤销保留余量」：撤销记录还要留 7 天给设备列表看，
@@ -81,6 +87,8 @@ function createAccountController(resolved: ResolvedGatewayConfig): AccountContro
       rateLimitWindowMs: resolved.rateLimitWindowMs,
       maxLoginAttempts: ACCOUNT_MAX_LOGIN_ATTEMPTS,
       maxRateLimitKeys: resolved.maxRateLimitKeys,
+      // 共用目录必须有跨进程读改写锁：两个进程各自「整份快照替换」会互相覆盖
+      lockPath: join(directory, '.account.lock'),
     },
   )
 }

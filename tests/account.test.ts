@@ -1,4 +1,4 @@
-import { lstat, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AccessError } from '../src/access.js'
@@ -170,11 +170,14 @@ describe('account authority', () => {
     const first = await account.login('127.0.0.1', USERNAME, PASSWORD)
     const second = await account.login('127.0.0.1', USERNAME, PASSWORD)
     await expect(account.setAccount(USERNAME, 'a-brand-new-password')).resolves.toMatchObject({ tokensRevoked: 2 })
-    // 清空的 token 表 = 「不是我们的凭据」（undefined，网关回落到旧会话校验后同样 401）；
-    // 只有「在表里但已撤销/过期」才显式抛 401 —— 两种拒绝路径要分得开。
-    expect(account.tryAuthorize(first.token)).toBeUndefined()
-    expect(account.tryAuthorize(second.token)).toBeUndefined()
-    expect(account.listTokens()).toHaveLength(0)
+    // 改密把表里**所有活跃 token 标记撤销**（不再写空表）：多进程共用账号目录时，
+    // 空表会连同别的进程的 token 一起丢掉，而对方内存里那条仍算活跃 —— 「改密即吊销」
+    // 就落空了。代价是设备列表会多出「已撤销」记录（保留 7 天，与单条撤销同一口径）；
+    // 两种拒绝路径（不在表里 / 在表里但已撤销）对客户端都是 401，安全语义不变。
+    expect(() => account.tryAuthorize(first.token)).toThrow(AccessError)
+    expect(() => account.tryAuthorize(second.token)).toThrow(AccessError)
+    expect(account.listTokens()).toHaveLength(2)
+    expect(account.listTokens().every(token => token.revokedAt !== undefined)).toBe(true)
     await expect(account.login('127.0.0.1', USERNAME, PASSWORD)).rejects.toMatchObject({ status: 401 })
     await expect(account.login('127.0.0.1', USERNAME, 'a-brand-new-password')).resolves.toMatchObject({ username: USERNAME })
   })
@@ -305,8 +308,107 @@ describe('account authority', () => {
     expect(account.hasAccount()).toBe(true)
     await expect(account.login('127.0.0.1', USERNAME, 'a-brand-new-password')).rejects.toMatchObject({ status: 401 })
     // 旧 token 已吊销：改密失败也不会留下「新密码未生效、旧 token 仍可用」的旁路。
-    expect(account.tryAuthorize(first.token)).toBeUndefined()
-    expect(account.tryAuthorize(second.token)).toBeUndefined()
+    // 注意吊销是**标记**（记录留在表里 → tryAuthorize 判 401 抛出）而不是删记录：
+    // 多进程共用账号目录时删记录会让别的进程内存里那条仍算活跃（见 setAccount 注释）。
+    expect(() => account.tryAuthorize(first.token)).toThrow(AccessError)
+    expect(() => account.tryAuthorize(second.token)).toThrow(AccessError)
     await expect(account.login('127.0.0.1', USERNAME, PASSWORD)).resolves.toMatchObject({ username: USERNAME })
+  })
+})
+
+/**
+ * 三服统一鉴权：多个 dsh 进程共用同一个账号目录（`accountDir`）。
+ *
+ * 这几条钉的是「一台登录、另一台立刻认；一台撤销、另一台立刻失效；并发登录不互相
+ * 覆盖；改密吊销所有进程」。不需要这些保证时（单进程）行为与从前一致。
+ */
+describe('shared account directory', () => {
+  function shared(directory: string): AccountController {
+    return new AccountController(
+      new JsonAccountStore(join(directory, 'account.json')),
+      new JsonTokenStore(join(directory, 'tokens.json')),
+      options({ lockPath: join(directory, '.account.lock') }),
+    )
+  }
+
+  it('另一台进程无需重启就认新签发的 token（读路径按文件指纹刷新）', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    const staging = shared(directory)
+    await web.initialize()
+    await staging.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+
+    // staging 的内存快照停在「登录之前」——它必须自己发现盘变了
+    const issued = await web.login('lan-web', USERNAME, PASSWORD, 'DSH Mobile (Flutter)')
+    expect(staging.tryAuthorize(issued.token)).toMatchObject({ sessionKey: `acct:${issued.tokenId}` })
+    // csrf 也要跨进程成立（WebView 的变更请求靠它）
+    expect(() => staging.assertCsrf(staging.tryAuthorize(issued.token)!, issued.csrfToken)).not.toThrow()
+  })
+
+  it('一台撤销，另一台立刻失效', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    const staging = shared(directory)
+    await web.initialize()
+    await staging.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    const issued = await web.login('lan-web', USERNAME, PASSWORD)
+
+    const authorization = staging.tryAuthorize(issued.token)!
+    await expect(staging.logout(authorization)).resolves.toBe(true)
+    expect(() => web.tryAuthorize(issued.token)).toThrow(AccessError)
+  })
+
+  it('两台并发登录不会互相覆盖（跨进程锁 + 锁内对齐盘上状态）', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    const staging = shared(directory)
+    await web.initialize()
+    await staging.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+
+    const [fromWeb, fromStaging] = await Promise.all([
+      web.login('lan-web', USERNAME, PASSWORD, 'web'),
+      staging.login('lan-staging', USERNAME, PASSWORD, 'staging'),
+    ])
+    // 两枚都在盘上，且两边都能认对方那枚
+    expect(web.listTokens()).toHaveLength(2)
+    expect(staging.listTokens()).toHaveLength(2)
+    expect(web.tryAuthorize(fromStaging.token)).toBeDefined()
+    expect(staging.tryAuthorize(fromWeb.token)).toBeDefined()
+  })
+
+  it('改密是「全部标记撤销」而不是清空表：别的进程的 token 也失效', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    const staging = shared(directory)
+    await web.initialize()
+    await staging.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    const issued = await web.login('lan-web', USERNAME, PASSWORD)
+
+    const result = await staging.setAccount(USERNAME, 'a-brand-new-password')
+    expect(result.tokensRevoked).toBe(1)
+    expect(() => web.tryAuthorize(issued.token)).toThrow(AccessError)
+    // 记录仍在（撤销是标记），旧密码失效、新密码可用
+    const raw = JSON.parse(await readFile(join(directory, 'tokens.json'), 'utf8')) as { tokens: unknown[] }
+    expect(raw.tokens).toHaveLength(1)
+    await expect(web.login('lan-web', USERNAME, PASSWORD)).rejects.toMatchObject({ status: 401 })
+    await expect(web.login('lan-web', USERNAME, 'a-brand-new-password')).resolves.toMatchObject({ username: USERNAME })
+  })
+
+  it('持有者崩溃留下的陈旧锁会被回收（不会把登录永久卡死）', async () => {
+    const directory = await tempDirectory('account-shared-')
+    const web = shared(directory)
+    await web.initialize()
+    await web.setAccount(USERNAME, PASSWORD)
+    const lock = join(directory, '.account.lock')
+    await writeFile(lock, '999999\n')
+    const past = new Date(Date.now() - 60_000)
+    await utimes(lock, past, past)
+
+    await expect(web.login('lan-web', USERNAME, PASSWORD)).resolves.toMatchObject({ username: USERNAME })
+    await expect(lstat(lock)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

@@ -37,6 +37,14 @@ export interface PluginConfig {
    *  (公网 IPv6 直连：SLAAC 地址动态，无法预配进 publicAuthorities)。 */
   allowIpLiteralHosts?: boolean
   stateFile: string
+  /**
+   * 账号与令牌的存放目录（`account.json` / `tokens.json`）。
+   *
+   * **三服统一鉴权的关键**：指定同一个目录，正式服 / 测试服（将来还有自救服务）
+   * 就共用一份账号与令牌表 —— 在任意一台登录，另一台立刻认这枚 token；在任意一台
+   * 撤销，另一台立刻失效。省略 = 沿用 `stateFile` 所在目录（单进程老行为）。
+   */
+  accountDir?: string
   /** Internal persisted on/off preference managed by the DSH plugin card. */
   controlFile: string
   /** Optional user stylesheet served to the authenticated mobile UI. */
@@ -88,6 +96,13 @@ export interface ResolvedGatewayConfig {
   readonly allowedCidrs: readonly ParsedCidr[]
   readonly allowIpLiteralHosts: boolean
   readonly stateFile: string
+  /**
+   * 账号 / 令牌目录（见 raw 配置的 `accountDir`）。
+   *
+   * 多进程共用同一目录时，`AccountController` 会用它放跨进程锁（`.account.lock`）
+   * 并在授权热路径上按文件指纹同步刷新。
+   */
+  readonly accountDir: string
   /** Local extension root adjacent to the mobile-access state file. */
   readonly extensionsDir: string
   readonly customCssFile: string
@@ -299,6 +314,9 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     allowedCidrs: Object.freeze(allowedCidrs),
     allowIpLiteralHosts: value.allowIpLiteralHosts ?? false,
     stateFile: absoluteFile(value.stateFile, 'stateFile'),
+    accountDir: value.accountDir === undefined
+      ? dirname(absoluteFile(value.stateFile, 'stateFile'))
+      : absoluteFile(value.accountDir, 'accountDir'),
     extensionsDir: join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'extensions'),
     customCssFile: value.customCssFile === undefined
       ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.css')

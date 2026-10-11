@@ -1,6 +1,8 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs'
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { AccessError, BoundedRateLimiter, type SessionAuthorization } from './access.js'
 import { restrictPrivateFile } from './private-file.js'
@@ -81,11 +83,25 @@ export interface TokenSnapshot {
 export interface AccountStore {
   load(): Promise<AccountSnapshot>
   save(snapshot: AccountSnapshot): Promise<void>
+  /**
+   * **同步**指纹：文件内容变了就与上一次不同（实现用 mtime+size，够便宜）。
+   *
+   * 存在它的理由是「多进程共用一个账号目录」：web / staging 两个 dsh 进程各有一份
+   * 内存快照，必须能发现**别的进程刚写的**账号/令牌（见 `AccountController.refreshSync`）。
+   * 不实现（内存 store / 老实现）＝退回单进程语义，不影响正确性。
+   */
+  revision?(): string | undefined
+  /** **同步**读一次快照，供授权热路径使用（只在 [revision] 变了时才调用）。 */
+  loadSync?(): AccountSnapshot
 }
 
 export interface TokenStore {
   load(): Promise<TokenSnapshot>
   save(snapshot: TokenSnapshot): Promise<void>
+  /** 见 [AccountStore.revision]。 */
+  revision?(): string | undefined
+  /** 见 [AccountStore.loadSync]。 */
+  loadSync?(): TokenSnapshot
 }
 
 /** One issued credential pair plus the metadata the client may display. */
@@ -115,6 +131,12 @@ export interface AccountControllerOptions {
   readonly maxLoginAttempts: number
   readonly maxRateLimitKeys: number
   readonly now?: () => number
+  /**
+   * 跨进程读改写锁的路径（多进程共用同一账号目录时必给）。
+   *
+   * 不给＝单进程语义（内存 store / 老部署照旧）；给了但拿不到锁会抛 503 `state_busy`。
+   */
+  readonly lockPath?: string
 }
 
 function sha256(value: string): Buffer {
@@ -320,6 +342,16 @@ export class JsonAccountStore implements AccountStore {
   async save(snapshot: AccountSnapshot): Promise<void> {
     await writeStateFile(this.file, parseAccountSnapshot(snapshot))
   }
+
+  revision(): string | undefined {
+    return stateFingerprint(this.file)
+  }
+
+  loadSync(): AccountSnapshot {
+    const parsed = readStateFileSync(this.file)
+    if (parsed === undefined) return Object.freeze({ version: 1 })
+    return parseAccountSnapshot(parsed)
+  }
 }
 
 /** Atomic JSON token store with symlink refusal and owner-only file creation. */
@@ -334,6 +366,102 @@ export class JsonTokenStore implements TokenStore {
 
   async save(snapshot: TokenSnapshot): Promise<void> {
     await writeStateFile(this.file, parseTokenSnapshot(snapshot, this.maximumTokens))
+  }
+
+  revision(): string | undefined {
+    return stateFingerprint(this.file)
+  }
+
+  loadSync(): TokenSnapshot {
+    const parsed = readStateFileSync(this.file)
+    if (parsed === undefined) return Object.freeze({ version: 1, tokens: Object.freeze([]) })
+    return parseTokenSnapshot(parsed, this.maximumTokens)
+  }
+}
+
+/**
+ * 跨进程读改写锁（多进程共用同一账号目录时用）。
+ *
+ * 为什么要锁：两个 dsh 进程各持一份内存快照，写盘是「整份快照原子替换」——
+ * 没有互斥时，A 读改写与 B 读改写交错会丢掉其中一方刚签发的 token（症状就是
+ * 「在正式服登录、切到测试服又被登出」）。锁文件用 `wx` 创建即独占；
+ * 持有者崩溃留下的陈旧锁按 [STATE_LOCK_STALE_MS] 回收。
+ *
+ * 拿不到锁**不静默继续**：抛 503 `state_busy`（登录是低频操作，宁可让客户端重试，
+ * 也不要写出一份丢 token 的表）。
+ */
+const STATE_LOCK_STALE_MS = 15_000
+const STATE_LOCK_TIMEOUT_MS = 3_000
+const STATE_LOCK_RETRY_MS = 40
+
+async function withStateLock<T>(lockPath: string | undefined, operation: () => Promise<T>): Promise<T> {
+  if (lockPath === undefined) return operation()
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS
+  for (;;) {
+    try {
+      const handle = openSync(lockPath, 'wx', 0o600)
+      try {
+        writeSync(handle, `${process.pid}\n`)
+      } catch {
+        // pid 只是给人看的：写不进去不影响锁的语义
+      }
+      closeSync(handle)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
+          unlinkSync(lockPath)
+          continue
+        }
+      } catch {
+        continue // 锁刚被持有者释放：立刻重试
+      }
+      if (Date.now() >= deadline) throw new AccessError(503, 'state_busy')
+      await delay(STATE_LOCK_RETRY_MS)
+    }
+  }
+  try {
+    return await operation()
+  } finally {
+    try {
+      unlinkSync(lockPath)
+    } catch {
+      // 已被回收（陈旧锁路径）时不必报错
+    }
+  }
+}
+
+/** 便宜的文件指纹：mtime(ms)+size；文件不存在 / 不是常规文件 → undefined。 */
+function stateFingerprint(file: string): string | undefined {
+  try {
+    const stat = statSync(file)
+    if (!stat.isFile()) return undefined
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 同步读一次状态文件（授权热路径专用）。
+ *
+ * 写盘是「临时文件 + rename」，所以读到的永远是完整内容；解析失败**抛**，
+ * 由调用方决定（[AccountController.refreshSync] 选择保留内存快照，绝不因为一次
+ * 读盘异常把所有人登出）。权限收敛仍由异步 [readStateFile] 负责。
+ */
+function readStateFileSync(file: string): unknown {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+  try {
+    return JSON.parse(text) as unknown
+  } catch (error) {
+    throw new Error('account state is not valid JSON', { cause: error })
   }
 }
 
@@ -385,6 +513,9 @@ export class AccountController {
   private readonly loginLimiter: BoundedRateLimiter
   private account: AccountRecord | undefined
   private tokens: TokenRecord[] = []
+  /** 上一次见到（或写出）的盘上指纹；多进程共用目录靠它发现别人的改动。 */
+  private accountRevision: string | undefined
+  private tokenRevision: string | undefined
   private readonly tokenEndedListeners = new Set<(authorization: SessionAuthorization) => void>()
   private mutation: Promise<void> = Promise.resolve()
   private initialized = false
@@ -412,7 +543,40 @@ export class AccountController {
     if (tokens.tokens.length > this.snapshotLimit) throw new Error('token state exceeds the configured token limit')
     this.account = account.account
     this.tokens = [...tokens.tokens]
+    this.accountRevision = this.accountStore.revision?.()
+    this.tokenRevision = this.tokenStore.revision?.()
     this.initialized = true
+  }
+
+  /**
+   * 发现盘上状态被**别的进程**改过就同步读进内存（授权热路径，同步、只在文件变了时读）。
+   *
+   * 场景：web 与 staging 共用同一个账号目录（`accountDir`），用户在其中一台登录后
+   * 立刻切到另一台——那一台必须马上认这枚 token，否则又变成「切服即掉登录」。
+   * 读盘异常（半截内容等）**保留内存快照**：宁可暂时用旧表，也不能把所有人登出。
+   */
+  private refreshSync(): void {
+    if (!this.initialized || this.closing) return
+    try {
+      const accountRevision = this.accountStore.revision?.()
+      if (accountRevision !== undefined && accountRevision !== this.accountRevision) {
+        const snapshot = this.accountStore.loadSync?.()
+        if (snapshot !== undefined) {
+          this.accountRevision = accountRevision
+          this.account = snapshot.account
+        }
+      }
+      const tokenRevision = this.tokenStore.revision?.()
+      if (tokenRevision !== undefined && tokenRevision !== this.tokenRevision) {
+        const snapshot = this.tokenStore.loadSync?.()
+        if (snapshot !== undefined) {
+          this.tokenRevision = tokenRevision
+          this.tokens = [...snapshot.tokens]
+        }
+      }
+    } catch {
+      // 见方法说明：读盘异常不改变内存状态（下一次请求会重试）
+    }
   }
 
   /** `tokens.json` 允许的总条数（活跃上限 + 撤销保留余量）。 */
@@ -430,8 +594,16 @@ export class AccountController {
     this.mutation = new Promise<void>(resolve => { release = resolve })
     await prior
     try {
-      return await operation()
+      return await withStateLock(this.options.lockPath, async () => {
+        // 锁内先对齐盘上最新状态，再让调用方基于它做读改写：否则两个进程各自的
+        // 「整份快照替换」会互相覆盖（丢 token / 复活已撤销 token）。
+        this.refreshSync()
+        const result = await operation()
+        return result
+      })
     } finally {
+      this.accountRevision = this.accountStore.revision?.()
+      this.tokenRevision = this.tokenStore.revision?.()
       release()
     }
   }
@@ -459,6 +631,7 @@ export class AccountController {
   /** Whether a usable account exists; the App shows the setup hint when false. */
   hasAccount(): boolean {
     this.requireInitialized()
+    this.refreshSync()
     return this.account !== undefined
   }
 
@@ -485,12 +658,19 @@ export class AccountController {
       // 反过来的话，第二步写盘失败会留下「新密码已生效、旧 token 仍然有效」的
       // 半成品——改密即吊销的承诺就落空了。现在最坏情况只是账号没改成（旧密码
       // 仍可登录，重新登录还能拿到新 token）。
+      //
+      // 注意这里是**标记撤销**而不是写空表：多进程共用同一账号目录（`accountDir`）时，
+      // 空表会把别的进程刚签发的 token 一起从盘上抹掉，而对方内存里那条仍是活跃的
+      // ——吊销就落空了。标记撤销对所有进程都成立（它们读盘即见 revokedAt）。
       const revoked = this.tokens.filter(token => token.revokedAt === undefined)
-      await this.tokenStore.save(this.snapshot([]))
-      this.tokens = []
+      const cleared = this.tokens.map(token => token.revokedAt === undefined
+        ? Object.freeze({ ...token, revokedAt: now })
+        : token)
+      await this.tokenStore.save(this.snapshot(cleared))
+      this.tokens = cleared
       await this.accountStore.save(Object.freeze({ version: 1, account: record }))
       this.account = record
-      for (const token of revoked) this.emitTokenEnded(token)
+      for (const token of revoked) this.emitTokenEnded({ ...token, revokedAt: now })
       return Object.freeze({ username: normalized, tokensRevoked: revoked.length })
     })
   }
@@ -498,6 +678,8 @@ export class AccountController {
   /** Verify the password and issue one one-month token (rate limited per source). */
   async login(sourceKey: string, username: string, password: string, label?: string): Promise<AccountLoginResult> {
     this.requireInitialized()
+    // 共用账号目录时，账号可能是**别的进程**刚设的：先对齐盘上状态再验口令
+    this.refreshSync()
     const now = this.now()
     if (!this.loginLimiter.take(sourceKey, now)) throw new AccessError(429, 'rate_limited')
     if (typeof username !== 'string' || username.length > MAX_USERNAME_LENGTH
@@ -562,6 +744,7 @@ export class AccountController {
   /** Resolve a bearer credential, or return undefined when it is not our token. */
   tryAuthorize(credential: string): SessionAuthorization | undefined {
     this.requireInitialized()
+    this.refreshSync()
     if (credential.length === 0 || credential.length > MAX_SECRET_LENGTH) return undefined
     const digest = sha256Hex(credential)
     const record = this.tokens.find(token => token.tokenDigest === digest)
@@ -599,6 +782,7 @@ export class AccountController {
 
   /** Configured username, if an account exists. The password is never exposed. */
   currentUsername(): string | undefined {
+    this.refreshSync()
     return this.account?.username
   }
 
@@ -606,10 +790,11 @@ export class AccountController {
   tokenIdOf(sessionKey: string): string | undefined {
     if (!sessionKey.startsWith(ACCOUNT_SESSION_PREFIX)) return undefined
     const id = sessionKey.slice(ACCOUNT_SESSION_PREFIX.length)
-    return this.tokens.some(token => token.id === id) ? id : undefined
+    return this.recordForSession(sessionKey) === undefined ? undefined : id
   }
 
   private recordForSession(sessionKey: string): TokenRecord | undefined {
+    this.refreshSync()
     if (!sessionKey.startsWith(ACCOUNT_SESSION_PREFIX)) return undefined
     const id = sessionKey.slice(ACCOUNT_SESSION_PREFIX.length)
     return this.tokens.find(token => token.id === id)
@@ -660,6 +845,8 @@ export class AccountController {
   /** Safe metadata for the sign-in device list, newest first. */
   listTokens(): readonly AccountTokenSummary[] {
     this.requireInitialized()
+    // 共用账号目录时，设备列表要显示**别的服务**签发的 token（统一鉴权下它们都算本账号的登录）
+    this.refreshSync()
     return Object.freeze([...this.tokens]
       .sort((left, right) => right.createdAt - left.createdAt)
       .map(token => Object.freeze({

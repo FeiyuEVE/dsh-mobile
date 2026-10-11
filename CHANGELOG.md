@@ -1,3 +1,41 @@
+## 0.3.42 — 2026-10-11 · **三服统一鉴权**：账号与令牌表可跨进程共用（`accountDir`），一台登录另一台立刻认
+
+**背景**：0.3.39 起每个 profile 各有一份 `account.json` / `tokens.json`，而三个网关
+（web 18443 / staging 18452 / rescue 18453）报的 `instanceId` 又是同一个值（都是配对 CA 的
+SHA-256 指纹，见各自 `cordis.patch.yml`）——App 按 `instanceId` 存 token ⇒ **三服共用一枚
+token 槽**：在测试服登录后切到正式服，正式服收到的是测试服签发的 token → 401 → App
+「登录态已失效」清登录态回登录页。用户口径是「移动端整个只需要一个独立的鉴权，几个环境和
+模式都应该用统一的鉴权，而不是分环境」。
+
+**改法（服务端）**：
+
+- **新增配置 `accountDir`**（`src/config.ts`）：账号与令牌目录。省略 = 沿用 `stateFile` 所在目录
+  （单进程老行为，行为逐字节不变）；多台指向同一个目录 ⇒ **共用一份账号与令牌表**。
+  `src/plugin.ts` 的 `createAccountController` 改用 `resolved.accountDir`，并给
+  `AccountController` 传 `lockPath`（同目录下的 `.account.lock`）。
+- **读路径跨进程刷新**（`AccountController.refreshSync`）：按**文件指纹**（mtime+size，
+  `JsonAccountStore/JsonTokenStore.revision()`）判断盘上是否被别的进程改过，变了就同步读一次
+  （`loadSync()`）。挂在 `tryAuthorize` / `assertCsrf`（经 `recordForSession`）/ `tokenIdOf` /
+  `hasAccount` / `currentUsername` / `listTokens` / `login` 上——**对方刚签发的 token 立刻可用**，
+  不需要等重启或轮询。读盘异常（半截内容等）**保留内存快照**：宁可暂时用旧表，也不因为一次读盘
+  异常把所有人登出。
+- **跨进程读改写锁**（`withStateLock`）：写盘是「整份快照原子替换」，两个进程交错会丢掉其中一方
+  刚签发的 token。锁文件 `wx` 创建即独占；持有者崩溃留下的陈旧锁（>15s）自动回收；拿不到锁
+  （>3s）**抛 503 `state_busy`** 而不是静默继续写。
+- **改密改成「标记撤销」而不是写空表**（`setAccount`）：空表会把别的进程刚签发的 token 一起从盘上
+  抹掉，而对方内存里那条仍算活跃 —— 「改密即吊销」的承诺落空。标记撤销对所有进程都成立。
+  代价：改密后设备列表会多出「已撤销」记录（保留 7 天，与单条撤销同一口径）；两种拒绝路径
+  （不在表里 → `undefined`／在表里但已撤销 → 抛 401）对客户端都是 401，安全语义不变。
+
+**测试**：`tests/account.test.ts` 新增 5 例（另一进程立刻认新 token、一台撤销另一台立刻失效、
+并发登录不互相覆盖、改密跨进程吊销、陈旧锁回收）；`tests/config-network.test.ts` 新增 1 例
+（`accountDir` 默认值与显式值）。全量 `npm test` 255→**261 例全过**。
+
+**部署**（本次只动测试服；正式服待重启窗口）：`~/.dsh/profiles/staging/cordis.patch.yml` 的
+`mobile-access` 块加 `accountDir: /home/feiyueve/.dsh/mobile-access`（正式服自己的目录），
+重启 `dsh-staging` 生效。**⚠️ 正式服（`dsh-web`）也要装上 0.3.42 并重启**才双向可见——
+老代码只在构造时读一次 `tokens.json`。
+
 ## 0.3.41 — 2026-10-11 · 日志面收紧：两条日志路由都改账号会话鉴权，**部署令牌整体退役**（App 不再内置任何静态日志令牌）
 
 **背景**：0.3.38 起日志面有两枚**写死在源码里**的静态令牌，谁都能从 APK / 仓库里读到（对抗性验证记录见父仓库 `CHANGES.md` 2026-10-11 条目）：
