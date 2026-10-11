@@ -9,7 +9,7 @@
 
 - **后盾（Backstop）**：App 原生层与 dsh 侧 supervisor/intake 直连，链路（frp 隧道 → supervisor）
   独立于 dsh 进程，因此 **dsh 崩溃/启动失败时后盾依然可用**。
-- **原生优先**：监控、自救、日志、控制都是原生功能（Kotlin），不依赖 WebView 页面；
+- **原生优先**：监控、自救、日志、控制都是原生功能（现役实现是 `dsh-mobile-flutter/` 的 Dart 原生层；本仓库的 Kotlin 壳已于 2026-10-11 退役），不依赖 WebView 页面；
   WebView 仍是连接正常时的主体验（dsh 网页容器）。
 - **只读默认、写操作显式**：健康/日志/上报只读；自救/重启/回退都是显式按钮 + 二次确认。
 - **省电省流量**：后台监控用 WorkManager 节流（前台快、后台慢、充电可密），不做 LLM 轮询。
@@ -19,7 +19,7 @@
 
 ```
 ┌─ dsh-mobile App（Android）────────────────────────────────┐
-│ 原生层（Kotlin，纯代码 UI）                                │
+│ 原生层（Flutter/Dart，纯代码 UI）                          │
 │  ├─ BackstopConsole（新页面，Activity 内）                 │
 │  │    状态卡 / 上报列表 / 日志查看 / 操作区 / 自动刷新      │
 │  ├─ BackstopService（新，核心单例/绑定服务）               │

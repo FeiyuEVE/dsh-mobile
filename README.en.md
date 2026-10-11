@@ -218,4 +218,4 @@ npm ci
 npm run verify
 ```
 
-See the [Android guide](apps/mobile/README.md). Licensed under [Apache-2.0](LICENSE).
+The Android client lives in `../dsh-mobile-flutter/` (the Flutter rewrite; the original Kotlin WebView shell was retired on 2026-10-11). Licensed under [Apache-2.0](LICENSE).

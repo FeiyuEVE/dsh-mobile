@@ -228,6 +228,6 @@ npm ci
 npm run verify
 ```
 
-Android 构建见 [App 文档](apps/mobile/README.zh-CN.md)。
+Android 客户端见 `../dsh-mobile-flutter/`（Flutter 版；原 Kotlin WebView 壳 App 已于 2026-10-11 退役）。
 
 Apache-2.0，详见 [LICENSE](LICENSE)。

@@ -9,8 +9,6 @@ npm ci
 npm run verify
 ```
 
-Mobile builds use their platform-specific instructions under `apps/mobile`. Never commit signing keys, provisioning profiles, TLS private keys, device registries, credentials, or tokens.
-
-Stable Android releases require the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The release workflow decodes the keystore only inside the temporary GitHub runner, verifies the resulting APK signature, and publishes its SHA-256 checksum. A tag fails before npm publication when Android signing is unavailable.
+The Android client lives in the separate `../dsh-mobile-flutter/` repository. The Kotlin WebView shell under `apps/mobile` was retired on 2026-10-11, so this repository no longer contains a native app and no longer needs Android signing secrets. Never commit signing keys, provisioning profiles, TLS private keys, device registries, credentials, or tokens.
 
 The project follows the [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). Be respectful, keep reports reproducible, and use private vulnerability reporting for security findings.

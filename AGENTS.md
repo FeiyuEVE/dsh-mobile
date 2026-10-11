@@ -16,7 +16,7 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | 包 | `@feiyueve/dsh-mobile@0.3.40`，Apache-2.0，`private:false`，Node `^22.19.0 \|\| >=24.0.0` |
 | 发布 | 私源（`~/.npmrc`：`@feiyueve` → `http://npm.192.168.0.240.nip.io/`）；本 fork 只发私源。⚠️ 仓库内已是 `0.3.40`，但**私源 `latest` 实测仍是 `0.3.39`**（2026-10-11 `npm view @feiyueve/dsh-mobile dist-tags` → `latest=0.3.39` / `next=0.3.38`）——`0.3.40` 尚未发私源，发版后再更新此行 |
 | 装载 | web 网关 18443（upstream 3080）、staging 18452（upstream 3081），端口在各自 profile 的 `cordis.patch.yml`（仓库内该文件默认 `127.0.0.1:3443`）；profile 依赖按各自节奏升级——**以 `~/.dsh/profiles/*/package.json` 为准**（2026-10-11 快照：web 仍 pin `0.3.38`、staging pin `0.3.39`；部署后两台都应为 `0.3.40`） |
-| Android | `apps/mobile/android`：`io.github.sayach.dshmobile`，minSdk 29 / targetSdk·compileSdk 36；`versionName` 必须等于 package.version，`versionCode` 只需正整数递增（当前 `0.3.40` / **75**，`app/build.gradle.kts:25`） |
+| Android | **已退役（2026-10-11）**：原 Kotlin WebView 壳 App（`apps/mobile/`，`io.github.sayach.dshmobile`）已随账密登录改造整体删除——它的 `NativeAuthClient.pair/renew` 打的是已下线的配对端点（实测 404），且工作区不再分发它。Android 客户端见 `../dsh-mobile-flutter/`（Flutter 版，独立仓库） |
 
 ## 目录结构
 
@@ -29,7 +29,7 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | `src/funnel.ts`·`cpolar*.ts`·`remote.ts`·`diagnostics.ts`·`extensions.ts` | 远程通道、诊断、扩展注册表 |
 | `src/cli.ts` | `dsh-mobile` bin：`setup [--address\|--port 3443\|--dsh-port 3080\|--no-firewall]`、`purge --yes`、`extension create <id>` |
 | `tests/` | vitest（`vitest.config.ts` include 仅 `tests/**/*.test.ts`）；`tests/*.test.js`·`.d.ts`·`.map` 是陈旧 tsc 副产物（多数已跟踪），勿改 |
-| `apps/mobile/` | `android/`=Kotlin WebView 壳（Gradle 8.11.1 wrapper）；另有 `contract/url-policy-cases.json`、`store/`、`brand/`、`README.zh-CN.md` |
+| `apps/mobile/` | **已删除（2026-10-11）**：原 Kotlin WebView 壳 App（Gradle 工程）；Android 客户端已迁到 `../dsh-mobile-flutter/` |
 | `native/funnel-host` | Go/tsnet 的 Tailscale Funnel 托管宿主（Windows x64；产物在根 `bin/`，`.exe`≈22MB） |
 | `scripts/*.mjs` | `check-release-version`、`check-mobile-release`、`check-dsh-compatibility`、`build-funnel-host`、`clean` |
 | `cordis.patch.yml` | bundle patch：插入移动网关 host 行 + 目录选择器 host/client 行 |
@@ -44,7 +44,6 @@ npm run test              # vitest run --pool=threads --maxWorkers=1（串行；
 npm run build             # tsdown → lib/{index.mjs,cli.js,client.js,mobile-layout.js}
 node scripts/check-dsh-compatibility.mjs ../deepseek-harness   # 亦认 DSH_SOURCE_ROOT；--contract-only 跳过「已声明」门
 npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x64.exe
-cd apps/mobile/android && bash ./gradlew --no-daemon lintDebug testDebugUnitTest assembleDebug -x lintAnalyzeDebugUnitTest -x lintAnalyzeDebugAndroidTest
 ```
 
 ## 约定与准则
@@ -57,8 +56,8 @@ cd apps/mobile/android && bash ./gradlew --no-daemon lintDebug testDebugUnitTest
 6. **替换官方 `ui-layout` 模块要承接其全部职责**（`provideRoot({hooks:{panelInfo}})`、槽 children、`reflect.provide('layout')`）；每次同步 dsh 都 diff 官方 `packages/client/ui-layout/src/client/index.ts`，漏掉会让抽屉会话列表为空。
 7. **WebView 兼容垫片归 App 独占**：服务端不再注入这些垫片，`tests/mobile-layout.test.ts` 的反向断言是哨兵，**禁止加回**。
 8. **管理面与网关访问**：`/api/mobile-access/*` 全部经 `assertLocalAdminTrust`（仅 loopback + 同源 + Host 回环）；经 docker 端口映射从宿主访问时源 IP 是网桥网关 → 403，容器里须 `run-in-netns.sh`。网关 18443/18452 对非移动/**未登录**（或凭据不认）请求返回 401/403。
-9. **`check:mobile-release` 覆盖很宽**：品牌/图标 PNG 尺寸与 alpha（含各密度 mipmap）、Android manifest（禁明文、权限、AndroidKeyStore、CA 固定）、`versionName`==package.version、各语言 string/plurals 对齐、funnel `go.mod`（go 1.26.6 / tailscale v1.102.3）+ `bin/*.exe` MZ 头且 <40MiB、npm `files` 清单——动这些会红。
-10. **凭据不入库**：不提交签名密钥/凭据/令牌（`CONTRIBUTING.md`）；稳定版 Android 签名 secrets 只进 CI runner（`release.yml` 实际读 `ANDROID_KEYSTORE_BASE64` + `DSH_ANDROID_KEYSTORE_PASSWORD`/`DSH_ANDROID_KEY_ALIAS`/`DSH_ANDROID_KEY_PASSWORD`，与 CONTRIBUTING 写的后三个名字不同）。每个拒绝路径要有负向测试。
+9. **`check:mobile-release` 覆盖**：funnel `go.mod`（go 1.26.6 / tailscale v1.102.3）+ `bin/*.exe` MZ 头且 <40MiB、npm `files` 清单（含 `THIRD_PARTY_NOTICES.md`）、以及「插件 UI 不得落独立 locale」哨兵（`dsh-mobile-control-locale` 不得回流）——动这些会红。原先的品牌图标 PNG / Android manifest / Kotlin / 各语言 string 断言已随壳 App 退役删除（2026-10-11）。
+10. **凭据不入库**：不提交签名密钥/凭据/令牌（`CONTRIBUTING.md`）。每个拒绝路径要有负向测试。
 11. **文档口径陷阱**：本仓库 `README.md` 顶部与兼容性表停在 **0.3.2**（上游口径，勿当现状）；`CHANGELOG.md` 本地事实从 0.3.26 起，且有 0.3.23/0.3.24 顺序颠倒、0.3.14 重复、中段陈旧 `## Unreleased`。
 12. **APK 分发链路**：工作区 `~/dsh-apk-dl/` 当前 manifest 指向 **dsh-mobile-flutter** APK；父仓库 `dsh-apk-dl/` 只是服务源码。
 
@@ -69,5 +68,5 @@ cd apps/mobile/android && bash ./gradlew --no-daemon lintDebug testDebugUnitTest
 
 ## 相关文档
 
-- 本目录：`README.md`/`README.en.md`、`CHANGELOG.md`、`SECURITY.md`、`CONTRIBUTING.md`、`apps/mobile/README.zh-CN.md`、`design-system/dsh-mobile/MASTER.md`、`docs/backstop-design.md`。
+- 本目录：`README.md`/`README.en.md`、`CHANGELOG.md`、`SECURITY.md`、`CONTRIBUTING.md`、`design-system/dsh-mobile/MASTER.md`、`docs/backstop-design.md`。
 - 父仓库：`../PLUGINS.md`（登记 + 兼容矩阵）、`../CHANGES.md`（dsh 核心改造登记）、`../RESOURCES.md`（18443/18452、frp 隧道、`~/dsh-apk-dl/`）、`../PLUGIN-DEV.md`、`../AGENTS.md`。
