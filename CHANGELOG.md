@@ -1,3 +1,42 @@
+## 0.3.44 — 2026-10-11 · **共享账号表下的写回竞态**：关闭路径先重读盘；撤销接口不再能被拼错的键骗成「撤销自己」
+
+**背景**（真机实测，时间戳级证据）：三服（web / staging / rescue）共用一份
+`~/.dsh/mobile-access/tokens.json` 后，出现两个独立缺陷：
+
+1. **关闭时的整表写回会把别的进程刚写的改动整条抹掉**。`AccountController.finishClose()`
+   从前是「拿本进程内存快照 `prune()` 后直接 `tokenStore.save()`」——**既没拿跨进程锁，
+   也没先对齐盘上状态**。实测：`21:36:53.766` staging 撤销了一枚 token，300 ms 后
+   （`21:36:54.066`）web 关闭（`systemctl restart`）时的写回把这条撤销**整条抹掉**，
+   那枚凭据在盘上复活了 **26 分钟**；22:03 复现时方向相反——staging 关闭时用它 26 分钟
+   前的旧记录覆盖了 web 的新撤销（撤销时间戳倒退）。指纹比对救不了：`mtimeMs:size`
+   在「同一毫秒 + 同样长度」的两次写上会撞车。
+2. **`POST /mobile-access/auth/tokens/revoke` 的 `id` 兜底是 fail-open 的**：body 里没有
+   合法 `id` 时它当成「撤销自己」，于是把键名拼错（`tokenId`）的请求也会**回
+   `{"ok":true,"revoked":1}` 并撤掉调用方自己那枚**——之后每个请求 401，现象像
+   「撤销不可靠」。
+
+**改法**：
+
+- `src/account.ts`：`finishClose()` 走 `withStateLock` + `refreshSync(force: true)` 后
+  再 prune/save；**读不出盘就不写**（宁可少写一次，也不拿陈旧内存覆盖）。
+- `src/account.ts`：`refreshSync(force)` 返回「内存是否与盘一致」；`exclusive()` 里
+  读盘失败 → `503 state_busy`（不再拿陈旧内存写盘）；失败时**不再把内存标记成
+  「与盘同步」**（否则下一次写盘会跳过重读）。
+- `src/account.ts`：`stateFingerprint` 计入 `ino`——写盘是「临时文件 + rename」，每次写
+  都换 inode，才能区分同一毫秒、同样长度的两次写。
+- `src/account.ts`：`withStateLock` 的陈旧锁回收失败（权限/类型异常）不再 `continue`
+  空转（那是不看 deadline 的死循环，会把进程卡在一次登录上），改为落下去按 deadline
+  抛 `503`；释放时**只删自己那把锁**（比对写入的 nonce），避免误删陈旧回收后别人刚拿到的锁。
+- `src/gateway.ts`：`handleAccountRevoke` 只认 `id` / `all` / `self` 三个键，
+  **别的键一律 400**（拼错的 id 绝不能落进「撤销自己」兜底）；`{}` 仍等于撤销自己
+  （App 的既有形状，向后兼容），新增显式 `{self:true}`。
+
+**测试**：`tests/account.test.ts` 新增 5 例（关闭写回不得抹掉别台刚签发的 token / 不得让
+已撤销的 token 复活 / 读不出盘时关闭与变更路径都不写盘 / 陈旧锁删不掉时按 deadline 收口 /
+指纹能区分同毫秒同长度两次写），`tests/gateway.test.ts` 新增 1 例撤销契约
+（拼错键 400 且双方都还活着、撤别人不影响自己、不存在的 id 404、`{self:true}` 撤自己）。
+跨进程写回那两条在旧实现上**必红**。
+
 ## 0.3.43 — 2026-10-11 · **账号表可跨 uid 共用**：新增 `accountFileMode`，读方 chmod 失败不再让整棵插件起不来
 
 **背景**：0.3.42 让三服可以指向同一个 `accountDir`，但本机形态是**自救服务跑 root、
