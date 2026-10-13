@@ -15,7 +15,7 @@
  * 应答是 `PatchCheckResponse`）。这份逻辑的权威实现是
  * `../dsh-mobile-flutter/.tmp/codepush/server/patch_server.py`（发布脚本 `publish_patch.py`
  * 写出的 `index.json` 就是它的输入），本文件是它在网关里的**同形移植**——两边必须逐条
- * 对齐，`tests/hot-update.test.ts` 是哨兵。
+ * 对齐，`tests/gateway.test.ts` 的「内容热更」组是哨兵。
  *
  * 换句话说：**这里不新增服务、不新增端口**，读的是发布脚本写下的同一份目录
  * （`codePushDir/index.json` + `codePushDir/*.bin`）。
