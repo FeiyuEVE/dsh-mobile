@@ -1,3 +1,44 @@
+## 0.3.45 — 2026-10-13 · **内容热更**：网关多两条只读路由，App 与 Dart 补丁都不用重装 APK
+
+**背景**：Flutter App（`../dsh-mobile-flutter`）换掉了「改样式就要重发
+APK + 手动安装」那套——Dart 代码走 Shorebird 引擎的 code push（自托管，
+无账号），页面资源（html/js/css，2.17 MB）走运行时取件。设备端那一半已经跑通，
+缺的是**家侧那两条前缀**：设备里的 updater 只认公共 CA、且 `base_url` 是构建期
+烧死的，所以它连的是 App 自己起的回环中继；中继再把请求以**账号会话**打到
+`/mobile-access/{app-assets,codepush}/*` —— 这两条此前不存在，路由 404。
+
+**改法**：
+
+- `src/hot-update.ts`（新增）：两条前缀的只读实现，**不新增服务、不新增端口**。
+  - `GET /mobile-access/app-assets/<逻辑名>`：从 `hotUpdateDir` 读文件树
+    （`manifest.json` + 逻辑名镜像）。名字白名单与 App 侧
+    `lib/core/remote_assets.dart` 的 `_safeNameRe` **逐字同源**
+    （`^[A-Za-z0-9][A-Za-z0-9._/-]*$`、禁 `..`/`\`/`//`/结尾斜杠），再叠一次
+    `resolve` 之后的目录包含校验。
+  - `POST /mobile-access/codepush/check`：按设备端协议
+    （`PatchCheckRequest` → `PatchCheckResponse`，见 `shorebirdtech/updater`
+    的 `library/src/network.rs`）从 `codePushDir/index.json` 现算应答；
+    `POST .../events` 回 2xx；`GET .../download/<file>` 流式吐补丁。
+  - ⚠️ **`rolled_back_patch_numbers` 在「没有新补丁」时也要下发**——设备靠它卸载
+    已装但被回滚的补丁，只回 `patch_available:false` 会让它继续从被回滚的补丁启动
+    （上游 demo 的 v1 踩过，`tests/gateway.test.ts` 有哨兵）。
+- `src/config.ts`：新增两个隐藏路径项 `hotUpdateDir` / `codePushDir`，
+  默认 `accountDir/{hotupdate,codepush}` —— 与账号表同一处，于是**三服共用同一份
+  热更内容**（在 web 上发布，staging/rescue 立刻也是这一版）。顺手把
+  `stateFile` / `accountDir` 提成局部常量（原先内联重复了 6 次）。
+- `src/gateway.ts`：四条分发（两条 GET + 两条 POST），与 `/app/*` 同一口径
+  **先校账号 token 再读盘**：内容清单本身就是发布节奏，不能白给匿名。
+
+**边界**：目录不存在 / 名字不在白名单 / 文件不在，**一律 404**（不是 5xx）——
+App 侧的设计是「任何失败都回落内置」，把「还没发布」变成 5xx 只会让设备日志里
+多一堆吓人的错误。
+
+**判据**：`npm run verify`；`tests/gateway.test.ts` 新增 11 例（匿名 401 三条、
+穿越与非法名、未发布 404、check 四态 + 回滚清单哨兵 + 越界文件名被忽略、
+events 415、download 404），全套 **282 过**。设备侧：模拟器上真 APK 经
+`base_url=http://127.0.0.1:18471` 的回环中继走完「检查 → 下载 → 重启生效」，
+补丁 1→2→3 依次生效、资源 revision 生效 15 个文件。
+
 ## 0.3.44 — 2026-10-11 · **共享账号表下的写回竞态**：关闭路径先重读盘；撤销接口不再能被拼错的键骗成「撤销自己」
 
 **背景**（真机实测，时间戳级证据）：三服（web / staging / rescue）共用一份

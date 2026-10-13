@@ -3,13 +3,14 @@ import { createSocket } from 'node:dgram'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, request as requestHttp, type IncomingHttpHeaders, type IncomingMessage, type Server } from 'node:http'
 import { request as requestHttps } from 'node:https'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseGatewayConfig } from '../src/config.js'
 import { MobileAccessGateway, LOG_QUERY_HEADER, LOG_QUERY_KEY } from '../src/gateway.js'
 import { CSRF_HEADER, DEVICE_COOKIE, SESSION_COOKIE } from '../src/http-security.js'
+import { APP_ASSETS_PREFIX, CODE_PUSH_PREFIX } from '../src/hot-update.js'
 import {
   AccountController,
   DEFAULT_TOKEN_TTL_MS,
@@ -1676,6 +1677,225 @@ describe('HTTP gateway', () => {
       headers: browserHeaders(instance),
     })
     expect(anonymous.status).toBe(401)
+  })
+
+  describe('内容热更（页面资源 + Dart 补丁）', () => {
+    /**
+     * 备一份热更内容目录 + 网关。
+     *
+     * 两个目录都通过 `overrides` 指到临时目录里，**不碰**默认位置
+     * （`accountDir/hotupdate`、`accountDir/codepush`）——默认位置是真机上发布脚本
+     * 写的地方，用例去那里读写会把真内容搅了。
+     */
+    async function hotGateway(seed: {
+      assets?: Record<string, string>
+      index?: Record<string, unknown>
+      files?: Record<string, string | Buffer>
+    } = {}): Promise<{ instance: MobileAccessGateway; port: number }> {
+      const inner = await upstream()
+      const root = await tempDirectory('hot-update')
+      const assetsDir = join(root, 'hotupdate')
+      const codePushDir = join(root, 'codepush')
+      await mkdir(assetsDir, { recursive: true })
+      await mkdir(codePushDir, { recursive: true })
+      for (const [name, body] of Object.entries(seed.assets ?? {})) {
+        const target = join(assetsDir, name)
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, body)
+      }
+      for (const [name, body] of Object.entries(seed.files ?? {})) {
+        await writeFile(join(codePushDir, name), body)
+      }
+      if (seed.index !== undefined) await writeFile(join(codePushDir, 'index.json'), JSON.stringify(seed.index))
+      const instance = await gateway(inner.port, { hotUpdateDir: assetsDir, codePushDir })
+      return { instance, port: instance.address().port }
+    }
+
+    /** 设备端 `PatchCheckRequest` 的最小体（字段名与 engine 的 serde 结构一致）。 */
+    const checkBody = (over: Record<string, unknown> = {}): string => JSON.stringify({
+      app_id: '5e0abe95-61fa-463f-83a9-c1ca225f2ca9',
+      channel: 'stable',
+      release_version: '0.5.1+144',
+      platform: 'android',
+      arch: 'x86_64',
+      client_id: 'a9001bbd-0a00-4eb9-8c0a-10e7b16d7d93',
+      ...over,
+    })
+
+    function patchIndex(patch: Record<string, unknown>): Record<string, unknown> {
+      return { releases: { '0.5.1+144|android|x86_64': { patches: [patch] } } }
+    }
+
+    it('三条路由匿名一律 401（内容清单本身就是发布节奏，不能白给）', async () => {
+      const { instance, port } = await hotGateway({ assets: { 'terminal/terminal.html': '<html/>' } })
+      const base = browserHeaders(instance)
+      const anonymous = [
+        await request(port, `${APP_ASSETS_PREFIX}/manifest.json`, { headers: base }),
+        await request(port, `${CODE_PUSH_PREFIX}/check`, { method: 'POST', headers: { ...base, 'content-type': 'application/json' }, body: checkBody() }),
+        await request(port, `${CODE_PUSH_PREFIX}/download/patch-1.bin`, { headers: base }),
+      ]
+      for (const result of anonymous) {
+        expect(result.status).toBe(401)
+        expect(JSON.parse(result.body)).toMatchObject({ error: expect.any(String) as unknown as string })
+      }
+    })
+
+    it('带会话能取到资源，且不缓存、Content-Type 按扩展名给', async () => {
+      const { instance, port } = await hotGateway({
+        assets: {
+          'manifest.json': JSON.stringify({ revision: 7, files: {} }),
+          'terminal/terminal.html': '<html>REMOTE</html>',
+        },
+      })
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+
+      const manifest = await request(port, `${APP_ASSETS_PREFIX}/manifest.json`, { headers })
+      expect(manifest.status).toBe(200)
+      expect(manifest.headers['content-type']).toBe('application/json; charset=utf-8')
+      expect(manifest.headers['cache-control']).toBe('no-store')
+      expect(JSON.parse(manifest.body)).toMatchObject({ revision: 7 })
+
+      const page = await request(port, `${APP_ASSETS_PREFIX}/terminal/terminal.html`, { headers })
+      expect(page.status).toBe(200)
+      expect(page.headers['content-type']).toBe('text/html; charset=utf-8')
+      expect(page.body).toBe('<html>REMOTE</html>')
+    })
+
+    it('路径穿越与非法逻辑名一律 404（白名单与 App 侧同源）', async () => {
+      const { instance, port } = await hotGateway({ assets: { 'manifest.json': '{}' } })
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+      for (const name of ['%2e%2e%2fmanifest.json', '..%2fmanifest.json', '.hidden', 'a//b', 'sub/%2e%2e/x']) {
+        const result = await request(port, `${APP_ASSETS_PREFIX}/${name}`, { headers })
+        expect(result.status, name).toBe(404)
+      }
+    })
+
+    it('还没发布过（目录不存在）⇒ 404，绝不是 5xx（App 侧要能安静回落内置）', async () => {
+      const { instance, port } = await hotGateway()
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+      const missing = await request(port, `${APP_ASSETS_PREFIX}/manifest.json`, { headers })
+      expect(missing.status).toBe(404)
+      const patch = await request(port, `${CODE_PUSH_PREFIX}/download/patch-1.bin`, { headers })
+      expect(patch.status).toBe(404)
+    })
+
+    it('check：该 release 没登记 ⇒ patch_available:false', async () => {
+      const { instance, port } = await hotGateway({ index: { releases: {} } })
+      const paired = await signIn(instance)
+      const result = await request(port, `${CODE_PUSH_PREFIX}/check`, {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}`, 'content-type': 'application/json' },
+        body: checkBody(),
+      })
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.body)).toEqual({ patch_available: false })
+    })
+
+    it('check：有新补丁 ⇒ 下发编号/hash/本网关的 download_url，签名照传', async () => {
+      const { instance, port } = await hotGateway({
+        index: patchIndex({ number: 3, file: 'patch-3.bin', hash: 'deadbeef', signature: 'SIG', rolled_back: false }),
+        files: { 'patch-3.bin': 'PATCH-BYTES' },
+      })
+      const paired = await signIn(instance)
+      const result = await request(port, `${CODE_PUSH_PREFIX}/check`, {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}`, 'content-type': 'application/json' },
+        body: checkBody({ current_patch_number: 0 }),
+      })
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.body)).toEqual({
+        patch_available: true,
+        patch: {
+          number: 3,
+          hash: 'deadbeef',
+          download_url: `http://127.0.0.1:${String(port)}${CODE_PUSH_PREFIX}/download/patch-3.bin`,
+          hash_signature: 'SIG',
+        },
+      })
+
+      const bytes = await request(port, `${CODE_PUSH_PREFIX}/download/patch-3.bin`, {
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` },
+      })
+      expect(bytes.status).toBe(200)
+      expect(bytes.body).toBe('PATCH-BYTES')
+    })
+
+    it('check：已经在跑这一版 ⇒ 不再下发', async () => {
+      const { instance, port } = await hotGateway({
+        index: patchIndex({ number: 3, file: 'patch-3.bin', hash: 'h', rolled_back: false }),
+      })
+      const paired = await signIn(instance)
+      const result = await request(port, `${CODE_PUSH_PREFIX}/check`, {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}`, 'content-type': 'application/json' },
+        body: checkBody({ current_patch_number: 3 }),
+      })
+      expect(JSON.parse(result.body)).toEqual({ patch_available: false })
+    })
+
+    it('check：被回滚的补丁不下发，但回滚清单**即使在 false 时也要带上**', async () => {
+      // 哨兵：只回 patch_available:false 会让设备继续从被回滚的补丁启动
+      // （上游 demo 的 v1 就踩了这个）。这条与 patch_server.py 的注释一一对应。
+      const { instance, port } = await hotGateway({
+        index: patchIndex({ number: 2, file: 'patch-2.bin', hash: 'h2', rolled_back: true }),
+      })
+      const paired = await signIn(instance)
+      const result = await request(port, `${CODE_PUSH_PREFIX}/check`, {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}`, 'content-type': 'application/json' },
+        body: checkBody({ current_patch_number: 2 }),
+      })
+      expect(JSON.parse(result.body)).toEqual({
+        patch_available: false,
+        rolled_back_patch_numbers: [2],
+      })
+    })
+
+    it('check：index.json 里越界的文件名被忽略（清单是数据，不是路径指令）', async () => {
+      const { instance, port } = await hotGateway({
+        index: patchIndex({ number: 9, file: '../escape.bin', hash: 'h9', rolled_back: false }),
+      })
+      const paired = await signIn(instance)
+      const result = await request(port, `${CODE_PUSH_PREFIX}/check`, {
+        method: 'POST',
+        headers: { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}`, 'content-type': 'application/json' },
+        body: checkBody(),
+      })
+      expect(JSON.parse(result.body)).toEqual({ patch_available: false })
+    })
+
+    it('events：收得下就回 200 {}；非 JSON 体一律 415', async () => {
+      const { instance, port } = await hotGateway()
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+      const ok = await request(port, `${CODE_PUSH_PREFIX}/events`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ event: 'patch_installed' }),
+      })
+      expect(ok.status).toBe(200)
+      expect(JSON.parse(ok.body)).toEqual({})
+
+      const wrongType = await request(port, `${CODE_PUSH_PREFIX}/events`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'text/plain' },
+        body: 'not json',
+      })
+      expect(wrongType.status).toBe(415)
+    })
+
+    it('download：白名单外的名字与不存在的文件都回 404', async () => {
+      const { instance, port } = await hotGateway({ files: { 'patch-1.bin': 'X' } })
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), cookie: `${SESSION_COOKIE}=${paired.session}` }
+      for (const name of ['%2e%2e%2findex.json', 'nope.bin', 'patch-1.bin.bak']) {
+        const result = await request(port, `${CODE_PUSH_PREFIX}/download/${name}`, { headers })
+        expect(result.status, name).toBe(404)
+      }
+    })
   })
 
   it('answers an anonymous session probe without side effects and rejects revoked credentials', async () => {

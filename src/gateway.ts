@@ -46,6 +46,16 @@ import {
   WS_PATHS,
 } from './http-security.js'
 import {
+  APP_ASSETS_PREFIX,
+  CODE_PUSH_PREFIX,
+  codePushCheckResponse,
+  readCodePushCheckBody,
+  readCodePushEventBody,
+  readCodePushIndex,
+  serveAsset,
+  servePatch,
+} from './hot-update.js'
+import {
   DSH_MOBILE_VERSION,
   MINIMUM_ANDROID_APP_VERSION,
   MOBILE_METADATA_VERSION,
@@ -1325,6 +1335,69 @@ export class MobileAccessGateway {
     response.end()
   }
 
+  /**
+   * 内容热更 · 页面资源：`GET /mobile-access/app-assets/<逻辑名>`。
+   *
+   * 与 `/app/*`（APK 分发）同一口径：**先校账号 token 再读盘**——匿名能列清单就等于
+   * 把发布节奏（revision、改了哪些文件）透出去。目录不存在 / 名字不在白名单 /
+   * 文件不在：一律 404（**不是 500**，App 侧的设计是任何失败都回落内置）。
+   */
+  private async handleAppAssets(request: IncomingMessage, response: ServerResponse, name: string): Promise<void> {
+    this.authorize(request)
+    await serveAsset(response, this.hotUpdateRoots(), name, this.tlsEnabled)
+  }
+
+  /**
+   * 内容热更 · Dart 补丁。设备端（编在 `libflutter.so` 里的 libupdater）只认三条：
+   *
+   * - `POST .../check`  → 按 `index.json` 现算 `PatchCheckResponse`
+   * - `POST .../events` → 2xx 即可（安装事件，网关不落库）
+   * - `GET  .../download/<file>` → 补丁字节
+   *
+   * 它不给我们带任何自定义头，也**不认 401 的形状**——但这条前缀的调用方是
+   * **App 的回环中继**（带着 30 天 token），不是设备直连，所以鉴权照旧走
+   * `authorize`：中继拿到 401 会如实记账成「登录过期」并显示给用户（准则 39 ⑥）。
+   */
+  private async handleCodePush(request: IncomingMessage, response: ServerResponse, action: string): Promise<void> {
+    this.authorize(request)
+    const roots = this.hotUpdateRoots()
+    if (action === 'check') {
+      const body = await readCodePushCheckBody(request)
+      const index = await readCodePushIndex(roots.codePushDir)
+      sendJson(response, 200, codePushCheckResponse(index, body, this.codePushDownloadBase(request)), this.tlsEnabled)
+      return
+    }
+    if (action === 'events') {
+      await readCodePushEventBody(request)
+      sendJson(response, 200, {}, this.tlsEnabled)
+      return
+    }
+    if (action.startsWith('download/')) {
+      await servePatch(response, roots, action.slice('download/'.length), this.tlsEnabled)
+      return
+    }
+    throw new HttpError(404, 'not_found')
+  }
+
+  /** 热更内容根目录（两个都允许不存在：没发布过就是「没有热更内容」）。 */
+  private hotUpdateRoots(): { readonly assetsDir: string; readonly codePushDir: string } {
+    return { assetsDir: this.config.hotUpdateDir, codePushDir: this.config.codePushDir }
+  }
+
+  /**
+   * 补丁 `download_url` 的基址。
+   *
+   * 用途只有一处：**设备端 updater 需要一个绝对地址**（ureq 不认相对路径）。经 App
+   * 的回环中继时它会被改写成 `http://127.0.0.1:<回环口>/download/<文件>`，所以这里的
+   * 主机名对最终生效的链路不重要——按请求的 `Host` 回一个本站地址即可（调用方此刻
+   * 已经过了鉴权与 authority 校验）。
+   */
+  private codePushDownloadBase(request: IncomingMessage): string {
+    const host = request.headers.host
+    if (typeof host !== 'string' || host === '') throw new HttpError(400, 'bad_request')
+    return `${this.tlsEnabled ? 'https' : 'http'}://${host}${CODE_PUSH_PREFIX}/download`
+  }
+
   private async handleLogout(request: IncomingMessage, response: ServerResponse): Promise<void> {
     // 空体是合法的：登出没有参数，客户端（含 `fetch(..., {method:'POST'})` 不写 body）
     // 不该因为「没带 JSON」被 400 挡掉——那会让 token 永远撤不掉。
@@ -1480,6 +1553,24 @@ export class MobileAccessGateway {
     // App 分发是静态文件路由：忽略查询串（客户端加 cache-busting 参数不该 404）。
     if (request.method === 'GET' && target.decodedPathname.startsWith(`${AUTH_PREFIX}/app/`)) {
       await this.handleAppDistribution(request, response, target.decodedPathname.slice(`${AUTH_PREFIX}/app/`.length))
+      return
+    }
+    // 内容热更 · 页面资源（App 的 Dart 侧 `RemoteAssets` 取）：静态文件路由，忽略查询串。
+    if (request.method === 'GET' && target.decodedPathname.startsWith(`${APP_ASSETS_PREFIX}/`)) {
+      await this.handleAppAssets(request, response, target.decodedPathname.slice(`${APP_ASSETS_PREFIX}/`.length))
+      return
+    }
+    // 内容热更 · Dart 补丁（设备端只认这三条；经 App 回环中继带 token 过来）。
+    if (target.decodedPathname === `${CODE_PUSH_PREFIX}/check` && target.search === '' && request.method === 'POST') {
+      await this.handleCodePush(request, response, 'check')
+      return
+    }
+    if (target.decodedPathname === `${CODE_PUSH_PREFIX}/events` && target.search === '' && request.method === 'POST') {
+      await this.handleCodePush(request, response, 'events')
+      return
+    }
+    if (request.method === 'GET' && target.decodedPathname.startsWith(`${CODE_PUSH_PREFIX}/download/`)) {
+      await this.handleCodePush(request, response, target.decodedPathname.slice(`${CODE_PUSH_PREFIX}/`.length))
       return
     }
     if (target.search === '' && request.method === 'POST' && target.decodedPathname === `${AUTH_PREFIX}/auth/logout`) {

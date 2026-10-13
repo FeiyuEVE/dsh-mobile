@@ -67,6 +67,24 @@ export interface PluginConfig {
   /** Internal dedicated mobile layout browser bundle. */
   mobileLayoutFile?: string
   /**
+   * **内容热更**的页面资源目录（`manifest.json` + 逻辑名文件树）。
+   *
+   * App 的 Dart 侧（`../dsh-mobile-flutter` 的 `RemoteAssets`）从这里取
+   * `/mobile-access/app-assets/*`；发布脚本把 App 的 `assets/` 快照写进来即可，
+   * 目录不存在就是「没有热更内容」（一律 404，App 回落内置）。
+   *
+   * 省略 = `accountDir/hotupdate`：与账号表同一处，于是**三服共用同一份热更内容**
+   * （在 web 上发布，staging/rescue 立刻也是这一版）。
+   */
+  hotUpdateDir?: string
+  /**
+   * **Dart 补丁**目录（`index.json` + `*.bin`）。
+   *
+   * 目录里放的是发布脚本写出的清单与补丁字节（见 `src/hot-update.ts` 顶部）；网关按
+   * 设备端协议现算应答，**不依赖任何常驻服务**。省略 = `accountDir/codepush`。
+   */
+  codePushDir?: string
+  /**
    * Opt-in Service Worker static caching for the mobile page. When enabled the
    * rewritten mobile index registers a gateway-scoped worker that serves
    * revisioned plugin/assets/mobile-boot responses from Cache Storage, so page
@@ -123,6 +141,10 @@ export interface ResolvedGatewayConfig {
   readonly customCssFile: string
   readonly customScriptFile: string
   readonly mobileLayoutFile: string
+  /** 内容热更的页面资源目录（见 raw 配置的 `hotUpdateDir`）。 */
+  readonly hotUpdateDir: string
+  /** Dart 补丁目录（见 raw 配置的 `codePushDir`）。 */
+  readonly codePushDir: string
   /** Whether the mobile page registers the Service Worker static cache. */
   readonly staticCacheWorker: boolean
   readonly instanceId: string
@@ -162,6 +184,8 @@ export const Config: z<PluginConfig> = z.object({
   customCssFile: z.string().hidden(),
   customScriptFile: z.string().hidden(),
   mobileLayoutFile: z.string().hidden(),
+  hotUpdateDir: z.string().hidden(),
+  codePushDir: z.string().hidden(),
   staticCacheWorker: z.boolean(),
   instanceId: z.string().hidden(),
   pairingCaFile: z.string().hidden(),
@@ -348,6 +372,9 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
   const sessionTtlMs = integer(value.sessionTtlMs, 'sessionTtlMs', 8 * 60 * 60_000, 30_000, 24 * 60 * 60_000)
   if (sessionTtlMs > deviceTtlMs) throw new Error('sessionTtlMs must not exceed deviceTtlMs')
 
+  const stateFile = absoluteFile(value.stateFile, 'stateFile')
+  const accountDir = value.accountDir === undefined ? dirname(stateFile) : absoluteFile(value.accountDir, 'accountDir')
+
   return Object.freeze({
     listenHost,
     listenPort,
@@ -355,24 +382,28 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     authorities: Object.freeze(authorities),
     allowedCidrs: Object.freeze(allowedCidrs),
     allowIpLiteralHosts: value.allowIpLiteralHosts ?? false,
-    stateFile: absoluteFile(value.stateFile, 'stateFile'),
-    accountDir: value.accountDir === undefined
-      ? dirname(absoluteFile(value.stateFile, 'stateFile'))
-      : absoluteFile(value.accountDir, 'accountDir'),
+    stateFile,
+    accountDir,
     accountFileMode: parseAccountFileMode(value.accountFileMode),
-    extensionsDir: join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'extensions'),
+    extensionsDir: join(dirname(stateFile), 'extensions'),
     customCssFile: value.customCssFile === undefined
-      ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.css')
+      ? join(dirname(stateFile), 'mobile.css')
       : absoluteFile(value.customCssFile, 'customCssFile'),
     customScriptFile: value.customScriptFile === undefined
-      ? join(dirname(absoluteFile(value.stateFile, 'stateFile')), 'mobile.js')
+      ? join(dirname(stateFile), 'mobile.js')
       : absoluteFile(value.customScriptFile, 'customScriptFile'),
     mobileLayoutFile: value.mobileLayoutFile === undefined
       ? fileURLToPath(new URL('./mobile-layout.js', import.meta.url))
       : absoluteFile(value.mobileLayoutFile, 'mobileLayoutFile'),
+    hotUpdateDir: value.hotUpdateDir === undefined
+      ? join(accountDir, 'hotupdate')
+      : absoluteFile(value.hotUpdateDir, 'hotUpdateDir'),
+    codePushDir: value.codePushDir === undefined
+      ? join(accountDir, 'codepush')
+      : absoluteFile(value.codePushDir, 'codePushDir'),
     staticCacheWorker: value.staticCacheWorker === true,
     instanceId: value.instanceId === undefined
-      ? createHash('sha256').update(absoluteFile(value.stateFile, 'stateFile')).digest('hex')
+      ? createHash('sha256').update(stateFile).digest('hex')
       : /^[a-f\d]{64}$/u.test(value.instanceId)
         ? value.instanceId
         : (() => { throw new Error('instanceId must be a lowercase SHA-256 value') })(),
