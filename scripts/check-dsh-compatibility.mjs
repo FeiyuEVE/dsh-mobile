@@ -146,10 +146,12 @@ if (clientArchitecture === 'renderer-v2' && !connectionSource.includes('transpor
   throw new Error('DSH renderer-v2 connection no longer recognizes a Host-owning transport')
 }
 
-const settingsSource = await text('packages/client/ui-settings/src/client/index.ts')
-if (!settingsSource.includes("connection.isLoopback ? 'host' : 'memory'")
-  && !settingsSource.includes("ctx.remote.$host.isLoopback ? 'host' : 'memory'")) {
-  throw new Error('DSH settings trust contract changed')
+// 0.2.1-rc.2 起 Settings 的持久化策略改为「所有已认证浏览器都写 Host 文档」，
+// 原 `connection.isLoopback ? 'host' : 'memory'` 的选择消失；`$host.isLoopback`
+// 只剩「能否打开原生设置文档」这一个用途。移动页仍要求该 Host 事实可用。
+const settingsGeneralSource = await text('packages/client/ui-settings-general/src/client/index.ts')
+if (!settingsGeneralSource.includes('ctx.remote.$host.isLoopback')) {
+  throw new Error('DSH settings trust contract changed: missing ctx.remote.$host.isLoopback')
 }
 
 const sidebarSource = await text('packages/client/ui-sidebar/src/client/SidebarRoot.tsx')
