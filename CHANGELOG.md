@@ -1,3 +1,45 @@
+## 0.3.50 — 2026-11-21 · 会话列表服务端切片（opt-in）：手机不再收 5.3 MB / 3905 条
+
+**背景**：移动端「全部会话」页每次刷新拉全量——2026-11-21 实测 **3905 条 /
+5,303,533 B 原始 / 672,467 B gzip / 解码后对象图 ≈31 MB**，宿主 TTFB
+**3.47–3.74 s**。宿主管线给不出分页：安装版
+`@deepseek-ai/dsh-api-session-controller` 的 `list(_request, signal)` 完全未读
+`_request`（`lib/index.js:3988-3993`），契约只有 `cursor` 且实现不读。改宿主
+必须重启 `dsh-web`，硬约束禁止，所以分页落在网关侧。
+
+**改法**：
+
+- `src/session-list-slice.ts`（新增）：请求分类、keyset 游标编解码、稳定排序、
+  单页切片、回包拼装与全量结果缓存，全部纯函数/可单测。
+  - **opt-in 是唯一开关**：只有 `payload.args._request` 里出现 `limit` 键才切片；
+    不带（或只有 cursor）一律原样透传，回包与 0.3.49 逐字节一致。
+  - 游标 = `base64url(JSON([updatedAt, sessionId]))`，排序键
+    `updatedAt desc, sessionId asc`，要求规范编码；非法参数一律 **400 + 可读
+    `message`**（`invalid_limit` / `invalid_cursor`），不静默截断、不回落第一页。
+  - 回包只替换 RPC 信封 `result.value.items`，按需在同层追加 `nextCursor`；
+    `items` 里每个对象的字段原样保留。
+  - 全量回包缓冲上限 **32 MiB**：超限**边读边透传完整全量**并写一条
+    `[dsh-mobile] session-list-slice passthrough reason=oversize …`，不截断、
+    不回空页；非 JSON / 非 200 / 压缩体 / 条目形状不符同样整单透传并记原因。
+  - 全量结果缓存：单条、key = 授权身份、固定 TTL，缓存**原始 JSON 字节**
+    （≈5.3 MB）而不是解码后的对象图（≈31 MB）；缓存命中与未命中走同一个切片
+    函数，所以缓存不改变切片语义。
+- `src/gateway.ts`：`proxyHttp` 对 `POST /api/session/list` 先读请求体判断
+  opt-in；切片路径在**上游请求之前**查缓存（翻第二页不再等 3.5 s TTFB），
+  命中直接切；未命中强制上游 `identity` 回包后按上限缓冲、切片、按需 gzip。
+  只碰这一条路由，`/api/session.history`、`/api/mobile-logs`、`/plugins/events`
+  均未改。
+- `src/config.ts`：新增 `sessionListPageSize`（单页上限，默认 20，配置区间
+  1..100）与 `sessionListCacheMs`（缓存 TTL，默认 30000，0 = 关闭，上限 1 h）。
+- `docs/session-list-paging.md`（新增）：参数表、游标语义、跳位与不重复保证、
+  opt-in 说明、超限/缓存边界，以及与宿主终局契约的对齐方式。
+
+**判据**：`npm run verify` 退出 0（**321 例** / 25 文件）；容器 testbed
+（独立 `DSH_HOME`/端口、`npm pack` 成 tgz 装进去）上：不带 `limit` 的回包与
+0.3.49 逐字节一致且无 `nextCursor`；`limit=20` 恰好 20 条 + `nextCursor`，
+第 2 页与第 1 页 id 交集 0、末页无 `nextCursor`、所有页拼接 == 全量 id 序列；
+`limit=0/101/"abc"` 与 `cursor="乱码"` 均 400 带可读 message。
+
 ## 0.3.49 — 2026-11-21 · App 日志查询：可翻页、可检索、`total` 说真话
 
 **背景**：Flutter App 的日志页（`dsh-mobile-flutter-next` 的

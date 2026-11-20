@@ -43,6 +43,7 @@ const cleanups: Array<() => Promise<void>> = []
 const TEST_GATEWAY_PORT = 61980
 const TEST_FAILED_START_PORT = 61981
 const SESSION_HISTORY_PATH = '/api/session.history'
+const SESSION_LIST_PATH = '/api/session/list'
 const COMPRESSIBLE_SCRIPT = 'globalThis.__compressionProbe = true;\n'.repeat(256)
 const UPSTREAM_LAUNCH_TOKEN = 'test-launch-token'
 const UPSTREAM_BROWSER_COOKIE = 'dsh-auth-test=v1.signed-cookie'
@@ -191,7 +192,11 @@ function websocketAccept(key: string): string {
   return createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`, 'ascii').digest('base64')
 }
 
-async function upstream(boot: 'legacy' | 'batched' | 'relative' = 'legacy', requireAuthentication = false): Promise<{
+async function upstream(
+  boot: 'legacy' | 'batched' | 'relative' = 'legacy',
+  requireAuthentication = false,
+  sessionList?: { readonly items: unknown[] },
+): Promise<{
   port: number
   observations: UpstreamObservation[]
   upgradeObservations: IncomingHttpHeaders[]
@@ -294,6 +299,30 @@ async function upstream(boot: 'legacy' | 'batched' | 'relative' = 'legacy', requ
       response.end(HISTORY_RESPONSE)
       return
     }
+    // 会话列表切片（工单 #229）：只有显式给了 fixture 才进入这条分支，
+    // 其余用例的 `/api/session/list` 仍落到下面的通用 JSON 回包。
+    if (incoming.url === '/api/session/list' && sessionList !== undefined) {
+      const requestText = Buffer.concat(chunks).toString('utf8')
+      let rpcId = 'rpc-session-list'
+      try {
+        const parsed: unknown = JSON.parse(requestText)
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          const value = (parsed as Record<string, unknown>).rpcId
+          if (typeof value === 'string') rpcId = value
+        }
+      } catch { /* keep the default rpcId */ }
+      const body = JSON.stringify({
+        type: 'server-response',
+        rpcId,
+        result: { ok: true, value: { items: sessionList.items } },
+      })
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+      })
+      response.end(body)
+      return
+    }
     const body = `${JSON.stringify({ ok: true, method: incoming.method, url: incoming.url })}\n`
     response.writeHead(200, {
       'content-type': 'application/json',
@@ -348,6 +377,7 @@ async function gateway(
   testSessionTtlMs?: number,
   upstreamAuthenticatedUrl?: string,
   accountOverrides: Partial<AccountControllerOptions> = {},
+  gatewayOptions: { readonly sessionListMaxBufferBytes?: number } = {},
 ): Promise<MobileAccessGateway> {
   await mkdir(TMP_ROOT, { recursive: true })
   const resolved = parseGatewayConfig({
@@ -370,7 +400,7 @@ async function gateway(
     ...accountOverrides,
   })
   // 第二参现在是必填的 AccountController；extensions 省略，第四参是上游认证 URL。
-  const instance = new MobileAccessGateway(effective, account, undefined, upstreamAuthenticatedUrl)
+  const instance = new MobileAccessGateway(effective, account, undefined, upstreamAuthenticatedUrl, gatewayOptions)
   await instance.start()
   gatewayAccounts.set(instance, account)
   cleanups.push(() => instance.close())
@@ -424,6 +454,45 @@ async function signIn(instance: MobileAccessGateway, label = 'Test phone'): Prom
     session: cookies.get(SESSION_COOKIE) ?? body.token,
     csrf: body.csrfToken,
   }
+}
+
+/** 会话列表请求体：`payload.args._request` 是宿主契约里的**线参数名**。 */
+function sessionListRequestBody(request: Record<string, unknown>, rpcId: string = randomUUID()): string {
+  return JSON.stringify({
+    type: 'client-request',
+    rpcId,
+    method: 'session/list',
+    payload: { args: { _request: request } },
+  })
+}
+
+/** 解开 `server-response` 信封，取承载 `items` 的 `result.value`。 */
+function sessionListValue(rawBody: string): { items: Array<Record<string, unknown>>; nextCursor?: string } {
+  const parsed = JSON.parse(rawBody) as {
+    type?: string
+    result?: { ok?: boolean; value?: { items?: Array<Record<string, unknown>>; nextCursor?: string } }
+  }
+  expect(parsed.type).toBe('server-response')
+  expect(parsed.result?.ok).toBe(true)
+  const value = parsed.result?.value
+  if (value === undefined || !Array.isArray(value.items)) throw new Error('session list response has no items')
+  return value as { items: Array<Record<string, unknown>>; nextCursor?: string }
+}
+
+/**
+ * 固定 fixture：`updatedAt` 每三条并列一次，且数组顺序恰好是
+ * `updatedAt desc, sessionId asc` —— 于是「逐页拼接」应当与「不带 limit 的
+ * 上游顺序」完全一致（否则并列组内的顺序差会被误判成分页丢条）。
+ */
+function sessionListFixture(count = 45): Array<Record<string, unknown>> {
+  return Array.from({ length: count }, (_value, index) => ({
+    sessionId: `session-${String(index).padStart(3, '0')}`,
+    updatedAt: 1_700_000_000_000 - Math.floor(index / 3) * 1_000,
+    running: index % 2 === 0,
+    blank: false,
+    cwd: `/workspace/session-${String(index)}`,
+    projections: { title: `会话 ${String(index)}` },
+  }))
 }
 
 async function openWebSocket(
@@ -1392,6 +1461,240 @@ describe('HTTP gateway', () => {
       body: historyRequest(5),
     })
     expect(JSON.parse(inner.observations.at(-1)?.body ?? '{}')).toMatchObject({ payload: { maxMessages: 5 } })
+  })
+
+  it('keeps the no-limit session list byte-identical while opt-in pages slice server-side', async () => {
+    const items = sessionListFixture()
+    const inner = await upstream('legacy', false, { items })
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const port = instance.address().port
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+
+    // 负对照 1：完全不带 `_request`（宿主旧形态 / 非 App 客户端）
+    const bareBody = JSON.stringify({
+      type: 'client-request',
+      rpcId: 'rpc-bare',
+      method: 'session/list',
+      payload: { args: {} },
+    })
+    const bare = await request(port, SESSION_LIST_PATH, { method: 'POST', headers, body: bareBody })
+    expect(bare.status).toBe(200)
+    expect(sessionListValue(bare.body).items).toHaveLength(items.length)
+    expect(sessionListValue(bare.body).nextCursor).toBeUndefined()
+
+    // 负对照 2：带 `_request` 但不带 limit（已发布 build 181 的真实形状）
+    const noLimitBody = sessionListRequestBody({})
+    const baseline = await request(port, SESSION_LIST_PATH, { method: 'POST', headers, body: noLimitBody })
+    expect(baseline.status).toBe(200)
+    // 与「上游原始回包」逐字节相同：网关没有重排、没有改字段、没有加 nextCursor
+    const expectedRaw = JSON.stringify({
+      type: 'server-response',
+      rpcId: JSON.parse(noLimitBody).rpcId,
+      result: { ok: true, value: { items } },
+    })
+    expect(baseline.rawBody.equals(Buffer.from(expectedRaw))).toBe(true)
+    // 请求体也原样转发（字节不变）
+    expect(inner.observations.at(-1)?.body).toBe(noLimitBody)
+    const baselineIds = sessionListValue(baseline.body).items.map(item => String(item.sessionId))
+    expect(baselineIds).toHaveLength(items.length)
+    expect(sessionListValue(baseline.body).nextCursor).toBeUndefined()
+
+    // `_request.cursor` 但没有 limit 也必须透传（不能因为见到 cursor 就切片）
+    const cursorOnly = sessionListRequestBody({ cursor: 'whatever' })
+    const passthrough = await request(port, SESSION_LIST_PATH, { method: 'POST', headers, body: cursorOnly })
+    expect(sessionListValue(passthrough.body).items).toHaveLength(items.length)
+    expect(sessionListValue(passthrough.body).nextCursor).toBeUndefined()
+
+    // 真分页：limit=20 逐页翻到末页
+    const pages: string[][] = []
+    let cursor: string | undefined
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = await request(port, SESSION_LIST_PATH, {
+        method: 'POST',
+        headers,
+        body: sessionListRequestBody({ limit: 20, ...(cursor === undefined ? {} : { cursor }) }),
+      })
+      expect(page.status).toBe(200)
+      const value = sessionListValue(page.body)
+      pages.push(value.items.map(item => String(item.sessionId)))
+      if (value.nextCursor === undefined) break
+      cursor = value.nextCursor
+    }
+    expect(pages[0]).toHaveLength(20)
+    expect(pages).toHaveLength(3)
+    expect(pages[0]!.filter(id => pages[1]!.includes(id))).toEqual([])
+    expect(pages[1]!.filter(id => pages[0]!.includes(id))).toEqual([])
+    // 所有页拼接 == 不带 limit 的 id 序列（fixture 已按同一排序键排好）
+    expect(pages.flat()).toEqual(baselineIds)
+
+    // 条目字段一个不删、值不改
+    const firstPage = sessionListValue((await request(port, SESSION_LIST_PATH, {
+      method: 'POST',
+      headers,
+      body: sessionListRequestBody({ limit: 20 }),
+    })).body)
+    expect(firstPage.items[0]).toEqual(items[0])
+  })
+
+  it('compresses a 20-item session page and asks upstream for identity', async () => {
+    const items = sessionListFixture()
+    const inner = await upstream('legacy', false, { items })
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+      'accept-encoding': 'gzip',
+    }
+
+    const page = await request(instance.address().port, SESSION_LIST_PATH, {
+      method: 'POST',
+      headers,
+      body: sessionListRequestBody({ limit: 20 }),
+    })
+    expect(page.status).toBe(200)
+    expect(page.headers['content-encoding']).toBe('gzip')
+    const decoded = gunzipSync(page.rawBody).toString('utf8')
+    expect(sessionListValue(decoded).items).toHaveLength(20)
+    expect(sessionListValue(decoded).nextCursor).toBeTypeOf('string')
+    // 切片路径强制上游回 identity，网关自己再按需 gzip
+    expect(inner.observations.at(-1)?.headers['accept-encoding']).toBe('identity')
+    // 20 条切片远小于全量回包
+    const fullRaw = JSON.stringify({
+      type: 'server-response',
+      rpcId: JSON.parse(inner.observations.at(-1)?.body ?? '{}').rpcId,
+      result: { ok: true, value: { items } },
+    })
+    expect(Buffer.byteLength(decoded)).toBeLessThan(Buffer.byteLength(fullRaw))
+  })
+
+  it('rejects invalid session list limit/cursor without touching upstream', async () => {
+    const inner = await upstream('legacy', false, { items: sessionListFixture(5) })
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+    const before = inner.observations.length
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ limit: 0 }, 'invalid_limit'],
+      [{ limit: 101 }, 'invalid_limit'],
+      [{ limit: 'abc' }, 'invalid_limit'],
+      [{ limit: 10, cursor: '乱码' }, 'invalid_cursor'],
+      [{ limit: 10, cursor: 'Zm9v' }, 'invalid_cursor'],
+    ]
+    for (const [requestArgs, error] of cases) {
+      const result = await request(instance.address().port, SESSION_LIST_PATH, {
+        method: 'POST',
+        headers,
+        body: sessionListRequestBody(requestArgs),
+      })
+      expect(result.status).toBe(400)
+      const payload = JSON.parse(result.body) as { error?: string; message?: string }
+      expect(payload.error).toBe(error)
+      expect(typeof payload.message).toBe('string')
+      expect((payload.message ?? '').length).toBeGreaterThan(0)
+    }
+    // 非法参数在网关就拦下，一条都不打上游
+    expect(inner.observations).toHaveLength(before)
+  })
+
+  it('reuses the full list for the configured cache TTL and expires it', async () => {
+    const inner = await upstream('legacy', false, { items: sessionListFixture(10) })
+    const instance = await gateway(inner.port, { sessionListCacheMs: 60 })
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+    const call = (rpcId: string): Promise<HttpResult> => request(instance.address().port, SESSION_LIST_PATH, {
+      method: 'POST',
+      headers,
+      body: sessionListRequestBody({ limit: 5 }, rpcId),
+    })
+
+    const first = await call('cache-rpc-1')
+    expect(first.status).toBe(200)
+    expect(inner.observations).toHaveLength(1)
+    // 立即再翻第一页：命中缓存，不再打上游；信封里的 rpcId 必须是**当前**请求的
+    const cached = await call('cache-rpc-2')
+    expect(JSON.parse(cached.body).rpcId).toBe('cache-rpc-2')
+    expect(JSON.stringify(JSON.parse(cached.body).result)).toBe(JSON.stringify(JSON.parse(first.body).result))
+    expect(inner.observations).toHaveLength(1)
+    // TTL 过期后重新拉全量
+    await new Promise<void>(resolve => { setTimeout(resolve, 90) })
+    await call('cache-rpc-3')
+    expect(inner.observations).toHaveLength(2)
+  })
+
+  it('does not cache when sessionListCacheMs is 0', async () => {
+    const inner = await upstream('legacy', false, { items: sessionListFixture(5) })
+    const instance = await gateway(inner.port, { sessionListCacheMs: 0 })
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+    const call = (): Promise<HttpResult> => request(instance.address().port, SESSION_LIST_PATH, {
+      method: 'POST',
+      headers,
+      body: sessionListRequestBody({ limit: 2 }),
+    })
+    await call()
+    await call()
+    expect(inner.observations).toHaveLength(2)
+  })
+
+  it('passes the full body through when it exceeds the slice buffer and logs the reason', async () => {
+    const items = sessionListFixture(30)
+    const inner = await upstream('legacy', false, { items })
+    const instance = await gateway(inner.port, {}, undefined, undefined, {}, { sessionListMaxBufferBytes: 256 })
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+      'accept-encoding': 'identity',
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const body = sessionListRequestBody({ limit: 2 })
+      const result = await request(instance.address().port, SESSION_LIST_PATH, {
+        method: 'POST',
+        headers,
+        body,
+      })
+      expect(result.status).toBe(200)
+      // 超限直接透传**完整**全量回包：不截断、不回空页、不加 nextCursor
+      const expectedRaw = JSON.stringify({
+        type: 'server-response',
+        rpcId: JSON.parse(body).rpcId,
+        result: { ok: true, value: { items } },
+      })
+      expect(result.rawBody.equals(Buffer.from(expectedRaw))).toBe(true)
+      expect(sessionListValue(result.body).items).toHaveLength(items.length)
+      expect(sessionListValue(result.body).nextCursor).toBeUndefined()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('session-list-slice'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('reason=oversize'))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('logs out, revokes, and never exposes credential digests on the app path', async () => {

@@ -60,6 +60,17 @@ import {
   MINIMUM_ANDROID_APP_VERSION,
   MOBILE_METADATA_VERSION,
 } from './version.js'
+import {
+  buildSessionListResponse,
+  locateSessionListDocument,
+  planSessionListRequest,
+  readSessionListEntries,
+  SESSION_LIST_MAX_BUFFER_BYTES,
+  SESSION_LIST_PATH,
+  SessionListCache,
+  sliceSessionListItems,
+  type SessionListPageRequest,
+} from './session-list-slice.js'
 import { addressAllowed, isLoopbackAddress, type ParsedCidr, RequestTrustPolicy } from './network.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
@@ -945,6 +956,10 @@ export class MobileAccessGateway {
   private closeTask: Promise<void> | undefined
   private readonly removeTokenListener: () => void
   private readonly removeExtensionContentListener: () => void
+  /** `POST /api/session/list` 的全量回包缓存（单条、按授权身份、固定 TTL）。 */
+  private readonly sessionListCache: SessionListCache
+  /** 切片路径读取全量回包的缓冲上限（测试可注入更小的值）。 */
+  private readonly sessionListMaxBufferBytes: number
 
   constructor(
     readonly config: ResolvedGatewayConfig,
@@ -952,9 +967,13 @@ export class MobileAccessGateway {
     private readonly account: AccountController,
     private readonly extensions?: MobileAccessService,
     private readonly upstreamAuthenticatedUrl?: string,
+    /** 仅用于测试的注入点：把会话列表切片缓冲上限调小以验证「超限透传」。 */
+    options: { readonly sessionListMaxBufferBytes?: number } = {},
   ) {
     this.listenerTlsEnabled = config.tls.mode === 'provided'
     this.tlsEnabled = config.publicTls
+    this.sessionListMaxBufferBytes = Math.max(1, options.sessionListMaxBufferBytes ?? SESSION_LIST_MAX_BUFFER_BYTES)
+    this.sessionListCache = new SessionListCache(config.sessionListCacheMs, this.sessionListMaxBufferBytes)
     this.removeTokenListener = this.account.onTokenEnded(authorization => {
       this.abortSessionResources(authorization.sessionKey)
     })
@@ -2242,16 +2261,48 @@ export class MobileAccessGateway {
     const operation = this.allocateRequest(authorization, response, holder)
     let bodyDone: Promise<void> | undefined
     try {
-      const bufferedBody = request.method === 'POST' && request.url?.split('?', 1)[0] === SESSION_HISTORY_PATH
+      // 会话列表切片（工单 #229）：只有 `payload.args._request.limit` 显式存在
+      // 才进入分页分支；其余情况（包括完全不带 `_request` 的 build 181 请求）
+      // 仍按原样透传。请求体必须先读出来才能判断，之后**原字节**转发。
+      const isSessionListRequest = request.method === 'POST'
+        && request.url?.split('?', 1)[0] === SESSION_LIST_PATH
+      const sessionListBody = isSessionListRequest
+        ? await readBoundedBody(request, this.config.maxBodyBytes)
+        : undefined
+      const sessionListPlan = sessionListBody === undefined
+        ? undefined
+        : planSessionListRequest(sessionListBody, this.config.sessionListPageSize)
+      if (sessionListPlan?.kind === 'invalid') {
+        sendJson(
+          response,
+          400,
+          { error: sessionListPlan.error, message: sessionListPlan.message },
+          this.tlsEnabled,
+        )
+        return
+      }
+      const sessionListPage = sessionListPlan?.kind === 'page' ? sessionListPlan : undefined
+      // 缓存命中时连上游都不打：这是「翻第二页」不该再等 3.5 s TTFB 的关键。
+      if (sessionListPage !== undefined) {
+        const cached = this.sessionListCache.get(authorization.sessionKey, Date.now())
+        if (cached !== undefined) {
+          await this.sendSessionListPage(request, response, {}, cached, sessionListPage)
+          return
+        }
+      }
+      const historyBody = request.method === 'POST' && request.url?.split('?', 1)[0] === SESSION_HISTORY_PATH
         ? mobileHistoryRequestBody(request, await readBoundedBody(request, this.config.maxBodyBytes))
         : undefined
+      const requestBody = historyBody ?? sessionListBody
       const upstreamHeaders = sanitizeRequestHeaders(request, this.config.upstreamOrigin)
       // 显式注入的头放在 sanitize 之后：客户端给的同名头一律盖掉
       // （sanitize 已把 x-log-query 排除在放行列表之外，这里是唯一的写入点）。
       if (extraUpstreamHeaders !== undefined) Object.assign(upstreamHeaders, extraUpstreamHeaders)
       const upstreamCookie = await this.upstreamCookieHeader()
       if (upstreamCookie !== undefined) upstreamHeaders.cookie = upstreamCookie
-      if (bufferedBody !== undefined) upstreamHeaders['content-length'] = String(bufferedBody.byteLength)
+      // 切片路径要自己解析回包：强制上游回 identity，免得先解 gzip 再切。
+      if (sessionListPage !== undefined) upstreamHeaders['accept-encoding'] = 'identity'
+      if (requestBody !== undefined) upstreamHeaders['content-length'] = String(requestBody.byteLength)
       const upstreamResponse = new Promise<IncomingMessage>((resolve, reject) => {
         const upstreamRequest = requestHttp({
           protocol: 'http:',
@@ -2268,15 +2319,19 @@ export class MobileAccessGateway {
         })
         upstreamRequest.once('response', resolve)
         upstreamRequest.once('error', reject)
-        if (bufferedBody === undefined) {
+        if (requestBody === undefined) {
           bodyDone = pipeline(request, new ByteLimitTransform(this.config.maxBodyBytes), upstreamRequest)
         } else {
-          upstreamRequest.end(bufferedBody)
+          upstreamRequest.end(requestBody)
           bodyDone = Promise.resolve()
         }
         void bodyDone.catch(reject)
       })
       const proxied = await upstreamResponse
+      if (sessionListPage !== undefined && (proxied.statusCode ?? 502) === 200) {
+        await this.proxySessionListPage(request, response, proxied, sessionListPage, authorization)
+        return
+      }
       // SSE 长连接不受上游空闲超时约束（WebSocket 分支在握手后同样
       // `setTimeout(0)`）：`/plugins/events` 这类通道在无事件时长期零流量，
       // 空闲超时会按 upstreamTimeoutMs（线上 300s）destroy 上游请求，客户端只
@@ -2316,6 +2371,147 @@ export class MobileAccessGateway {
     } finally {
       operation.release()
     }
+  }
+
+  /**
+   * 切片路径的上游回包处理。
+   *
+   * 先把回包读进内存（上限 `sessionListMaxBufferBytes`，默认 32 MiB）：
+   * - 超限 → **边读边透传**已缓冲的字节与剩余流，写一条 `session-list-slice`
+   *   日志后放弃切片（绝不截断、绝不回空页）；
+   * - 上游自己回了压缩体 / 非 JSON → 同样透传并记原因；
+   * - 正常 JSON → 解析、缓存全量原始字节、按 keyset 切一页。
+   */
+  private async proxySessionListPage(
+    request: IncomingMessage,
+    response: ServerResponse,
+    proxied: IncomingMessage,
+    page: SessionListPageRequest,
+    authorization: SessionAuthorization,
+  ): Promise<void> {
+    const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
+    const encoding = String(proxied.headers['content-encoding'] ?? '').trim().toLowerCase()
+    if (encoding !== '' && encoding !== 'identity') {
+      console.warn(`[dsh-mobile] session-list-slice passthrough reason=upstream_encoded encoding=${encoding}`)
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(proxied.statusCode ?? 200, headers)
+      await pipeline(proxied, response)
+      return
+    }
+    const contentType = String(proxied.headers['content-type'] ?? '').toLowerCase()
+    if (contentType !== '' && !contentType.includes('json')) {
+      console.warn(`[dsh-mobile] session-list-slice passthrough reason=upstream_content_type content_type=${contentType}`)
+      setSecurityHeaders(response, this.tlsEnabled)
+      response.writeHead(proxied.statusCode ?? 200, headers)
+      await pipeline(proxied, response)
+      return
+    }
+
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let oversize = false
+    for await (const chunk of proxied) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (!oversize) {
+        chunks.push(buffer)
+        bytes += buffer.byteLength
+        if (bytes > this.sessionListMaxBufferBytes) {
+          oversize = true
+          console.warn(
+            `[dsh-mobile] session-list-slice passthrough reason=oversize bytes=${String(bytes)} `
+            + `limit=${String(page.limit)} max=${String(this.sessionListMaxBufferBytes)}`,
+          )
+          setSecurityHeaders(response, this.tlsEnabled)
+          response.writeHead(proxied.statusCode ?? 200, headers)
+          if (!response.write(Buffer.concat(chunks))) {
+            await new Promise<void>(resolve => { response.once('drain', () => { resolve() }) })
+          }
+          chunks.length = 0
+        }
+        continue
+      }
+      if (!response.write(buffer)) {
+        await new Promise<void>(resolve => { response.once('drain', () => { resolve() }) })
+      }
+    }
+    if (oversize) {
+      response.end()
+      return
+    }
+    await this.sendSessionListPage(request, response, headers, Buffer.concat(chunks), page, authorization)
+  }
+
+  /**
+   * 把一份全量回包切成当页。缓存命中与刚拉到的上游回包走同一条路径，
+   * 所以「缓存不改变切片语义」是结构性保证，而不是两套实现碰巧一致。
+   */
+  private async sendSessionListPage(
+    request: IncomingMessage,
+    response: ServerResponse,
+    headers: OutgoingHttpHeaders,
+    full: Buffer,
+    page: SessionListPageRequest,
+    authorization?: SessionAuthorization,
+  ): Promise<void> {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(full.toString('utf8')) as unknown
+    } catch {
+      console.warn(`[dsh-mobile] session-list-slice passthrough reason=invalid_json bytes=${String(full.byteLength)}`)
+      this.sendSessionListRaw(response, headers, full)
+      return
+    }
+    const document = locateSessionListDocument(parsed)
+    if (document === undefined) {
+      console.warn(`[dsh-mobile] session-list-slice passthrough reason=unexpected_payload bytes=${String(full.byteLength)}`)
+      this.sendSessionListRaw(response, headers, full)
+      return
+    }
+    const entries = readSessionListEntries(document.items)
+    if (entries === undefined) {
+      console.warn(
+        `[dsh-mobile] session-list-slice passthrough reason=malformed_items items=${String(document.items.length)}`,
+      )
+      this.sendSessionListRaw(response, headers, full)
+      return
+    }
+    // 缓存的是**全量原始 JSON 字节**（≈5.3 MB），不是解码后的对象图（≈31 MB）：
+    // 每页请求重新解析一次换常驻内存可控，这是有意的取舍。
+    if (authorization !== undefined) this.sessionListCache.set(authorization.sessionKey, full, Date.now())
+    const sliced = sliceSessionListItems(document.items, entries, page.limit, page.cursor)
+    const body = buildSessionListResponse(document, sliced.items, sliced.nextCursor, page.rpcId)
+    await this.sendSessionListJson(request, response, headers, body)
+  }
+
+  /** 透传兜底：回上游原始字节，不解析、不裁剪。 */
+  private sendSessionListRaw(response: ServerResponse, headers: OutgoingHttpHeaders, body: Buffer): void {
+    setSecurityHeaders(response, this.tlsEnabled)
+    response.writeHead(200, headers)
+    response.end(body)
+  }
+
+  /** 写回切片结果（可选 gzip，与 `/api/session.history` 的压缩口径一致）。 */
+  private async sendSessionListJson(
+    request: IncomingMessage,
+    response: ServerResponse,
+    headers: OutgoingHttpHeaders,
+    body: Buffer,
+  ): Promise<void> {
+    const outgoing: OutgoingHttpHeaders = { ...headers }
+    for (const name of ['content-length', 'content-encoding', 'etag', 'vary', 'accept-ranges', 'content-range']) {
+      delete outgoing[name]
+    }
+    outgoing['content-type'] = 'application/json; charset=utf-8'
+    let payload = body
+    if (acceptsGzip(request.headers['accept-encoding'])) {
+      payload = await gzipBuffer(body)
+      outgoing['content-encoding'] = 'gzip'
+      addVaryAcceptEncoding(outgoing)
+    }
+    outgoing['content-length'] = String(payload.byteLength)
+    setSecurityHeaders(response, this.tlsEnabled)
+    response.writeHead(200, outgoing)
+    response.end(payload)
   }
 
   private abortSessionResources(sessionKey: string): void {

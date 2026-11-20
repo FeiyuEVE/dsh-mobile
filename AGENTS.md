@@ -78,6 +78,15 @@ npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x
     - **发布内容**（2026-10-13 首版）：`~/.dsh/mobile-access/hotupdate/` 是 **revision 1 的「与内置一致」基线**（15 个文件、2,169,266 B，`viewer.html` 与 APK 内置副本 sha256 同为 `482027c8…`）——热更链路通着但界面不变；`~/.dsh/mobile-access/codepush/index.json` 是空清单 `{"releases":{}}`（**没有发布任何补丁**，所以设备端只会得到 `patch_available:false`，不会去改主色/标题）。要看「热更真的改界面」的实证，见 App 仓库 `.tmp/codepush/` 的演示内容（**不要把那套演示资源发到这个目录**）。
     - **⚠️ 这条链路对旧 App 完全无用（2026-10-13 实测）**：手机真机在跑 **build 142**（ES `logstash-mobile` 里 `build=2142` = `1000*2+142`、`app_version=0.5.1`），而热更客户端是 **build 144** 才进的——查 `logstash-mobile` 全量：`远程资源`/`remote-assets`/`codepush`/`热更` 四个词**一条都没有**，只有 `[update-ui]`/`[flutter-error]`/`[mperf-native]` 那些老 tag。**所以服务端就绪 ≠ 能用**：真机装上带热更客户端的 build 后，才该去看 App 日志里 `assets: 远程资源生效 revision=1 files=15` 这类行（模拟器 E2E 里就是这么判的）。在那之前，往生产目录发什么都不影响手机。
 
+15. **会话列表切片（0.3.50）——opt-in 是硬约束**：`POST /api/session/list` 只在
+    `payload.args._request` **出现 `limit` 键**时切片；不带 limit 必须与 0.3.49
+    逐字节一致（已发布 build 181 不认识 `nextCursor`）。游标是
+    `base64url(JSON([updatedAt, sessionId]))`，排序键 `updatedAt desc,
+    sessionId asc`；非法参数 400 + 可读 `message`；全量缓冲上限 32 MiB，超限
+    **完整透传**并写 `session-list-slice` 日志，绝不截断/回空页。只碰这一条路由；
+    `limit` 的合法上界是配置 `sessionListPageSize`（默认 20，配置区间 1..100）。
+    参数表、跳位/不重复保证与缓存边界见 `docs/session-list-paging.md`。
+
 ## 相关文档
 
 - 本目录：`README.md`/`README.en.md`、`CHANGELOG.md`、`SECURITY.md`、`CONTRIBUTING.md`、`design-system/dsh-mobile/MASTER.md`、`docs/backstop-design.md`。

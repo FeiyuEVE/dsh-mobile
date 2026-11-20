@@ -116,6 +116,22 @@ export interface PluginConfig {
   rateLimitWindowMs?: number
   maxPairingAttempts?: number
   maxRateLimitKeys?: number
+  /**
+   * `POST /api/session/list` 服务端切片的**单页上限**（默认 20，配置区间 1..100）。
+   *
+   * 请求里的 `payload.args._request.limit` 必须落在 `1..sessionListPageSize`；
+   * 超出回 400 `invalid_limit`（不静默截断）。这是请求显式 opt-in 之后的
+   * 服务端闸门，不影响「不带 limit 一律透传」的兼容口径。
+   */
+  sessionListPageSize?: number
+  /**
+   * 全量会话列表的短期缓存 TTL（毫秒，默认 30000，0 = 关闭）。
+   *
+   * 只缓存**opt-in 切片请求**拉到的全量回包（原始 JSON 字节，单条、按授权
+   * 身份隔离），不缓存不带 `limit` 的透传请求；缓存只影响 `updatedAt` 的
+   * 新鲜度，不改变切片语义。
+   */
+  sessionListCacheMs?: number
 }
 
 /** Resolved, validated security and resource limits. */
@@ -167,6 +183,10 @@ export interface ResolvedGatewayConfig {
   readonly rateLimitWindowMs: number
   readonly maxPairingAttempts: number
   readonly maxRateLimitKeys: number
+  /** `POST /api/session/list` 的单页上限（请求 `limit` 的合法上界）。 */
+  readonly sessionListPageSize: number
+  /** 全量会话列表短期缓存 TTL；0 = 关闭。 */
+  readonly sessionListCacheMs: number
 }
 
 /** Loader-facing defaults; {@link parseGatewayConfig} enforces cross-field security rules. */
@@ -209,6 +229,8 @@ export const Config: z<PluginConfig> = z.object({
   rateLimitWindowMs: z.natural(),
   maxPairingAttempts: z.natural(),
   maxRateLimitKeys: z.natural(),
+  sessionListPageSize: z.natural(),
+  sessionListCacheMs: z.natural(),
 })
 
 function integer(value: unknown, name: string, fallback: number, minimum: number, maximum: number): number {
@@ -424,5 +446,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     rateLimitWindowMs: integer(value.rateLimitWindowMs, 'rateLimitWindowMs', 60_000, 1_000, 3_600_000),
     maxPairingAttempts: integer(value.maxPairingAttempts, 'maxPairingAttempts', 8, 1, 100),
     maxRateLimitKeys: integer(value.maxRateLimitKeys, 'maxRateLimitKeys', 256, 1, 4096),
+    sessionListPageSize: integer(value.sessionListPageSize, 'sessionListPageSize', 20, 1, 100),
+    sessionListCacheMs: integer(value.sessionListCacheMs, 'sessionListCacheMs', 30_000, 0, 3_600_000),
   })
 }
