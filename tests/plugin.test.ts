@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { TMP_ROOT, createTempDirectory } from './tmp-root.js'
 import { join } from 'node:path'
 import { LOG_QUERY_HEADER, LOG_QUERY_KEY } from '../src/plugin.js'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Config, parseGatewayConfig } from '../src/config.js'
 import { parseCidr, RequestTrustPolicy } from '../src/network.js'
 import { apply, inject, remoteGatewayConfig } from '../src/plugin.js'
@@ -17,6 +17,7 @@ const contexts: Context[] = []
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(contexts.splice(0).map(context => context.fiber.dispose()))
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
@@ -98,6 +99,30 @@ async function mount(initiallyEnabled = false): Promise<{ context: Context; rout
   if (logsRoute === undefined) throw new Error('plugin did not register its logs query route')
   if (command === undefined) throw new Error('plugin did not register its /mobile command')
   return { context, route, logsRoute, command }
+}
+
+/** 拦截 `fetch`，记录日志路由真正发给 ES 的请求体并回一份固定 `_search` 响应。 */
+function stubLogSearch(payload: unknown): { calls: Array<{ url: string; body: Record<string, unknown> }> } {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', async (input: string | URL | { url: string }, init?: { body?: unknown }) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    calls.push({ url, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> })
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  return { calls }
+}
+
+const ES_LOG_SEARCH_RESPONSE = {
+  hits: {
+    total: { value: 39, relation: 'eq' },
+    hits: [
+      { _source: { '@timestamp': '2026-11-20T17:00:00.000Z', message: 'first' } },
+      { _source: { '@timestamp': '2026-11-20T16:59:59.000Z', message: 'second' } },
+    ],
+  },
 }
 
 describe('remote Funnel gateway configuration', () => {
@@ -258,9 +283,11 @@ describe('stock DSH lifecycle', () => {
 
   it('registers the logs query route and requires the in-process key', async () => {
     const mounted = await mount()
+    const es = stubLogSearch(ES_LOG_SEARCH_RESPONSE)
     // 无共享键 → 401（这条路由只该被**网关**用进程内随机键调到；它自己不做会话校验）
     const denied = await invoke(mounted.logsRoute, 'GET', '/api/mobile-logs?limit=10', '')
     expect(denied.status).toBe(401)
+    expect(es.calls).toHaveLength(0)
     const allowed = await invoke(
       mounted.logsRoute,
       'GET',
@@ -268,9 +295,8 @@ describe('stock DSH lifecycle', () => {
       '',
       { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
     )
-    expect(allowed.status).not.toBe(401)
-    // 本机测试环境 ES 可达时返回 200；异机返回 5xx。两条路径都证明共享键放行。
-    expect(allowed.status).toBeLessThan(500)
+    expect(allowed.status).toBe(200)
+    expect(es.calls).toHaveLength(1)
     // 0.3.41 退役的静态查询令牌（App 曾内置）不再有任何效力。
     const stale = await invoke(
       mounted.logsRoute,
@@ -283,5 +309,87 @@ describe('stock DSH lifecycle', () => {
     // 共享键是**随机**的：不是那枚写死在源码里的旧常量。
     expect(LOG_QUERY_KEY).not.toBe('8f2d6a41c9e7b305d4a8f1c276e5b90d')
     expect(LOG_QUERY_KEY).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('keeps the legacy default query and reports the real hit total, not the page size', async () => {
+    const mounted = await mount()
+    const es = stubLogSearch(ES_LOG_SEARCH_RESPONSE)
+    const response = await invoke(
+      mounted.logsRoute,
+      'GET',
+      '/api/mobile-logs',
+      '',
+      { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
+    )
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toMatchObject({
+      ok: true,
+      // ES `hits.total.value` —— 本页只有 2 条，但命中总数是 39。
+      total: 39,
+      totalRelation: 'eq',
+      count: 2,
+      offset: 0,
+      limit: 100,
+      logs: [{ message: 'first' }, { message: 'second' }],
+    })
+    expect(es.calls).toHaveLength(1)
+    expect(es.calls[0]!.body).toMatchObject({ from: 0, size: 100, track_total_hits: true })
+    // 不带 q/level 时查询条件与 0.3.48 完全一致：只有时间 range。
+    expect((es.calls[0]!.body.query as { bool: { must: unknown[] } }).bool.must).toEqual([
+      { range: { '@timestamp': { gte: 'now-2h' } } },
+    ])
+  })
+
+  it('pages with offset and combines q with level/since', async () => {
+    const mounted = await mount()
+    const es = stubLogSearch(ES_LOG_SEARCH_RESPONSE)
+    const response = await invoke(
+      mounted.logsRoute,
+      'GET',
+      '/api/mobile-logs?limit=10&offset=10&since=24h&level=warn,error&q=code%20push',
+      '',
+      { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
+    )
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toMatchObject({
+      total: 39,
+      count: 2,
+      offset: 10,
+      limit: 10,
+    })
+    expect(es.calls).toHaveLength(1)
+    const body = es.calls[0]!.body
+    expect(body).toMatchObject({ from: 10, size: 10, track_total_hits: true })
+    expect((body.query as { bool: { must: unknown[] } }).bool.must).toEqual([
+      { range: { '@timestamp': { gte: 'now-24h' } } },
+      { terms: { level: ['warn', 'error'] } },
+      { match_phrase: { message: 'code push' } },
+    ])
+  })
+
+  it.each([
+    ['offset=-1', 'invalid_offset'],
+    ['offset=1.5', 'invalid_offset'],
+    ['limit=201', 'invalid_limit'],
+    ['limit=abc', 'invalid_limit'],
+    ['limit=0', 'invalid_limit'],
+    ['since=2hours', 'invalid_since'],
+    ['since=-2h', 'invalid_since'],
+    [`q=${'x'.repeat(201)}`, 'invalid_q'],
+    ['offset=9999&limit=10', 'offset_window_exceeded'],
+  ])('rejects invalid query %s with a 4xx reason', async (search, code) => {
+    const mounted = await mount()
+    const es = stubLogSearch(ES_LOG_SEARCH_RESPONSE)
+    const response = await invoke(
+      mounted.logsRoute,
+      'GET',
+      `/api/mobile-logs?${search}`,
+      '',
+      { [LOG_QUERY_HEADER]: LOG_QUERY_KEY },
+    )
+    expect(response.status).toBe(400)
+    expect(JSON.parse(response.body)).toMatchObject({ error: code, message: expect.any(String) })
+    // 非法参数不许打到 ES（更不能拿空页冒充「没日志」）。
+    expect(es.calls).toHaveLength(0)
   })
 })

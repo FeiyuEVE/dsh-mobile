@@ -1,3 +1,36 @@
+## 0.3.49 — 2026-11-21 · App 日志查询：可翻页、可检索、`total` 说真话
+
+**背景**：Flutter App 的日志页（`dsh-mobile-flutter-next` 的
+`lib/features/logs/logs_page.dart`）被卡在「固定 100 条、不可检索」——网关的
+`GET /api/mobile-logs` 只读 `limit` / `since` / `level`，发给 ES 的请求体没有
+`from`（翻不到第二页），也没有任何自由文本条件，且响应里的 `total` 是**本页条数**。
+
+**改法**：
+
+- `src/logs-query.ts`（新增）：参数校验 + ES 请求体构造 + 响应映射，纯函数、可单测。
+  - 新增 `offset`（ES `from`）与 `q`（`message` 的 `match_phrase`），与 `since` /
+    `level` 按 AND 组合。选 `offset` 而不是 `search_after`：App 要显示总数、直接翻
+    第 N 页，`offset` 无状态；代价是受 ES `max_result_window` 限制，所以
+    `offset + limit > 10000` 明确返回 400。
+  - 选 `match_phrase` 而不是 `simple_query_string`：关键词按短语匹配，不被
+    `+`/`-`/`OR`/引号改变语义，也不会因用户输入导致 ES 解析报错。
+  - 非法参数一律 **400 + 可读 `message`**：负 / 非数字 offset、非数字 / `0` /
+    `>200` 的 limit、非 date math 的 `since`、超 200 字符的 `q`。不再静默回落或
+    静默给空页。
+- `src/plugin.ts`：日志路由改用上面的模块；请求体加 `from` / `track_total_hits: true`；
+  响应 `total` 改为 ES `hits.total.value`（真实命中总数），**本页条数改名 `count`**，
+  并回填 `totalRelation` / `offset` / `limit`。旧请求（无新参数）发给 ES 的查询条件
+  与 0.3.48 完全一致。
+- `tests/plugin.test.ts`：日志路由的用例改为 stub `fetch`（不再依赖本机能否连到 ES），
+  新增 11 例：默认查询与真实 `total`、`offset` + `q` + `level` 组合、9 种非法参数
+  全部 400 且不打 ES。
+- `docs/logs-query-api.md`（新增）：参数表、响应字段（含 `total` 语义）、错误码、
+  设计取舍与兼容口径；`AGENTS.md` 准则 13 加一条指针。
+
+**判据**：`npm run verify` 退出 0（**299 例** / 24 文件）；真实 ES（`logstash-mobile`）
+上两页 `offset=0` / `offset=10` 的 `message`+`@timestamp` 无交集、`total` 相同且
+大于本页条数；`q=codepush` 与不带 `q` 的 `total` 可核对；三种非法参数均 400。
+
 ## 0.3.45 — 2026-10-13 · **内容热更**：网关多两条只读路由，App 与 Dart 补丁都不用重装 APK
 
 **背景**：Flutter App（`../dsh-mobile-flutter`）换掉了「改样式就要重发

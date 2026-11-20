@@ -29,6 +29,13 @@ import {
   tokenSnapshotLimit,
 } from './account.js'
 import { LOG_QUERY_HEADER, LOG_QUERY_KEY, MobileAccessGateway } from './gateway.js'
+import {
+  LOGS_QUERY_ERROR_MESSAGES,
+  buildLogsSearchRequest,
+  parseLogsQuery,
+  readLogsSearchResponse,
+  type ElasticsearchLogsBody,
+} from './logs-query.js'
 import { createMobileAccessService, type MobileAccessService } from './extensions.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
 import {
@@ -573,6 +580,10 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     // App 日志查看：后端代理读 ES（logstash-mobile 索引，见 logging-stack
     // PLUGIN-LOG-INGEST.md）。查询令牌与上报令牌分离，App 内置、低敏；ES
     // 只读 _search，字段白名单，limit 上限 200。
+    //
+    // 0.3.49：支持 offset 分页（ES `from`）/ q 关键词（`match_phrase` on message），
+    // 响应 `total` 是 ES 真实命中数（本页条数改叫 `count`）。参数校验与请求体构造
+    // 在 `src/logs-query.ts`，非法参数一律 400（不静默回空页）。
     const logsQueryRoute: WebRoute = {
       kind: 'prefix',
       path: '/api/mobile-logs',
@@ -580,31 +591,32 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
         try {
           if (request.headers[LOG_QUERY_HEADER] !== LOG_QUERY_KEY) throw new HttpError(401, 'unauthorized')
           const target = new URL(request.url ?? '/', 'http://localhost')
-          const limit = Math.min(Number(target.searchParams.get('limit') ?? '100') || 100, 200)
-          const since = target.searchParams.get('since') ?? '2h'
-          const rawLevel = target.searchParams.get('level') ?? ''
-          const levels = rawLevel.split(',').map(s => s.trim()).filter(Boolean)
-          const must: unknown[] = [{ range: { '@timestamp': { gte: `now-${since}` } } }]
-          if (levels.length > 0) must.push({ terms: { level: levels } })
+          const query = parseLogsQuery(target.searchParams)
           const es = await fetch('http://10.43.239.195:9200/logstash-mobile/_search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              size: limit,
-              sort: [{ '@timestamp': { order: 'desc' } }],
-              _source: ['@timestamp', 'level', 'message', 'tag', 'service', 'app_version', 'build'],
-              query: { bool: { must } },
-            }),
+            body: JSON.stringify(buildLogsSearchRequest(query)),
             signal: AbortSignal.timeout(6000),
           })
           if (!es.ok) throw new HttpError(502, `es_search_${es.status}`)
-          const doc = await es.json() as { hits?: { hits?: Array<{ _source?: Record<string, unknown> }> } }
-          const logs = (doc.hits?.hits ?? []).map(hit => hit._source ?? {})
-          sendJson(response, 200, { ok: true, logs, total: logs.length }, false)
+          const page = readLogsSearchResponse(await es.json() as ElasticsearchLogsBody)
+          sendJson(response, 200, {
+            ok: true,
+            // 真实命中总数（`hits.total.value`），**不是本页条数**。
+            total: page.total,
+            totalRelation: page.totalRelation,
+            // 本页条数（旧响应里 `total` 的语义，换名保留给老客户端）。
+            count: page.logs.length,
+            offset: query.offset,
+            limit: query.limit,
+            logs: page.logs,
+          }, false)
         } catch (error) {
           if (response.headersSent) { response.destroy(); return }
           const mapped = mapAdminError(error)
-          sendFailure(response, mapped.status, mapped.code, false)
+          const detail = LOGS_QUERY_ERROR_MESSAGES[mapped.code]
+          if (detail === undefined) sendFailure(response, mapped.status, mapped.code, false)
+          else sendJson(response, mapped.status, { error: mapped.code, message: detail }, false)
         }
       },
     }
