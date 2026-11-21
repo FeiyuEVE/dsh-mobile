@@ -132,6 +132,28 @@ export interface PluginConfig {
    * 新鲜度，不改变切片语义。
    */
   sessionListCacheMs?: number
+  /**
+   * msg-hub 只读转发的上游 origin（工单 #363，Q2 方案 A）。省略 = 不挂该前缀
+   * （`/api/msg-hub/*` 一律 503 `msg_hub_unconfigured` + D2 降级文案）。
+   *
+   * 只接受 http + 回环/内网字面量：msg-hub 不对外，网关是它唯一的对外出口；
+   * 允许公网 origin 等于把「手机侧无通道」换成「谁都能直连 hub」。
+   */
+  msgHubOrigin?: string
+  /**
+   * msg-hub 的服务令牌**文件**（绝对路径，建议 0600）。令牌只在网关侧使用，
+   * 绝不进入客户端响应或日志（日志按 `describeHeaders` 打码）。
+   */
+  msgHubTokenFile?: string
+  /** msg-hub 的服务令牌内联值（优先于 `msgHubTokenFile`；仅用于容器注入等场景）。 */
+  msgHubToken?: string
+  /**
+   * 只读转发的显式超时（毫秒，默认 3000，区间 100..3000）。
+   *
+   * **上限钉死 3000**：判据要求「网关侧显式超时 ≤3s」，配不出更大的值就不存在
+   * 「配置写 5000、判据按 3s 算」的歧义。
+   */
+  msgHubTimeoutMs?: number
 }
 
 /** Resolved, validated security and resource limits. */
@@ -187,6 +209,13 @@ export interface ResolvedGatewayConfig {
   readonly sessionListPageSize: number
   /** 全量会话列表短期缓存 TTL；0 = 关闭。 */
   readonly sessionListCacheMs: number
+  /** msg-hub 只读转发（#363）：没有配置 origin 时整块不挂。 */
+  readonly msgHub?: {
+    readonly origin: URL
+    readonly timeoutMs: number
+    readonly inlineToken?: string
+    readonly tokenFile?: string
+  }
 }
 
 /** Loader-facing defaults; {@link parseGatewayConfig} enforces cross-field security rules. */
@@ -231,6 +260,10 @@ export const Config: z<PluginConfig> = z.object({
   maxRateLimitKeys: z.natural(),
   sessionListPageSize: z.natural(),
   sessionListCacheMs: z.natural(),
+  msgHubOrigin: z.string(),
+  msgHubToken: z.string().hidden(),
+  msgHubTokenFile: z.string().hidden(),
+  msgHubTimeoutMs: z.natural(),
 })
 
 function integer(value: unknown, name: string, fallback: number, minimum: number, maximum: number): number {
@@ -285,6 +318,63 @@ export function parseAccountFileMode(value: unknown): number {
     )
   }
   return value
+}
+
+/** 内网 / 回环字面量：msg-hub 不对外，只许这些地址作为上游。 */
+function isInternalAddress(host: string): boolean {
+  if (isIP(host) === 6) return host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')
+  if (isIP(host) !== 4) return false
+  const octets = host.split('.').map(part => Number(part))
+  const first = octets[0] ?? -1
+  const second = octets[1] ?? -1
+  if (first === 127 || first === 10) return true
+  if (first === 192 && second === 168) return true
+  if (first === 172 && second >= 16 && second <= 31) return true
+  return false
+}
+
+/**
+ * msg-hub 只读转发配置（#363 / Q2 方案 A）。
+ *
+ * 省略 `msgHubOrigin` = 不挂该前缀（网关照旧回 503 + D2 降级文案）；给了 origin
+ * 就必须能拿到令牌，否则「配了 origin 却永远 401」会被当成通道故障查半天。
+ */
+function parseMsgHub(value: PluginConfig): ResolvedGatewayConfig['msgHub'] {
+  const token = typeof value.msgHubToken === 'string' && value.msgHubToken.trim() !== ''
+    ? value.msgHubToken.trim()
+    : undefined
+  const tokenFile = value.msgHubTokenFile === undefined
+    ? undefined
+    : absoluteFile(value.msgHubTokenFile, 'msgHubTokenFile')
+  if (value.msgHubOrigin === undefined) {
+    if (token !== undefined || tokenFile !== undefined) {
+      throw new Error('msgHubToken/msgHubTokenFile requires msgHubOrigin')
+    }
+    return undefined
+  }
+  if (typeof value.msgHubOrigin !== 'string') throw new Error('msgHubOrigin must be a string')
+  let origin: URL
+  try {
+    origin = new URL(value.msgHubOrigin)
+  } catch {
+    throw new Error('msgHubOrigin must be an http origin such as http://127.0.0.1:8787')
+  }
+  if (origin.protocol !== 'http:' || origin.username !== '' || origin.password !== ''
+    || origin.pathname !== '/' || origin.search !== '' || origin.hash !== '' || origin.port === '') {
+    throw new Error('msgHubOrigin must be a bare http origin with an explicit port')
+  }
+  if (!isInternalAddress(origin.hostname)) {
+    throw new Error('msgHubOrigin must point at a loopback or private address (msg-hub never listens publicly)')
+  }
+  if (token === undefined && tokenFile === undefined) {
+    throw new Error('msgHubOrigin requires msgHubToken or msgHubTokenFile')
+  }
+  return Object.freeze({
+    origin,
+    timeoutMs: integer(value.msgHubTimeoutMs, 'msgHubTimeoutMs', 3_000, 100, 3_000),
+    ...(token === undefined ? {} : { inlineToken: token }),
+    ...(tokenFile === undefined ? {} : { tokenFile }),
+  })
 }
 
 function parseUpstream(value: unknown): URL {
@@ -356,6 +446,7 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
   if (isIP(listenHost) === 0) throw new Error('listenHost must be an IP literal')
   const listenPort = publicOrigin?.port ?? integer(value.listenPort, 'listenPort', 3443, 0, 65535)
   const upstreamOrigin = parseUpstream(value.upstreamOrigin)
+  const msgHub = parseMsgHub(value)
   const tls = parseTls(value.tls, listenHost)
   if (publicOrigin !== undefined && tls.mode !== 'provided') {
     throw new Error('publicOrigin requires TLS')
@@ -448,5 +539,6 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     maxRateLimitKeys: integer(value.maxRateLimitKeys, 'maxRateLimitKeys', 256, 1, 4096),
     sessionListPageSize: integer(value.sessionListPageSize, 'sessionListPageSize', 20, 1, 100),
     sessionListCacheMs: integer(value.sessionListCacheMs, 'sessionListCacheMs', 30_000, 0, 3_600_000),
+    ...(msgHub === undefined ? {} : { msgHub }),
   })
 }

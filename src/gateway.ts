@@ -39,6 +39,7 @@ import {
   parseCookies,
   parseRequestTarget,
   readJsonObject,
+  type RequestTarget,
   sendFailure,
   sendJson,
   SESSION_COOKIE,
@@ -73,6 +74,17 @@ import {
 } from './session-list-slice.js'
 import { addressAllowed, isLoopbackAddress, type ParsedCidr, RequestTrustPolicy } from './network.js'
 import { listComputerImages, readComputerImage } from './computer-images.js'
+import {
+  buildUpstreamHeaders,
+  describeHeaders,
+  forwardMsgHubRead,
+  isMsgHubPath,
+  isMsgHubReadMethod,
+  MSG_HUB_DEGRADED_MESSAGE,
+  MSG_HUB_PREFIX,
+  MsgHubTokenReader,
+  resolveMsgHubUpstreamPath,
+} from './msg-hub.js'
 import {
   EXTENSION_LIMITS,
   MobileExtensionError,
@@ -822,6 +834,26 @@ function mapError(error: unknown): HttpError {
   return new HttpError(500, 'internal_error')
 }
 
+/**
+ * 客户端请求头的**脱敏**清单（只列名字，凭据只给长度）。
+ *
+ * 判据 3 要的是「手机侧请求里不含 msg-hub 令牌」：这份清单证明客户端只带了自己的
+ * 账号凭据（`authorization` 或 `cookie`），而转发到上游的头集合由
+ * `buildUpstreamHeaders` 决定（见同一行的 `upstream_headers=` 日志）。
+ */
+function describeClientHeaders(request: IncomingMessage): string {
+  const parts: string[] = []
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue
+    const text = Array.isArray(value) ? value.join(',') : value
+    const lowered = name.toLowerCase()
+    const secret = lowered === 'authorization' || lowered === 'cookie' || lowered === 'x-dsh-mobile-csrf'
+      || lowered === 'x-service-token'
+    parts.push(secret ? `${lowered}=<redacted:${String(text.length)}>` : `${lowered}=${text}`)
+  }
+  return parts.sort().join(',')
+}
+
 function discoveryDeviceName(): string {
   const value = hostname().trim().replaceAll(/[\u0000-\u001f\u007f]/gu, '')
   return (value === '' ? 'DeepSeek Harness' : value).slice(0, 63)
@@ -960,6 +992,8 @@ export class MobileAccessGateway {
   private readonly sessionListCache: SessionListCache
   /** 切片路径读取全量回包的缓冲上限（测试可注入更小的值）。 */
   private readonly sessionListMaxBufferBytes: number
+  /** msg-hub 只读转发的令牌读取器（#363）；未配置 origin 时为 undefined。 */
+  private readonly msgHubTokens: MsgHubTokenReader | undefined
 
   constructor(
     readonly config: ResolvedGatewayConfig,
@@ -974,6 +1008,9 @@ export class MobileAccessGateway {
     this.tlsEnabled = config.publicTls
     this.sessionListMaxBufferBytes = Math.max(1, options.sessionListMaxBufferBytes ?? SESSION_LIST_MAX_BUFFER_BYTES)
     this.sessionListCache = new SessionListCache(config.sessionListCacheMs, this.sessionListMaxBufferBytes)
+    this.msgHubTokens = config.msgHub === undefined
+      ? undefined
+      : new MsgHubTokenReader(config.msgHub.inlineToken, config.msgHub.tokenFile)
     this.removeTokenListener = this.account.onTokenEnded(authorization => {
       this.abortSessionResources(authorization.sessionKey)
     })
@@ -1482,6 +1519,14 @@ export class MobileAccessGateway {
 
   private async handleExternalRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const target = parseRequestTarget(request.url)
+    // msg-hub 只读转发（#363 / Q2 方案 A）的**方法闸**：写方法在信任检查之前就挡下，
+    // 只回一条 405 + 一行日志，**上游连接一次都不建**（判据「对面没被写」靠这个）。
+    // 位置故意早于 assertExternalTrust：写方法必须是确定的 405，不能因为来源/Origin
+    // 不同先变成 403 —— 那会让「写方法一律 405」这条判据随调用方而变。
+    if (isMsgHubPath(target.decodedPathname) && !isMsgHubReadMethod(request.method)) {
+      this.denyMsgHubWrite(request, response, target)
+      return
+    }
     const policy = this.requirePolicy()
     const isMutation = request.method !== 'GET' && request.method !== 'HEAD'
     assertExternalTrust(request, policy, isMutation)
@@ -1489,6 +1534,11 @@ export class MobileAccessGateway {
       throw new HttpError(404, 'not_found')
     }
     if (request.method === 'TRACE' || request.method === 'CONNECT') throw new HttpError(405, 'method_not_allowed')
+    // msg-hub 只读转发（#363 / Q2 方案 A）：读方法在这里过关（白名单 + 鉴权 + 超时）。
+    if (isMsgHubPath(target.decodedPathname)) {
+      await this.handleMsgHubRead(request, response, target)
+      return
+    }
 
     if (target.search === '' && request.method === 'GET' && target.decodedPathname === `${AUTH_PREFIX}/health`) {
       sendJson(response, 200, { ok: true }, this.tlsEnabled)
@@ -2218,6 +2268,114 @@ export class MobileAccessGateway {
       signal.removeEventListener('abort', aborted)
       upstreamRequest?.destroy()
     }
+  }
+
+  /** msg-hub 只读面的写方法闸：405 + 一行日志（含脱敏客户端头），**不转发**。 */
+  private denyMsgHubWrite(request: IncomingMessage, response: ServerResponse, target: RequestTarget): void {
+    const method = request.method ?? ''
+    console.warn(
+      `[dsh-mobile] msg-hub read-only deny reason=write_method method=${method}`
+      + ` path=${target.decodedPathname} client=${request.socket.remoteAddress ?? 'unknown'}`
+      + ` client_headers=${describeClientHeaders(request)} upstream=not_attempted`,
+    )
+    sendJson(response, 405, {
+      ok: false,
+      error: 'msg_hub_read_only',
+      message: '本通道只读：写方法不转发',
+      method,
+    }, this.tlsEnabled)
+  }
+
+  /**
+   * msg-hub 只读转发（#363 / Q2 方案 A）。
+   *
+   * 顺序就是判据：① 写方法 → 405 + 一行日志（**不建上游连接**）；② 白名单外路径
+   * → 404（不转发）；③ 未配置 / 令牌取不到 → 503；④ 鉴权只用**网关自己的**账号
+   * 会话，客户端凭据不进上游；⑤ 上游不可达 / 超时 / 401 / 403 / 5xx 一律回
+   * 503/502 + D2 逐字文案，不透传成「无权限」。
+   */
+  private async handleMsgHubRead(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: RequestTarget,
+  ): Promise<void> {
+    const method = request.method ?? ''
+    const clientHeaders = describeClientHeaders(request)
+    if (!isMsgHubReadMethod(method)) {
+      // 兜底（正常路径上写方法已在 handleExternalRequest 头部挡下）。
+      this.denyMsgHubWrite(request, response, target)
+      return
+    }
+    const upstreamPath = resolveMsgHubUpstreamPath(target.decodedPathname)
+    if (upstreamPath === undefined) {
+      console.warn(`[dsh-mobile] msg-hub read-only deny reason=path_not_whitelisted path=${target.decodedPathname}`)
+      sendJson(response, 404, {
+        ok: false,
+        error: 'msg_hub_endpoint_not_whitelisted',
+        message: MSG_HUB_DEGRADED_MESSAGE,
+      }, this.tlsEnabled)
+      return
+    }
+    const msgHub = this.config.msgHub
+    const tokenReader = this.msgHubTokens
+    const unavailable = (status: number, error: string, extra: Record<string, unknown> = {}): void => {
+      sendJson(response, status, { ok: false, error, message: MSG_HUB_DEGRADED_MESSAGE, ...extra }, this.tlsEnabled)
+    }
+    if (msgHub === undefined || tokenReader === undefined) {
+      console.warn(`[dsh-mobile] msg-hub read unavailable error=msg_hub_unconfigured path=${upstreamPath}`)
+      unavailable(503, 'msg_hub_unconfigured', { channel: MSG_HUB_PREFIX })
+      return
+    }
+    // 手机只拿网关自己的鉴权：账号会话（Bearer / dsh_ma_session cookie）。
+    this.authorize(request)
+    const token = await tokenReader.read()
+    if (token === undefined) {
+      console.warn('[dsh-mobile] msg-hub read unavailable error=msg_hub_token_unavailable')
+      unavailable(503, 'msg_hub_token_unavailable', { channel: MSG_HUB_PREFIX })
+      return
+    }
+    const startedAt = Date.now()
+    const reply = await forwardMsgHubRead({
+      origin: msgHub.origin,
+      token,
+      timeoutMs: msgHub.timeoutMs,
+      upstreamPath,
+      search: target.search,
+    })
+    const elapsedMs = Date.now() - startedAt
+    if ('kind' in reply) {
+      const mapped = {
+        unconfigured: { status: 503, error: 'msg_hub_unconfigured' },
+        unreachable: { status: 503, error: 'msg_hub_unreachable' },
+        upstream_rejected: { status: 503, error: 'msg_hub_unauthorized' },
+        upstream_error: { status: 502, error: 'msg_hub_upstream_error' },
+        response_too_large: { status: 502, error: 'msg_hub_response_too_large' },
+      } as const
+      const failure = mapped[reply.kind]
+      const detail = reply.kind === 'unreachable'
+        ? ` detail=${reply.detail}`
+        : reply.kind === 'upstream_rejected' || reply.kind === 'upstream_error'
+          ? ` upstream_status=${String(reply.status)}`
+          : ''
+      console.warn(
+        `[dsh-mobile] msg-hub read failed error=${failure.error} path=${upstreamPath}${target.search}`
+        + ` timeout_ms=${String(msgHub.timeoutMs)} elapsed_ms=${String(elapsedMs)}${detail}`,
+      )
+      unavailable(failure.status, failure.error, { elapsed_ms: elapsedMs })
+      return
+    }
+    console.log(
+      `[dsh-mobile] msg-hub read upstream=GET ${upstreamPath}${target.search} status=${String(reply.status)}`
+      + ` elapsed_ms=${String(elapsedMs)} timeout_ms=${String(msgHub.timeoutMs)}`
+      + ` upstream_headers=${describeHeaders(buildUpstreamHeaders(token))} client_headers=${clientHeaders}`,
+    )
+    setSecurityHeaders(response, this.tlsEnabled)
+    const body = method === 'HEAD' ? Buffer.alloc(0) : reply.body
+    response.writeHead(reply.status, {
+      'Content-Type': reply.contentType,
+      'Content-Length': body.length,
+    })
+    response.end(body)
   }
 
   private allocateRequest(
