@@ -26,7 +26,7 @@ APK 都不成立，所以这一跳必须收在网关进程内。
   列表恒空）。令牌只以路径形式进 profile patch，不进客户端、不进日志、不进 git。
 
 **判据**：`npm run verify` 退出 0、全量 **366 例**（`tests/msg-hub.test.ts` 12 例纯函数 +
-`tests/gateway.test.ts` 新增 msg-hub 端到端 6 例；假 hub 逐请求记录
+`tests/gateway.test.ts` 新增 msg-hub 端到端 10 例；假 hub 逐请求记录
 method / url / headers / body）。反向控制均有断言：未登录 401 零转发、新建 405 零转发、
 白名单外 404 零转发、伪造身份头被剔除、取消不转发 request body。
 
