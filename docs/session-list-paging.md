@@ -142,3 +142,37 @@
   网关这段可以退化为纯透传，App 零改动。
 - 只改 `POST /api/session/list` 一条路由：`/api/session.history` 的既有改写、
   `/api/mobile-logs` 的 offset 分页、`/plugins/events` 的帧过滤一律不动。
+
+## 可诊断日志（工单 #408）
+
+每个**分页请求**（`_request.limit` 存在，含被 400 拒绝的非法参数）都在网关进程写
+**一行** `key=value` 日志；不带 `limit` 的透传请求不写（保持旧行为，避免刷屏）。
+落点是进程 stdout ⇒ 生产 profile 的 `StandardOutput=journal` ⇒ `journalctl -u dsh-web`。
+
+```text
+[dsh-mobile] session-list page serial=12 path=/api/session/list limit=20 cursor=WzE3OTk5OTk5NjEwMDAsInNlc3Npb24tdDQwOC0wMzld outcome=ok items=5 total=45 next=0 cache=miss end_of_list=true duration_ms=3
+[dsh-mobile] session-list page serial=10 path=/api/session/list limit=20 cursor=WzE3OTk5OTk5ODEwMDAsInNlc3Npb24tdDQwOC0wMTld outcome=error error=upstream_status upstream_status=500 duration_ms=4
+[dsh-mobile] session-list page serial=4 path=/api/session/list limit=20 cursor=not-a-cursor!! outcome=reject error=invalid_cursor status=400 duration_ms=0
+```
+
+| 字段 | 含义 |
+|---|---|
+| `serial` | 网关内自增序号；同一次请求只会有成功行或失败行中的一行 |
+| `path` | 固定 `/api/session/list` |
+| `limit` / `cursor` | 客户端**原样**发出的值；首屏 `cursor=-`（不是编造的空串） |
+| `items` / `total` | 本页条数 / 全量条数（`total` 来自网关持有的全量回包，不是本页条数） |
+| `next` / `end_of_list` | 是否还有下一页 / 是否已到末页；末页必带 `total=N` |
+| `cache` | `hit` = 命中全量短期缓存（此时不打上游，耗时接近 0） |
+| `outcome` | `ok` / `reject`（400）/ `passthrough`（无法切片）/ `error`（上游非 200 或连接异常） |
+| `duration_ms` | 本请求在网关内的墙钟耗时 |
+
+失败归因字段：`error=upstream_status` + `upstream_status=<code>`（上游非 200）、
+`error=upstream_exception` + `error_class=<异常类>` + `detail=<消息>`（连接/超时）、
+`error=invalid_cursor|invalid_limit` + `status=400`（参数被拒）；三类都带 `serial` 与
+`cursor`，可按同一 trace 找到唯一那一行。passthrough 另带 `reason=oversize|upstream_encoded|
+upstream_content_type|invalid_json|unexpected_payload|malformed_items`。
+
+**验收口径**：一次下滚后 `journalctl -u dsh-web | grep 'session-list page'` 至少一行同时含
+`limit=` 与 `cursor=`；把 `writeSessionListLog` 的 `console.info(line)` 注释掉后同一滚动
+**零命中**（反向控制）。生产生效需要装新版本网关并重启对应 profile——**重启不在本单范围**
+（2026-11-22：该仓不在 merge-worker 注册面，按分支交付，见工单 #408）。
