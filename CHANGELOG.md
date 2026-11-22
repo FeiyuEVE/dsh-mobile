@@ -1,3 +1,35 @@
+## 0.3.53 — 2026-11-23 · msg-hub 定时消息代理：移动端可列 / 可取消，hub 令牌只在宿主侧注入
+
+**背景**：App 只拿得到网关账密换的 30 天 token；msg-hub 只听回环 `127.0.0.1:8787`，
+鉴权只认 `x-service-token`（service / operator 主体）。让 App 直连或把 hub 令牌打进
+APK 都不成立，所以这一跳必须收在网关进程内。
+
+**改法**（不新增服务、不新增端口，挂在已有 18443/18452 网关上）：
+
+- `src/msg-hub.ts`（新增）：路由白名单只有两条——`GET|HEAD /api/msg-hub/v1/schedules`
+  → `<hub>/v1/schedules`（query 只透传 `enabled` / `creator` / `limit` / `cursor`，
+  单值 ≤256 B）与 `POST /api/msg-hub/v1/schedules/{id}/cancel` →
+  `<hub>/v1/schedules/{id}/cancel`（**不转发请求体**）。前缀外的路径 404
+  `route_denied`，白名单路径上的其它方法 405 `method_not_allowed`，两者都不转发。
+- `src/gateway.ts`：`authorize` 在路由判定之前（未登录 / 被踢 / 过期 401，一个字节
+  都不发往 hub）；只有白名单路由才注入 `x-service-token`；客户端自带的
+  `x-service-token` / `x-dsh-session-id` / `x-codex-thread-id` / `x-dsh-actor-type`
+  一律剔除，`authorization` / `cookie` 不转发；每请求一行 `[msg-hub]` 结构化日志
+  （`method / path / injected / upstream_status / [upstream_error] / duration_ms /
+  client_identity_headers_stripped / outcome`，outcome 五值
+  `ok|upstream_rejected|upstream_unreachable|unauthorized|method_not_allowed`）。
+- `src/config.ts`：新增 `msgHubOrigin`（默认 `http://127.0.0.1:8787`）与
+  `msgHubServiceTokenFile`（只写路径、不写值；省略 / 空文件 = 不注入，hub 按匿名
+  401）。令牌每请求现读，轮换无需重载插件。
+- 部署口径：**必须用 operator 令牌**。hub 的 `list_schedules` 对非 operator 主体强制
+  `creator = 自己`，普通 service 令牌只能看到「App 自己创建」的任务（App 不创建 ⇒
+  列表恒空）。令牌只以路径形式进 profile patch，不进客户端、不进日志、不进 git。
+
+**判据**：`npm run verify` 退出 0、全量 **366 例**（`tests/msg-hub.test.ts` 12 例纯函数 +
+`tests/gateway.test.ts` 新增 msg-hub 端到端 6 例；假 hub 逐请求记录
+method / url / headers / body）。反向控制均有断言：未登录 401 零转发、新建 405 零转发、
+白名单外 404 零转发、伪造身份头被剔除、取消不转发 request body。
+
 ## 0.3.52 — 2026-11-23 · 代注入链路的可观测性：一次转发一行带 upstream_status 的结构化日志
 
 **背景**：0.3.51 的代注入只记 `injected=true/false`，不记上游返回了什么。于是「注入了
