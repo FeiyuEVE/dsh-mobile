@@ -99,6 +99,21 @@ export interface PluginConfig {
    */
   taskPlatformServiceTokenFile?: string
   /**
+   * **msg-hub 定时消息代理**的回环源（`GET|HEAD /api/msg-hub/v1/schedules` +
+   * `POST /api/msg-hub/v1/schedules/{id}/cancel`）。
+   *
+   * 省略 = `http://127.0.0.1:8787`（hub 只听回环）。与 `upstreamOrigin` 同一校验口径：
+   * HTTP、回环地址、必须带显式端口、无路径 / 凭据。
+   */
+  msgHubOrigin?: string
+  /**
+   * msg-hub 服务令牌的**文件路径**（只写路径，不写令牌本身）。
+   *
+   * 网关只在白名单路由上把该文件内容注入 `x-service-token`；省略 / 空文件 = 不注入
+   * （hub 自己回 401）。令牌文件每次请求现读，轮换无需重载插件。
+   */
+  msgHubServiceTokenFile?: string
+  /**
    * Opt-in Service Worker static caching for the mobile page. When enabled the
    * rewritten mobile index registers a gateway-scoped worker that serves
    * revisioned plugin/assets/mobile-boot responses from Cache Storage, so page
@@ -179,6 +194,10 @@ export interface ResolvedGatewayConfig {
   readonly taskPlatformOrigin: URL
   /** 工单平台服务令牌文件（见 raw 配置的 `taskPlatformServiceTokenFile`）；省略 = 不注入。 */
   readonly taskPlatformServiceTokenFile?: string
+  /** msg-hub 定时消息代理的回环源（见 raw 配置的 `msgHubOrigin`）。 */
+  readonly msgHubOrigin: URL
+  /** msg-hub 服务令牌文件（见 raw 配置的 `msgHubServiceTokenFile`）；省略 = 不注入。 */
+  readonly msgHubServiceTokenFile?: string
   /** Whether the mobile page registers the Service Worker static cache. */
   readonly staticCacheWorker: boolean
   readonly instanceId: string
@@ -226,6 +245,8 @@ export const Config: z<PluginConfig> = z.object({
   codePushDir: z.string().hidden(),
   taskPlatformOrigin: z.string(),
   taskPlatformServiceTokenFile: z.string(),
+  msgHubOrigin: z.string(),
+  msgHubServiceTokenFile: z.string(),
   staticCacheWorker: z.boolean(),
   instanceId: z.string().hidden(),
   pairingCaFile: z.string().hidden(),
@@ -447,6 +468,10 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     ...(value.taskPlatformServiceTokenFile === undefined || value.taskPlatformServiceTokenFile.trim() === ''
       ? {}
       : { taskPlatformServiceTokenFile: absoluteFile(value.taskPlatformServiceTokenFile, 'taskPlatformServiceTokenFile') }),
+    msgHubOrigin: parseUpstream(value.msgHubOrigin ?? 'http://127.0.0.1:8787'),
+    ...(value.msgHubServiceTokenFile === undefined || value.msgHubServiceTokenFile.trim() === ''
+      ? {}
+      : { msgHubServiceTokenFile: absoluteFile(value.msgHubServiceTokenFile, 'msgHubServiceTokenFile') }),
     staticCacheWorker: value.staticCacheWorker === true,
     instanceId: value.instanceId === undefined
       ? createHash('sha256').update(stateFile).digest('hex')

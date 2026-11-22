@@ -2557,6 +2557,284 @@ describe('HTTP gateway', () => {
     })
   })
 
+  describe('msg-hub 定时消息代理（/api/msg-hub/*）', () => {
+    const HUB_TOKEN = 'hub-service-token-fixture'
+
+    /** 假 hub：没有 `x-service-token` 就 401（与 hub 同形），有就回 200 JSON。 */
+    async function hub(): Promise<{ port: number; observations: UpstreamObservation[] }> {
+      const observations: UpstreamObservation[] = []
+      const server = createServer(async (incoming, response) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+        observations.push({
+          method: incoming.method ?? '',
+          url: incoming.url ?? '',
+          headers: incoming.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        })
+        const authorized = incoming.headers['x-service-token'] === HUB_TOKEN
+        const body = JSON.stringify(authorized
+          ? { items: [], next_cursor: null, path: incoming.url ?? '' }
+          : { code: 'unauthenticated', message: '缺少 X-Service-Token' })
+        response.writeHead(authorized ? 200 : 401, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        })
+        response.end(body)
+      })
+      const port = await listen(server)
+      cleanups.push(() => closeServer(server))
+      return { port, observations }
+    }
+
+    /** 写一份令牌文件并返回路径（内容带换行，验证 trim）。 */
+    async function tokenFile(value: string = `${HUB_TOKEN}\n`): Promise<string> {
+      const directory = await tempDirectory('msg-hub-token')
+      const filename = join(directory, 'service-token')
+      await writeFile(filename, value, { mode: 0o600 })
+      return filename
+    }
+
+    async function configured(fake: { port: number }) {
+      const instance = await gateway(0, {
+        msgHubOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        msgHubServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      return { instance, paired }
+    }
+
+    function msgHubLogLines(spy: { readonly mock: { readonly calls: unknown[][] } }): string[] {
+      return spy.mock.calls
+        .map(call => call.map(value => typeof value === 'string' ? value : String(value)).join(' '))
+        .filter(line => line.startsWith('[msg-hub] '))
+    }
+
+    function expectStructuredLine(line: string, fields: Record<string, string | RegExp>): void {
+      for (const [name, expected] of Object.entries(fields)) {
+        const match = new RegExp(`(?:^| )${name}=([^ ]*)(?: |$)`, 'u').exec(line)
+        expect(match, `${name} missing in: ${line}`).not.toBeNull()
+        const actual = match?.[1] ?? ''
+        if (expected instanceof RegExp) expect(actual, name).toMatch(expected)
+        else expect(actual, name).toBe(expected)
+      }
+    }
+
+    it('未登录 GET ⇒ 401，且一个字节都不发往 hub', async () => {
+      const fake = await hub()
+      const instance = await gateway(0, { msgHubOrigin: `http://127.0.0.1:${String(fake.port)}` })
+      const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+        headers: browserHeaders(instance),
+      })
+      expect(result.status).toBe(401)
+      expect(fake.observations).toHaveLength(0)
+    })
+
+    it('带网关 token ⇒ 注入 hub 令牌，只透传白名单 query', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const result = await request(
+        instance.address().port,
+        '/api/msg-hub/v1/schedules?limit=5&enabled=true&evil=1&creator=session%3Aabc',
+        { headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` } },
+      )
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.body)).toMatchObject({ path: '/v1/schedules?limit=5&enabled=true&creator=session%3Aabc' })
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.headers['x-service-token']).toBe(HUB_TOKEN)
+    })
+
+    it('客户端伪造的身份头被剔除，authorization/cookie 不转发', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+        headers: {
+          ...browserHeaders(instance),
+          authorization: `Bearer ${paired.token}`,
+          'x-service-token': 'forged-service-token',
+          'x-dsh-session-id': 'forged-session',
+          'x-codex-thread-id': 'forged-thread',
+          'x-dsh-actor-type': 'forged-actor',
+        },
+      })
+      expect(result.status).toBe(200)
+      const observed = fake.observations[0]?.headers
+      expect(observed?.['x-service-token']).toBe(HUB_TOKEN)
+      expect(observed?.['x-dsh-session-id']).toBeUndefined()
+      expect(observed?.['x-codex-thread-id']).toBeUndefined()
+      expect(observed?.['x-dsh-actor-type']).toBeUndefined()
+      expect(observed?.authorization).toBeUndefined()
+      expect(observed?.cookie).toBeUndefined()
+    })
+
+    it('取消：POST /v1/schedules/{id}/cancel 转发，且不转发请求体', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const result = await request(instance.address().port, '/api/msg-hub/v1/schedules/7/cancel', {
+        method: 'POST',
+        headers: {
+          ...browserHeaders(instance),
+          authorization: `Bearer ${paired.token}`,
+          'content-type': 'application/json',
+        },
+        body: '{"smuggled":true}',
+      })
+      expect(result.status).toBe(200)
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.method).toBe('POST')
+      expect(fake.observations[0]?.url).toBe('/v1/schedules/7/cancel')
+      expect(fake.observations[0]?.body).toBe('')
+      expect(fake.observations[0]?.headers['x-service-token']).toBe(HUB_TOKEN)
+    })
+
+    it('新建（POST /v1/schedules）不在白名单 ⇒ 405 且不转发', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+          method: 'POST',
+          headers: {
+            ...browserHeaders(instance),
+            authorization: `Bearer ${paired.token}`,
+            'content-type': 'application/json',
+          },
+          body: '{"payload":"x"}',
+        })
+        expect(result.status).toBe(405)
+        expect(fake.observations).toHaveLength(0)
+        const lines = msgHubLogLines(log)
+        expect(lines).toHaveLength(1)
+        expectStructuredLine(lines[0] ?? '', {
+          method: 'POST',
+          path: '/api/msg-hub/v1/schedules',
+          injected: 'false',
+          upstream_status: 'none',
+          outcome: 'method_not_allowed',
+        })
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('白名单外的路径 ⇒ 404 route_denied，且不转发', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        for (const path of ['/api/msg-hub/v1/broadcasts', '/api/msg-hub/v1/schedules/7', '/api/msg-hub']) {
+          const result = await request(instance.address().port, path, {
+            method: 'POST',
+            headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+          })
+          expect(result.status, path).toBe(404)
+        }
+        expect(fake.observations).toHaveLength(0)
+        const lines = msgHubLogLines(log)
+        expect(lines).toHaveLength(3)
+        for (const line of lines) {
+          expectStructuredLine(line, {
+            injected: 'false',
+            upstream_status: 'none',
+            outcome: 'route_denied',
+          })
+        }
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('没有令牌文件 ⇒ 不注入，hub 的 401 原样透传（证明「能读」来自注入）', async () => {
+      const fake = await hub()
+      const instance = await gateway(0, { msgHubOrigin: `http://127.0.0.1:${String(fake.port)}` })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+        headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+      })
+      expect(result.status).toBe(401)
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.headers['x-service-token']).toBeUndefined()
+    })
+
+    it('令牌文件为空 ⇒ 同样不注入（401），不回 5xx', async () => {
+      const fake = await hub()
+      const instance = await gateway(0, {
+        msgHubOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        msgHubServiceTokenFile: await tokenFile('\n\n'),
+      })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+        headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+      })
+      expect(result.status).toBe(401)
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.headers['x-service-token']).toBeUndefined()
+    })
+
+    it('上游不可达 ⇒ 502 msg_hub_unavailable，日志不泄漏地址', async () => {
+      const probe = createServer()
+      const port = await listen(probe)
+      await closeServer(probe)
+      const instance = await gateway(0, {
+        msgHubOrigin: `http://127.0.0.1:${String(port)}`,
+        msgHubServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(instance.address().port, '/api/msg-hub/v1/schedules', {
+          headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+        })
+        expect(result.status).toBe(502)
+        expect(JSON.parse(result.body)).toEqual({ error: 'msg_hub_unavailable' })
+        const lines = msgHubLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          injected: 'true',
+          upstream_status: 'none',
+          upstream_error: /^[A-Z_]+$/u,
+          duration_ms: /^\d+$/u,
+          outcome: 'upstream_unreachable',
+        })
+        expect(line).not.toContain(String(port))
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('200 ⇒ 一行 outcome=ok，creator 脱敏、令牌不落日志', async () => {
+      const fake = await hub()
+      const { instance, paired } = await configured(fake)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(
+          instance.address().port,
+          '/api/msg-hub/v1/schedules?limit=5&creator=session%3Asecret-session',
+          { headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` } },
+        )
+        expect(result.status).toBe(200)
+        const lines = msgHubLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          path: '/api/msg-hub/v1/schedules?limit=5&creator=<redacted:22>',
+          injected: 'true',
+          upstream_status: '200',
+          duration_ms: /^\d+$/u,
+          client_identity_headers_stripped: '0',
+          outcome: 'ok',
+        })
+        expect(line).not.toContain('secret-session')
+        expect(line).not.toContain(HUB_TOKEN)
+      } finally {
+        log.mockRestore()
+      }
+    })
+  })
+
   it('answers an anonymous session probe without side effects and rejects revoked credentials', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)

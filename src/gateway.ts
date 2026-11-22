@@ -59,6 +59,19 @@ import {
   type TaskPlatformOutcome,
 } from './task-platform.js'
 import {
+  classifyMsgHubUpstreamError,
+  countMsgHubIdentityHeaders,
+  filterScheduleQuery,
+  formatMsgHubLog,
+  isMsgHubPath,
+  matchMsgHubRoute,
+  MSG_HUB_TIMEOUT_MS,
+  msgHubUpstreamHeaders,
+  msgHubUpstreamPath,
+  redactMsgHubQuery,
+  type MsgHubOutcome,
+} from './msg-hub.js'
+import {
   APP_ASSETS_PREFIX,
   CODE_PUSH_PREFIX,
   codePushCheckResponse,
@@ -1570,6 +1583,144 @@ export class MobileAccessGateway {
     }
   }
 
+  /**
+   * msg-hub 定时消息代注入：白名单两条路由（列表 / 取消），其余不转发。
+   *
+   * 顺序是硬的：**先校账号 token，再判路由**——未登录 / 被踢 / 过期 401，一个字节
+   * 都不发往 hub；白名单外的路径 404（`route_denied`）、白名单路径上的别的方向 405
+   * （`method_not_allowed`），两者都不转发。只有白名单路由才注入 `x-service-token`
+   * （令牌从宿主文件现读）。
+   *
+   * **每次请求（含 401/404/405 与上游不可达）都留恰好一行结构化日志**，字段见
+   * `formatMsgHubLog`；令牌值、令牌文件路径与 hub 地址都不出现。取消请求**不转发
+   * 请求体**：客户端送来的东西一律排空，上游只收一个空 POST。
+   */
+  private async handleMsgHub(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: RequestTarget,
+  ): Promise<void> {
+    const startedAt = Date.now()
+    const method = request.method ?? ''
+    const logPath = `${target.pathname}${redactMsgHubQuery(target.search)}`
+    const clientIdentityHeadersStripped = countMsgHubIdentityHeaders(request.headers)
+    let injected = false
+    let upstreamStatus: number | undefined
+    let upstreamError: string | undefined
+    let logged = false
+    const writeLog = (outcome: MsgHubOutcome): void => {
+      if (logged) return
+      logged = true
+      console.log(formatMsgHubLog({
+        method,
+        path: logPath,
+        injected,
+        ...(upstreamStatus === undefined ? {} : { upstreamStatus }),
+        ...(upstreamError === undefined ? {} : { upstreamError }),
+        durationMs: Date.now() - startedAt,
+        clientIdentityHeadersStripped,
+        outcome,
+      }))
+    }
+    try {
+      // 401 在转发之前：未登录 / 被踢 / 过期，一个字节都不发往 hub。
+      try {
+        this.authorize(request)
+      } catch (error) {
+        upstreamError = 'not_forwarded'
+        writeLog('unauthorized')
+        throw error
+      }
+      const decision = matchMsgHubRoute(target.decodedPathname, method)
+      if (!decision.ok) {
+        upstreamError = 'not_forwarded'
+        if (decision.error === 'method_not_allowed') {
+          writeLog('method_not_allowed')
+          throw new HttpError(405, 'method_not_allowed')
+        }
+        writeLog('route_denied')
+        throw new HttpError(404, 'not_found')
+      }
+      const origin = this.config.msgHubOrigin
+      const serviceToken = await this.msgHubServiceToken()
+      const built = msgHubUpstreamHeaders({
+        upstreamHost: origin.host,
+        ...(serviceToken === undefined ? {} : { serviceToken }),
+        clientHeaders: request.headers,
+      })
+      injected = built.injected
+      const path = msgHubUpstreamPath(
+        decision.route,
+        decision.route.kind === 'list' ? filterScheduleQuery(target.search) : '',
+      )
+      // 取消不带请求体：把入站体排空，上游只收空 POST（不转发客户端任何字节）。
+      request.resume()
+      await new Promise<void>((resolve) => {
+        const clientRequest = requestHttp({
+          hostname: origin.hostname,
+          port: origin.port,
+          path,
+          method,
+          headers: built.headers,
+          timeout: MSG_HUB_TIMEOUT_MS,
+        }, (upstreamResponse) => {
+          upstreamStatus = upstreamResponse.statusCode ?? 502
+          if (response.destroyed) {
+            upstreamResponse.destroy()
+            return
+          }
+          const responseHeaders: OutgoingHttpHeaders = {}
+          for (const name of ['content-type', 'content-length', 'content-encoding'] as const) {
+            const value = upstreamResponse.headers[name]
+            if (value !== undefined) responseHeaders[name] = value
+          }
+          setSecurityHeaders(response, this.tlsEnabled)
+          response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+          upstreamResponse.on('error', () => {
+            upstreamError = 'response_stream_error'
+            if (!response.destroyed) response.destroy()
+          })
+          response.on('close', () => { if (!upstreamResponse.complete) upstreamResponse.destroy() })
+          upstreamResponse.pipe(response)
+        })
+        // 失败只回一个稳定类别（502），不把上游地址/令牌带进响应。
+        clientRequest.on('error', (error: Error) => {
+          upstreamError = classifyMsgHubUpstreamError(error)
+          if (response.destroyed) return
+          if (response.headersSent) {
+            response.destroy()
+            return
+          }
+          sendFailure(response, 502, 'msg_hub_unavailable', this.tlsEnabled)
+        })
+        clientRequest.on('timeout', () => { clientRequest.destroy(new Error('msg_hub_timeout')) })
+        response.on('close', () => { resolve() })
+        clientRequest.end()
+      })
+      writeLog(upstreamStatus === undefined
+        ? 'upstream_unreachable'
+        : upstreamStatus >= 400 ? 'upstream_rejected' : 'ok')
+    } catch (error) {
+      if (!logged) {
+        upstreamError ??= 'gateway_error'
+        writeLog('upstream_unreachable')
+      }
+      throw error
+    }
+  }
+
+  /** 读 msg-hub 服务令牌（每次请求现读：文件轮换无需重载插件）。读不到 = 不注入。 */
+  private async msgHubServiceToken(): Promise<string | undefined> {
+    const file = this.config.msgHubServiceTokenFile
+    if (file === undefined) return undefined
+    try {
+      const token = (await readFile(file, 'utf8')).trim()
+      return token === '' ? undefined : token
+    } catch {
+      return undefined
+    }
+  }
+
   private async handleLogout(request: IncomingMessage, response: ServerResponse): Promise<void> {
     // 空体是合法的：登出没有参数，客户端（含 `fetch(..., {method:'POST'})` 不写 body）
     // 不该因为「没带 JSON」被 400 挡掉——那会让 token 永远撤不掉。
@@ -1640,7 +1791,8 @@ export class MobileAccessGateway {
     // 工单平台前缀的写方法只会得到 405（不转发），所以不要求浏览器 Origin 事实；
     // GET/HEAD 本来就不要求。CIDR / Host 信任校验对所有方法照旧。
     const taskPlatform = isTaskPlatformPath(target.decodedPathname)
-    assertExternalTrust(request, policy, isMutation && !taskPlatform)
+    const msgHub = isMsgHubPath(target.decodedPathname)
+    assertExternalTrust(request, policy, isMutation && !taskPlatform && !msgHub)
     if (target.decodedPathname === LOCAL_ADMIN_PREFIX || target.decodedPathname.startsWith(`${LOCAL_ADMIN_PREFIX}/`)) {
       throw new HttpError(404, 'not_found')
     }
@@ -1797,6 +1949,13 @@ export class MobileAccessGateway {
     // （PUT/PATCH/DELETE 仍是 405，且 405 仍先于鉴权）。
     if (taskPlatform) {
       await this.handleTaskPlatform(request, response, target)
+      return
+    }
+    // msg-hub 定时消息（`GET|HEAD /api/msg-hub/v1/schedules` + `POST …/{id}/cancel`）：
+    // 先校网关账号 token，再判路由白名单；令牌只在宿主侧注入。口径与拒绝路径见
+    // `src/msg-hub.ts` 顶部。同样放在通用方法闸之前：非白名单方法要留下自己的日志。
+    if (msgHub) {
+      await this.handleMsgHub(request, response, target)
       return
     }
     if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST'
