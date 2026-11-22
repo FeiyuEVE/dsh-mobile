@@ -43,12 +43,24 @@ export interface SessionListPageRequest {
   readonly cursor?: SessionListCursor
   /** 当前请求的 rpcId（缓存命中时必须把它写回信封，否则客户端判 rpcId mismatch）。 */
   readonly rpcId?: string
+  /**
+   * 客户端原始 `cursor` 串（规范化之前）。只用于可诊断日志：分页参数面
+   * 必须能按 App 实际发出的值归因，解码后的对象不能替代它。
+   */
+  readonly cursorText?: string
 }
 
 /** 请求体分类：透传 / 400 / 切片。 */
 export type SessionListRequestPlan =
   | { readonly kind: 'passthrough' }
-  | { readonly kind: 'invalid'; readonly error: 'invalid_limit' | 'invalid_cursor'; readonly message: string }
+  | {
+    readonly kind: 'invalid'
+    readonly error: 'invalid_limit' | 'invalid_cursor'
+    readonly message: string
+    /** 非法请求的原始参数（日志归因用；非字符串值用 JSON 文本）。 */
+    readonly rawLimit?: string
+    readonly rawCursor?: string
+  }
   | ({ readonly kind: 'page' } & SessionListPageRequest)
 
 /** 一条合法会话条目（只取排序与游标需要的两个字段）。 */
@@ -103,18 +115,51 @@ export function planSessionListRequest(body: Buffer, maximum: number): SessionLi
 
   const limit: unknown = request.limit
   if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > maximum) {
-    return { kind: 'invalid', error: 'invalid_limit', message: SESSION_LIST_ERROR_MESSAGES.invalid_limit(maximum) }
+    return {
+      kind: 'invalid',
+      error: 'invalid_limit',
+      message: SESSION_LIST_ERROR_MESSAGES.invalid_limit(maximum),
+      rawLimit: rawLogValue(limit),
+    }
   }
 
   const rawCursor: unknown = request.cursor
   if (rawCursor === undefined) return { kind: 'page', limit, ...(rpcId === undefined ? {} : { rpcId }) }
   if (typeof rawCursor !== 'string') {
-    return { kind: 'invalid', error: 'invalid_cursor', message: SESSION_LIST_ERROR_MESSAGES.invalid_cursor }
+    return {
+      kind: 'invalid',
+      error: 'invalid_cursor',
+      message: SESSION_LIST_ERROR_MESSAGES.invalid_cursor,
+      rawLimit: String(limit),
+      rawCursor: rawLogValue(rawCursor),
+    }
   }
   try {
-    return { kind: 'page', limit, cursor: decodeSessionListCursor(rawCursor), ...(rpcId === undefined ? {} : { rpcId }) }
+    return {
+      kind: 'page',
+      limit,
+      cursor: decodeSessionListCursor(rawCursor),
+      cursorText: rawCursor,
+      ...(rpcId === undefined ? {} : { rpcId }),
+    }
   } catch {
-    return { kind: 'invalid', error: 'invalid_cursor', message: SESSION_LIST_ERROR_MESSAGES.invalid_cursor }
+    return {
+      kind: 'invalid',
+      error: 'invalid_cursor',
+      message: SESSION_LIST_ERROR_MESSAGES.invalid_cursor,
+      rawLimit: String(limit),
+      rawCursor,
+    }
+  }
+}
+
+/** 非法参数值的日志文本：字符串原样，其它值用 JSON（含 undefined 的兜底）。 */
+function rawLogValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
   }
 }
 

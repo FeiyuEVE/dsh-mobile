@@ -1576,6 +1576,109 @@ describe('HTTP gateway', () => {
     expect(Buffer.byteLength(decoded)).toBeLessThan(Buffer.byteLength(fullRaw))
   })
 
+  it('leaves one structured page log per paged request, with end-of-list total and failure attribution', async () => {
+    // 工单 #408：正常分页请求此前零日志，导致「App 到底有没有发 limit/cursor」只能靠抓包。
+    // 这条用例把日志本身当观测面来断言：一行一个请求、serial/cursor 可对应、末页带 total。
+    const items = sessionListFixture(45)
+    const inner = await upstream('legacy', false, { items })
+    const instance = await gateway(inner.port)
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const page = (body: Record<string, unknown>): Promise<HttpResult> => request(
+      instance.address().port,
+      SESSION_LIST_PATH,
+      { method: 'POST', headers, body: sessionListRequestBody(body) },
+    )
+    try {
+      // 三页翻完：20 + 20 + 5。
+      const cursor1 = sessionListValue((await page({ limit: 20 })).body).nextCursor
+      expect(typeof cursor1).toBe('string')
+      const cursor2 = sessionListValue((await page({ limit: 20, cursor: cursor1 })).body).nextCursor
+      expect(typeof cursor2).toBe('string')
+      const last = sessionListValue((await page({ limit: 20, cursor: cursor2 })).body)
+      expect(last.nextCursor).toBeUndefined()
+
+      const pageLines = info.mock.calls
+        .map(call => String(call[0]))
+        .filter(line => line.includes('[dsh-mobile] session-list page'))
+      expect(pageLines).toHaveLength(3)
+      // 第 1 页：没有 cursor，也必须有 path/limit/serial/items/耗时。
+      expect(pageLines[0]).toContain('serial=1')
+      expect(pageLines[0]).toContain('path=/api/session/list')
+      expect(pageLines[0]).toContain('limit=20')
+      expect(pageLines[0]).toContain('cursor=-')
+      expect(pageLines[0]).toContain('items=20')
+      expect(pageLines[0]).toContain('total=45')
+      expect(pageLines[0]).toContain('duration_ms=')
+      expect(pageLines[0]).toContain('end_of_list=false')
+      // 第 2 页：cursor 必须是 App 原样带回的那个串（不是解码后的对象）。
+      expect(pageLines[1]).toContain('serial=2')
+      expect(pageLines[1]).toContain(`cursor=${cursor1}`)
+      expect(pageLines[1]).toContain('items=20')
+      // 末页：写出「已到末页（total=N）」。
+      expect(pageLines[2]).toContain('serial=3')
+      expect(pageLines[2]).toContain(`cursor=${cursor2}`)
+      expect(pageLines[2]).toContain('items=5')
+      expect(pageLines[2]).toContain('end_of_list=true')
+      expect(pageLines[2]).toContain('total=45')
+
+      // 非法 cursor：400 也要有一行唯一归因，带原始 cursor 与 serial。
+      const rejected = await page({ limit: 20, cursor: 'not-a-cursor!!' })
+      expect(rejected.status).toBe(400)
+      const warnLines = warn.mock.calls.map(call => String(call[0]))
+      expect(warnLines).toContainEqual(expect.stringMatching(
+        /session-list page serial=4 .*limit=20 cursor=not-a-cursor!! .*outcome=reject error=invalid_cursor status=400/u,
+      ))
+    } finally {
+      info.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  it('attributes an upstream failure on the paged path to the same serial and cursor', async () => {
+    const failing = createServer((incoming, response) => {
+      if (incoming.url === SESSION_LIST_PATH) {
+        response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        response.end('upstream exploded')
+        return
+      }
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{}')
+    })
+    const failingPort = await listen(failing)
+    cleanups.push(() => closeServer(failing))
+    const instance = await gateway(failingPort)
+    const paired = await signIn(instance)
+    const headers = {
+      ...browserHeaders(instance),
+      cookie: `${SESSION_COOKIE}=${paired.session}`,
+      [CSRF_HEADER]: paired.csrf,
+      'content-type': 'application/json',
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const validCursor = Buffer.from(JSON.stringify([1_700_000_000_000, 'session-044']), 'utf8').toString('base64url')
+      const result = await request(instance.address().port, SESSION_LIST_PATH, {
+        method: 'POST',
+        headers,
+        body: sessionListRequestBody({ limit: 20, cursor: validCursor }),
+      })
+      expect(result.status).toBe(500)
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(
+        new RegExp(`session-list page serial=1 .*limit=20 cursor=${validCursor} .*outcome=error error=upstream_status upstream_status=500`, 'u'),
+      ))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('rejects invalid session list limit/cursor without touching upstream', async () => {
     const inner = await upstream('legacy', false, { items: sessionListFixture(5) })
     const instance = await gateway(inner.port)

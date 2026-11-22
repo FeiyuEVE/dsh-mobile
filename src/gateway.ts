@@ -926,6 +926,20 @@ function extensionContentType(path: string): string {
   return type ?? 'application/octet-stream'
 }
 
+/**
+ * `/api/session/list` 分页请求的日志上下文（工单 #408）。
+ *
+ * 一个请求只有一条成功行或一条失败行，`serial` 由网关内自增，`cursor` 是客户端
+ * 原样发出的串——于是「App 发的到底是不是 limit/cursor 分页」与「这次失败是不是
+ * 同一个请求」都能只凭一行日志归因，不需要开 debug 开关或抓包。
+ */
+interface SessionListTrace {
+  readonly serial: number
+  readonly startedAt: number
+  readonly limit: string | undefined
+  readonly cursor: string | undefined
+}
+
 /** Authenticated TLS edge in front of the ordinary loopback-only DSH Web server. */
 export class MobileAccessGateway {
   private readonly listenerTlsEnabled: boolean
@@ -960,6 +974,8 @@ export class MobileAccessGateway {
   private readonly sessionListCache: SessionListCache
   /** 切片路径读取全量回包的缓冲上限（测试可注入更小的值）。 */
   private readonly sessionListMaxBufferBytes: number
+  /** `/api/session/list` 分页请求的网关内自增序号（工单 #408 的可归因事件）。 */
+  private sessionListSerial = 0
 
   constructor(
     readonly config: ResolvedGatewayConfig,
@@ -2260,6 +2276,7 @@ export class MobileAccessGateway {
     const holder: { request?: ClientRequest } = {}
     const operation = this.allocateRequest(authorization, response, holder)
     let bodyDone: Promise<void> | undefined
+    let sessionListTrace: SessionListTrace | undefined
     try {
       // 会话列表切片（工单 #229）：只有 `payload.args._request.limit` 显式存在
       // 才进入分页分支；其余情况（包括完全不带 `_request` 的 build 181 请求）
@@ -2272,7 +2289,21 @@ export class MobileAccessGateway {
       const sessionListPlan = sessionListBody === undefined
         ? undefined
         : planSessionListRequest(sessionListBody, this.config.sessionListPageSize)
+      const sessionListStartedAt = sessionListPlan === undefined || sessionListPlan.kind === 'passthrough'
+        ? undefined
+        : Date.now()
+      const sessionListSerial = sessionListStartedAt === undefined ? undefined : ++this.sessionListSerial
       if (sessionListPlan?.kind === 'invalid') {
+        this.writeSessionListLog({
+          serial: sessionListSerial!,
+          startedAt: sessionListStartedAt!,
+          limit: sessionListPlan.rawLimit,
+          cursor: sessionListPlan.rawCursor,
+        }, 'warn', {
+          outcome: 'reject',
+          error: sessionListPlan.error,
+          status: 400,
+        })
         sendJson(
           response,
           400,
@@ -2282,11 +2313,19 @@ export class MobileAccessGateway {
         return
       }
       const sessionListPage = sessionListPlan?.kind === 'page' ? sessionListPlan : undefined
+      sessionListTrace = sessionListPage === undefined
+        ? undefined
+        : {
+          serial: sessionListSerial!,
+          startedAt: sessionListStartedAt!,
+          limit: String(sessionListPage.limit),
+          cursor: sessionListPage.cursorText,
+        }
       // 缓存命中时连上游都不打：这是「翻第二页」不该再等 3.5 s TTFB 的关键。
-      if (sessionListPage !== undefined) {
+      if (sessionListPage !== undefined && sessionListTrace !== undefined) {
         const cached = this.sessionListCache.get(authorization.sessionKey, Date.now())
         if (cached !== undefined) {
-          await this.sendSessionListPage(request, response, {}, cached, sessionListPage)
+          await this.sendSessionListPage(request, response, {}, cached, sessionListPage, undefined, sessionListTrace, true)
           return
         }
       }
@@ -2328,9 +2367,18 @@ export class MobileAccessGateway {
         void bodyDone.catch(reject)
       })
       const proxied = await upstreamResponse
-      if (sessionListPage !== undefined && (proxied.statusCode ?? 502) === 200) {
-        await this.proxySessionListPage(request, response, proxied, sessionListPage, authorization)
-        return
+      if (sessionListPage !== undefined && sessionListTrace !== undefined) {
+        if ((proxied.statusCode ?? 502) === 200) {
+          await this.proxySessionListPage(request, response, proxied, sessionListPage, authorization, sessionListTrace)
+          return
+        }
+        // 上游非 200：这条路径不会进切片，失败归因只能在这里补——否则客户端只看到
+        // 一个状态码，日志里连「是哪个 cursor 的哪一页」都没有。
+        this.writeSessionListLog(sessionListTrace, 'warn', {
+          outcome: 'error',
+          error: 'upstream_status',
+          upstream_status: proxied.statusCode ?? 502,
+        })
       }
       // SSE 长连接不受上游空闲超时约束（WebSocket 分支在握手后同样
       // `setTimeout(0)`）：`/plugins/events` 这类通道在无事件时长期零流量，
@@ -2365,12 +2413,54 @@ export class MobileAccessGateway {
     } catch (error) {
       holder.request?.destroy()
       await bodyDone?.catch(() => undefined)
+      if (sessionListTrace !== undefined) {
+        this.writeSessionListLog(sessionListTrace, 'warn', {
+          outcome: 'error',
+          error: error instanceof HttpError ? 'http_error' : 'upstream_exception',
+          error_class: error instanceof Error ? error.name : typeof error,
+          detail: error instanceof Error ? error.message : String(error),
+          status: error instanceof HttpError ? error.status : 502,
+        })
+      }
       if (error instanceof HttpError) throw error
       if (response.headersSent) response.destroy()
       else throw new HttpError(502, 'upstream_unavailable')
     } finally {
       operation.release()
     }
+  }
+
+  /**
+   * 一行可归因的分页请求日志（工单 #408）。
+   *
+   * 正常请求走 `console.info`（生产 profile 的 `StandardOutput=journal` ⇒ journald），
+   * 失败/透传走 `console.warn`（同一落点，级别不同）。字段顺序固定、值里出现空白时
+   * 用 JSON 引号包住，保证 `key=value` 仍可按空格切分。
+   */
+  private writeSessionListLog(
+    trace: SessionListTrace,
+    level: 'info' | 'warn',
+    fields: Readonly<Record<string, string | number | boolean | undefined>>,
+  ): void {
+    const prefix = fields.outcome === 'passthrough'
+      ? '[dsh-mobile] session-list-slice passthrough'
+      : '[dsh-mobile] session-list page'
+    const parts = [
+      prefix,
+      `serial=${String(trace.serial)}`,
+      `path=${SESSION_LIST_PATH}`,
+      `limit=${trace.limit ?? '-'}`,
+      `cursor=${trace.cursor ?? '-'}`,
+    ]
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue
+      const text = typeof value === 'string' && /\s/u.test(value) ? JSON.stringify(value) : String(value)
+      parts.push(`${key}=${text}`)
+    }
+    parts.push(`duration_ms=${String(Math.max(0, Date.now() - trace.startedAt))}`)
+    const line = parts.join(' ')
+    if (level === 'warn') console.warn(line)
+    else console.info(line)
   }
 
   /**
@@ -2388,11 +2478,17 @@ export class MobileAccessGateway {
     proxied: IncomingMessage,
     page: SessionListPageRequest,
     authorization: SessionAuthorization,
+    trace: SessionListTrace,
   ): Promise<void> {
     const headers = sanitizeResponseHeaders(proxied.headers, this.config.upstreamOrigin)
     const encoding = String(proxied.headers['content-encoding'] ?? '').trim().toLowerCase()
     if (encoding !== '' && encoding !== 'identity') {
-      console.warn(`[dsh-mobile] session-list-slice passthrough reason=upstream_encoded encoding=${encoding}`)
+      this.writeSessionListLog(trace, 'warn', {
+        outcome: 'passthrough',
+        reason: 'upstream_encoded',
+        encoding,
+        upstream_status: proxied.statusCode ?? 200,
+      })
       setSecurityHeaders(response, this.tlsEnabled)
       response.writeHead(proxied.statusCode ?? 200, headers)
       await pipeline(proxied, response)
@@ -2400,7 +2496,12 @@ export class MobileAccessGateway {
     }
     const contentType = String(proxied.headers['content-type'] ?? '').toLowerCase()
     if (contentType !== '' && !contentType.includes('json')) {
-      console.warn(`[dsh-mobile] session-list-slice passthrough reason=upstream_content_type content_type=${contentType}`)
+      this.writeSessionListLog(trace, 'warn', {
+        outcome: 'passthrough',
+        reason: 'upstream_content_type',
+        content_type: contentType,
+        upstream_status: proxied.statusCode ?? 200,
+      })
       setSecurityHeaders(response, this.tlsEnabled)
       response.writeHead(proxied.statusCode ?? 200, headers)
       await pipeline(proxied, response)
@@ -2417,10 +2518,12 @@ export class MobileAccessGateway {
         bytes += buffer.byteLength
         if (bytes > this.sessionListMaxBufferBytes) {
           oversize = true
-          console.warn(
-            `[dsh-mobile] session-list-slice passthrough reason=oversize bytes=${String(bytes)} `
-            + `limit=${String(page.limit)} max=${String(this.sessionListMaxBufferBytes)}`,
-          )
+          this.writeSessionListLog(trace, 'warn', {
+            outcome: 'passthrough',
+            reason: 'oversize',
+            bytes,
+            max: this.sessionListMaxBufferBytes,
+          })
           setSecurityHeaders(response, this.tlsEnabled)
           response.writeHead(proxied.statusCode ?? 200, headers)
           if (!response.write(Buffer.concat(chunks))) {
@@ -2438,7 +2541,7 @@ export class MobileAccessGateway {
       response.end()
       return
     }
-    await this.sendSessionListPage(request, response, headers, Buffer.concat(chunks), page, authorization)
+    await this.sendSessionListPage(request, response, headers, Buffer.concat(chunks), page, authorization, trace)
   }
 
   /**
@@ -2452,26 +2555,32 @@ export class MobileAccessGateway {
     full: Buffer,
     page: SessionListPageRequest,
     authorization?: SessionAuthorization,
+    trace?: SessionListTrace,
+    cacheHit = false,
   ): Promise<void> {
     let parsed: unknown
     try {
       parsed = JSON.parse(full.toString('utf8')) as unknown
     } catch {
-      console.warn(`[dsh-mobile] session-list-slice passthrough reason=invalid_json bytes=${String(full.byteLength)}`)
+      if (trace !== undefined) {
+        this.writeSessionListLog(trace, 'warn', { outcome: 'passthrough', reason: 'invalid_json', bytes: full.byteLength })
+      }
       this.sendSessionListRaw(response, headers, full)
       return
     }
     const document = locateSessionListDocument(parsed)
     if (document === undefined) {
-      console.warn(`[dsh-mobile] session-list-slice passthrough reason=unexpected_payload bytes=${String(full.byteLength)}`)
+      if (trace !== undefined) {
+        this.writeSessionListLog(trace, 'warn', { outcome: 'passthrough', reason: 'unexpected_payload', bytes: full.byteLength })
+      }
       this.sendSessionListRaw(response, headers, full)
       return
     }
     const entries = readSessionListEntries(document.items)
     if (entries === undefined) {
-      console.warn(
-        `[dsh-mobile] session-list-slice passthrough reason=malformed_items items=${String(document.items.length)}`,
-      )
+      if (trace !== undefined) {
+        this.writeSessionListLog(trace, 'warn', { outcome: 'passthrough', reason: 'malformed_items', items: document.items.length })
+      }
       this.sendSessionListRaw(response, headers, full)
       return
     }
@@ -2479,6 +2588,16 @@ export class MobileAccessGateway {
     // 每页请求重新解析一次换常驻内存可控，这是有意的取舍。
     if (authorization !== undefined) this.sessionListCache.set(authorization.sessionKey, full, Date.now())
     const sliced = sliceSessionListItems(document.items, entries, page.limit, page.cursor)
+    if (trace !== undefined) {
+      this.writeSessionListLog(trace, 'info', {
+        outcome: 'ok',
+        items: sliced.items.length,
+        total: entries.length,
+        next: sliced.nextCursor === undefined ? 0 : 1,
+        cache: cacheHit ? 'hit' : 'miss',
+        end_of_list: sliced.nextCursor === undefined,
+      })
+    }
     const body = buildSessionListResponse(document, sliced.items, sliced.nextCursor, page.rpcId)
     await this.sendSessionListJson(request, response, headers, body)
   }

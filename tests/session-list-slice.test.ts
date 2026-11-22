@@ -62,6 +62,8 @@ describe('planSessionListRequest', () => {
       kind: 'page',
       limit: 5,
       cursor: { updatedAt: 200, sessionId: 's-b' },
+      // 工单 #408：原始 cursor 串随解析结果带出，供结构化日志按 App 实际发出的值归因。
+      cursorText: cursor,
       rpcId: 'rpc-1',
     })
   })
@@ -69,11 +71,13 @@ describe('planSessionListRequest', () => {
   it('limit 非整数 / 0 / 超过配置上限 / 字符串 / null 一律 400 invalid_limit', () => {
     for (const limit of [0, 21, 101, -1, 1.5, '20', 'abc', true, null]) {
       const plan = planSessionListRequest(body({ _request: { limit } }), 20)
-      expect(plan).toEqual({
+      expect(plan).toMatchObject({
         kind: 'invalid',
         error: 'invalid_limit',
         message: SESSION_LIST_ERROR_MESSAGES.invalid_limit(20),
       })
+      // 非法值本身也要能进日志（不是只记一句「参数非法」）。
+      expect(plan).toHaveProperty('rawLimit')
     }
     // 配置上限拉到 100 时，51..100 才是合法值
     expect(planSessionListRequest(body({ _request: { limit: 100 } }), 100)).toEqual({ kind: 'page', limit: 100, rpcId: 'rpc-1' })
@@ -85,11 +89,14 @@ describe('planSessionListRequest', () => {
 
   it('cursor 非字符串 / 乱码 / 非法字段一律 400 invalid_cursor', () => {
     for (const cursor of ['乱码', 'abc=', 'Zm9v', 'WzEsMl0', 42, null]) {
-      expect(planSessionListRequest(body({ _request: { limit: 10, cursor } }), 20)).toEqual({
+      const plan = planSessionListRequest(body({ _request: { limit: 10, cursor } }), 20)
+      expect(plan).toMatchObject({
         kind: 'invalid',
         error: 'invalid_cursor',
         message: SESSION_LIST_ERROR_MESSAGES.invalid_cursor,
       })
+      expect(plan).toMatchObject({ rawLimit: '10' })
+      expect(plan).toHaveProperty('rawCursor')
     }
   })
 })
