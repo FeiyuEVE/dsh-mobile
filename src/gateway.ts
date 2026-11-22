@@ -44,7 +44,15 @@ import {
   SESSION_COOKIE,
   setSecurityHeaders,
   WS_PATHS,
+  type RequestTarget,
 } from './http-security.js'
+import {
+  isReadOnlyMethod,
+  isTaskPlatformPath,
+  TASK_PLATFORM_PREFIX,
+  taskPlatformUpstreamHeaders,
+  taskPlatformUpstreamPath,
+} from './task-platform.js'
 import {
   APP_ASSETS_PREFIX,
   CODE_PUSH_PREFIX,
@@ -116,6 +124,8 @@ export const LOG_QUERY_HEADER = 'x-log-query'
  *  setTimeout 溢出（Node 32 位毫秒上限 ≈24.8 天，溢出被截断为 1ms；30 天
  *  token 的真实 expiresAt 正好超限，所以这里必须夹住）。 */
 const LOG_QUERY_SESSION_TTL_MS = 60 * 60 * 1000
+/** 工单平台只读代注入的上游超时：本机回环，30s 已远超正常读接口耗时。 */
+const TASK_PLATFORM_TIMEOUT_MS = 30_000
 /** 页面错误守卫上报令牌（POST /log-ingest）：**只认页面令牌**——它由部署经
  *  __DSH_INGEST_TOKEN__ 注入到（登录后才拿得到的）页面里，不进 App。
  *  0.3.41 起原先与它并列的「部署令牌」已整体退役：App 原生上报改走
@@ -1417,6 +1427,89 @@ export class MobileAccessGateway {
     return `${this.tlsEnabled ? 'https' : 'http'}://${host}${CODE_PUSH_PREFIX}/download`
   }
 
+  /**
+   * 工单平台只读代注入：`GET|HEAD /api/task-platform/*` → `<taskPlatformOrigin>/api/*`。
+   *
+   * 顺序是硬的：**先校账号 token，再决定转发**——未登录 / 被踢 / 过期 401，一个字节
+   * 都不发往平台；写方法一律 405，不转发（平台服务令牌在平台侧是 bootstrap 身份、
+   * 读写全权，绝不能给写请求用）。只读方法由网关补 `x-service-token`；客户端自带的
+   * 平台身份头在 `taskPlatformUpstreamHeaders` 里被剔除，上游身份只由网关构造。
+   */
+  private async handleTaskPlatform(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: RequestTarget,
+  ): Promise<void> {
+    if (!isReadOnlyMethod(request.method)) throw new HttpError(405, 'method_not_allowed')
+    this.authorize(request)
+    // 路由匹配用的是 decoded pathname；上游请求行必须用**编码后**的 pathname。
+    if (!target.pathname.startsWith(TASK_PLATFORM_PREFIX)) throw new HttpError(400, 'bad_request')
+    const origin = this.config.taskPlatformOrigin
+    const serviceToken = await this.taskPlatformServiceToken()
+    const { headers, injected } = taskPlatformUpstreamHeaders({
+      method: request.method,
+      upstreamHost: origin.host,
+      ...(serviceToken === undefined ? {} : { serviceToken }),
+      clientHeaders: request.headers,
+    })
+    // 一行一请求：只记方法 / 路径 / 是否注入；令牌值与令牌文件路径都不出现。
+    console.log(
+      `[task-platform] method=${request.method ?? ''} path=${target.pathname} injected=${String(injected)}`,
+    )
+    // GET/HEAD 不带请求体；把入站体排空，避免连接半开。
+    request.resume()
+    await new Promise<void>((resolve) => {
+      const clientRequest = requestHttp({
+        hostname: origin.hostname,
+        port: origin.port,
+        path: taskPlatformUpstreamPath(target.pathname, target.search),
+        method: request.method,
+        headers,
+        timeout: TASK_PLATFORM_TIMEOUT_MS,
+      }, (upstreamResponse) => {
+        if (response.destroyed) {
+          upstreamResponse.destroy()
+          return
+        }
+        const responseHeaders: OutgoingHttpHeaders = {}
+        for (const name of ['content-type', 'content-length', 'content-encoding'] as const) {
+          const value = upstreamResponse.headers[name]
+          if (value !== undefined) responseHeaders[name] = value
+        }
+        setSecurityHeaders(response, this.tlsEnabled)
+        response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+        upstreamResponse.on('error', () => { if (!response.destroyed) response.destroy() })
+        response.on('close', () => { if (!upstreamResponse.complete) upstreamResponse.destroy() })
+        upstreamResponse.pipe(response)
+      })
+      // 失败只回一个稳定类别（502），不把上游地址/令牌带进响应。
+      clientRequest.on('error', () => {
+        if (response.destroyed) return
+        if (response.headersSent) {
+          response.destroy()
+          return
+        }
+        sendFailure(response, 502, 'task_platform_unavailable', this.tlsEnabled)
+      })
+      clientRequest.on('timeout', () => { clientRequest.destroy(new Error('task_platform_timeout')) })
+      // 客户端断开 / 响应正常结束都释放这次等待（pipe 结束时 response 也 close）。
+      response.on('close', () => { resolve() })
+      clientRequest.end()
+    })
+  }
+
+  /** 读工单平台服务令牌（每次请求现读：文件轮换无需重载插件）。读不到 = 不注入。 */
+  private async taskPlatformServiceToken(): Promise<string | undefined> {
+    const file = this.config.taskPlatformServiceTokenFile
+    if (file === undefined) return undefined
+    try {
+      const token = (await readFile(file, 'utf8')).trim()
+      return token === '' ? undefined : token
+    } catch {
+      return undefined
+    }
+  }
+
   private async handleLogout(request: IncomingMessage, response: ServerResponse): Promise<void> {
     // 空体是合法的：登出没有参数，客户端（含 `fetch(..., {method:'POST'})` 不写 body）
     // 不该因为「没带 JSON」被 400 挡掉——那会让 token 永远撤不掉。
@@ -1484,7 +1577,10 @@ export class MobileAccessGateway {
     const target = parseRequestTarget(request.url)
     const policy = this.requirePolicy()
     const isMutation = request.method !== 'GET' && request.method !== 'HEAD'
-    assertExternalTrust(request, policy, isMutation)
+    // 工单平台前缀的写方法只会得到 405（不转发），所以不要求浏览器 Origin 事实；
+    // GET/HEAD 本来就不要求。CIDR / Host 信任校验对所有方法照旧。
+    const taskPlatform = isTaskPlatformPath(target.decodedPathname)
+    assertExternalTrust(request, policy, isMutation && !taskPlatform)
     if (target.decodedPathname === LOCAL_ADMIN_PREFIX || target.decodedPathname.startsWith(`${LOCAL_ADMIN_PREFIX}/`)) {
       throw new HttpError(404, 'not_found')
     }
@@ -1635,6 +1731,13 @@ export class MobileAccessGateway {
     if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST'
       && requestedExtension?.kind !== 'route') {
       throw new HttpError(405, 'method_not_allowed')
+    }
+    // 工单平台只读代注入（`GET|HEAD /api/task-platform/*` → `<taskPlatformOrigin>/api/*`）：
+    // 先校网关账号 token（未登录/被踢/过期 401、不转发），写方法一律 405，只读方法由
+    // 网关补 `x-service-token`。口径与拒绝路径见 `src/task-platform.ts` 顶部。
+    if (taskPlatform) {
+      await this.handleTaskPlatform(request, response, target)
+      return
     }
     // App 日志查看（GET /api/mobile-logs）：**需要账号会话**（Bearer / 会话
     // cookie）——0.3.41 起不再有内置查询令牌，未登录/被踢即 401（App 回登录页）。

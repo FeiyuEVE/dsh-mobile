@@ -1,3 +1,32 @@
+## 0.3.51 — 2026-11-23 · 工单平台只读代注入：移动端只凭网关账密那一枚 token 就能读工单
+
+**背景**：主人裁决「本来就应该走账密登录的统一鉴权，移动端那一套可以取缔掉的」——
+移动端只该有网关账密登录换来的 30 天 token，不该再额外持有一枚「后端令牌」去打工单
+平台。平台（k3s NodePort，`TASK_PLATFORM_AUTH=enforce`）只认 `x-service-token` /
+`x-dsh-session-id`、**不接受**网关 Bearer，所以 App 自己永远拿不到平台身份（读接口
+全天 403）。
+
+**改法**：在已有网关上新增一条只读代注入前缀，**不新增服务、不新增端口**：
+
+- `src/task-platform.ts`（新增）：`GET|HEAD /api/task-platform/*` →
+  `<taskPlatformOrigin>/api/*`（前缀剥掉、其余原样、query 透传）。只读方法才注入
+  `x-service-token`；客户端自带的 `x-service-token` / `x-dsh-session-id` /
+  `x-dsh-actor-type` 连放行列表都进不来；与后端
+  `dsh-mobile-backend/src/modules/task-platform.js` 同形。
+- `src/gateway.ts`：路由先 `authorize`（未登录/被踢/过期 401，不转发），写方法一律
+  **405**（服务令牌在平台侧是 bootstrap 身份，绝不能给写请求用），只读方法由网关补
+  令牌后转发；每请求一行日志只记 `method / path / injected`，令牌值与令牌文件路径都
+  不出现。
+- `src/config.ts`：新增 `taskPlatformOrigin`（默认 `http://127.0.0.1:30081`）与
+  `taskPlatformServiceTokenFile`（只写路径、不写值；省略/空文件 = 不注入，平台按匿名
+  403）。令牌每次请求现读，轮换无需重载插件。
+
+**判据**：`npm run verify` 退出 0；`tests/task-platform.test.ts` 6 例（前缀/方法/
+路径/注入/身份头剔除/空令牌）+ `tests/gateway.test.ts` 7 例（匿名 401 不转发、GET 与
+HEAD 注入、POST/PUT/PATCH/DELETE 405 不转发、伪造身份头被剔除、无令牌 403、空令牌
+403）。线上验收：带网关 token 打 `/api/task-platform/api/v1/projects?limit=1` 200、
+匿名 401、POST 405、注入口径关掉后同一请求 403（平台匿名拒绝）。
+
 ## 0.3.50 — 2026-11-21 · 会话列表服务端切片（opt-in）：手机不再收 5.3 MB / 3905 条
 
 **背景**：移动端「全部会话」页每次刷新拉全量——2026-11-21 实测 **3905 条 /

@@ -85,6 +85,20 @@ export interface PluginConfig {
    */
   codePushDir?: string
   /**
+   * **工单平台只读代注入**的回环源（`GET|HEAD /api/task-platform/*` → `<源>/api/*`）。
+   *
+   * 省略 = `http://127.0.0.1:30081`（本机 k3s NodePort）。与 `upstreamOrigin` 同一
+   * 校验口径：HTTP、回环地址、必须带显式端口、无路径 / 凭据。
+   */
+  taskPlatformOrigin?: string
+  /**
+   * 工单平台服务令牌的**文件路径**（只写路径，不写令牌本身）。
+   *
+   * 网关只对 `GET`/`HEAD` 把该文件内容注入 `x-service-token`；省略 / 空文件 = 不注入
+   * （平台按匿名拒绝，403）。令牌文件每次请求现读，文件轮换无需重载插件。
+   */
+  taskPlatformServiceTokenFile?: string
+  /**
    * Opt-in Service Worker static caching for the mobile page. When enabled the
    * rewritten mobile index registers a gateway-scoped worker that serves
    * revisioned plugin/assets/mobile-boot responses from Cache Storage, so page
@@ -161,6 +175,10 @@ export interface ResolvedGatewayConfig {
   readonly hotUpdateDir: string
   /** Dart 补丁目录（见 raw 配置的 `codePushDir`）。 */
   readonly codePushDir: string
+  /** 工单平台只读代注入的回环源（见 raw 配置的 `taskPlatformOrigin`）。 */
+  readonly taskPlatformOrigin: URL
+  /** 工单平台服务令牌文件（见 raw 配置的 `taskPlatformServiceTokenFile`）；省略 = 不注入。 */
+  readonly taskPlatformServiceTokenFile?: string
   /** Whether the mobile page registers the Service Worker static cache. */
   readonly staticCacheWorker: boolean
   readonly instanceId: string
@@ -206,6 +224,8 @@ export const Config: z<PluginConfig> = z.object({
   mobileLayoutFile: z.string().hidden(),
   hotUpdateDir: z.string().hidden(),
   codePushDir: z.string().hidden(),
+  taskPlatformOrigin: z.string(),
+  taskPlatformServiceTokenFile: z.string(),
   staticCacheWorker: z.boolean(),
   instanceId: z.string().hidden(),
   pairingCaFile: z.string().hidden(),
@@ -423,6 +443,10 @@ export function parseGatewayConfig(raw: unknown): ResolvedGatewayConfig {
     codePushDir: value.codePushDir === undefined
       ? join(accountDir, 'codepush')
       : absoluteFile(value.codePushDir, 'codePushDir'),
+    taskPlatformOrigin: parseUpstream(value.taskPlatformOrigin ?? 'http://127.0.0.1:30081'),
+    ...(value.taskPlatformServiceTokenFile === undefined || value.taskPlatformServiceTokenFile.trim() === ''
+      ? {}
+      : { taskPlatformServiceTokenFile: absoluteFile(value.taskPlatformServiceTokenFile, 'taskPlatformServiceTokenFile') }),
     staticCacheWorker: value.staticCacheWorker === true,
     instanceId: value.instanceId === undefined
       ? createHash('sha256').update(stateFile).digest('hex')

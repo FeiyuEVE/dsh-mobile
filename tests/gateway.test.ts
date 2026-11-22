@@ -2201,6 +2201,156 @@ describe('HTTP gateway', () => {
     })
   })
 
+  describe('工单平台只读代注入（/api/task-platform/*）', () => {
+    const SERVICE_TOKEN = 'platform-service-token-fixture'
+
+    /** 假平台：没有 `x-service-token` 就 403（与 enforce 下的平台同形），有就回 200 JSON。 */
+    async function platform(): Promise<{ port: number; observations: UpstreamObservation[] }> {
+      const observations: UpstreamObservation[] = []
+      const server = createServer(async (incoming, response) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+        observations.push({
+          method: incoming.method ?? '',
+          url: incoming.url ?? '',
+          headers: incoming.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        })
+        const authorized = incoming.headers['x-service-token'] === SERVICE_TOKEN
+        const body = JSON.stringify(authorized
+          ? { ok: true, path: incoming.url ?? '' }
+          : { error: 'forbidden' })
+        response.writeHead(authorized ? 200 : 403, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        })
+        response.end(body)
+      })
+      const port = await listen(server)
+      cleanups.push(() => closeServer(server))
+      return { port, observations }
+    }
+
+    /** 写一份令牌文件并返回路径（内容带换行，验证 trim）。 */
+    async function tokenFile(value: string = `${SERVICE_TOKEN}\n`): Promise<string> {
+      const directory = await tempDirectory('task-platform-token')
+      const filename = join(directory, 'service-token')
+      await writeFile(filename, value, { mode: 0o600 })
+      return filename
+    }
+
+    it('未登录 GET ⇒ 401，且一个字节都不发往平台', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, { taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}` })
+      const result = await request(instance.address().port, '/api/task-platform/api/v1/projects?limit=1', {
+        headers: browserHeaders(instance),
+      })
+      expect(result.status).toBe(401)
+      expect(fake.observations).toHaveLength(0)
+    })
+
+    it('带网关 token ⇒ 注入服务令牌并原样转发路径与 query', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/task-platform/api/v1/projects?limit=1', {
+        headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+      })
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.body)).toEqual({ ok: true, path: '/api/v1/projects?limit=1' })
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.headers['x-service-token']).toBe(SERVICE_TOKEN)
+    })
+
+    it('HEAD 也注入（同一只读口径）', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/task-platform/api/v1/projects', {
+        method: 'HEAD',
+        headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+      })
+      expect(result.status).toBe(200)
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.method).toBe('HEAD')
+      expect(fake.observations[0]?.headers['x-service-token']).toBe(SERVICE_TOKEN)
+    })
+
+    it('POST / PUT / PATCH / DELETE ⇒ 405，且不转发', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+        const result = await request(instance.address().port, '/api/task-platform/api/v1/projects', {
+          method,
+          headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}`, 'content-type': 'application/json' },
+          body: '{}',
+        })
+        expect(result.status, method).toBe(405)
+      }
+      expect(fake.observations).toHaveLength(0)
+    })
+
+    it('客户端伪造的平台身份头被剔除，上游只认网关构造的身份', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/task-platform/api/v1/projects', {
+        headers: {
+          ...browserHeaders(instance),
+          authorization: `Bearer ${paired.token}`,
+          'x-service-token': 'forged-service-token',
+          'x-dsh-session-id': 'forged-session',
+          'x-dsh-actor-type': 'forged-actor',
+        },
+      })
+      expect(result.status).toBe(200)
+      const observed = fake.observations[0]?.headers
+      expect(observed?.['x-service-token']).toBe(SERVICE_TOKEN)
+      expect(observed?.['x-dsh-session-id']).toBeUndefined()
+      expect(observed?.['x-dsh-actor-type']).toBeUndefined()
+      expect(observed?.authorization).toBeUndefined()
+      expect(observed?.cookie).toBeUndefined()
+    })
+
+    it('反向控制：不注入（没有令牌文件）⇒ 平台匿名 403（证明「能读」是注入带来的）', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, { taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}` })
+      const paired = await signIn(instance)
+      const headers = { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` }
+      const anonymous = await request(instance.address().port, '/api/task-platform/api/v1/projects', { headers })
+      expect(anonymous.status).toBe(403)
+      expect(fake.observations).toHaveLength(1)
+      expect(fake.observations[0]?.headers['x-service-token']).toBeUndefined()
+    })
+
+    it('令牌文件为空 ⇒ 同样不注入（403），不回 5xx', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile('\n\n'),
+      })
+      const paired = await signIn(instance)
+      const result = await request(instance.address().port, '/api/task-platform/api/v1/projects', {
+        headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+      })
+      expect(result.status).toBe(403)
+      expect(fake.observations[0]?.headers['x-service-token']).toBeUndefined()
+    })
+  })
+
   it('answers an anonymous session probe without side effects and rejects revoked credentials', async () => {
     const inner = await upstream()
     const instance = await gateway(inner.port)

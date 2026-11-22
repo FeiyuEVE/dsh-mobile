@@ -25,6 +25,7 @@ DSH 社区插件 `@feiyueve/dsh-mobile`（fork 自上游 `saya-ch/dsh-mobile`，
 | `src/plugin.ts` | Cordis 入口（`name=dsh-mobile`，`inject=[webServer,commands,connection]`）、`/api/mobile-access/*` 管理面、`/mobile` 命令 |
 | `src/gateway.ts` | 网关核心：`/mobile-access/*` 路由（**账密登录页 `/login` + `/login.js`**、`auth/login`·`auth/session`·`auth/tokens`·`auth/tokens/revoke`·`auth/logout`、公开的 `metadata`（回 `accountConfigured`）与 `discovery`（回 `instanceId`）、**需账号 token 的 App 分发 `/app/{manifest.json,*.apk}`**、设备/token 列表）、index 重写（viewport/preload/boot 批次）、CSP、SSE/WS 代理 |
 | `src/hot-update.ts` | **内容热更的两条只读前缀**（0.3.45；见准则 14）：`APP_ASSETS_PREFIX` = `/mobile-access/app-assets`（页面资源树，`manifest.json` + 逻辑名镜像，读 `hotUpdateDir`）、`CODE_PUSH_PREFIX` = `/mobile-access/codepush`（`check`/`events` 两个 POST + `/download/<file>` 静态字节，读 `codePushDir/index.json`）。名字白名单与 App 侧 `remote_assets.dart` 的 `_safeNameRe` 同源；目录不存在/名字非法/文件缺失一律 **404（不是 5xx）** |
+| `src/task-platform.ts` | **工单平台只读代注入**（0.3.51；见准则 16）：`GET|HEAD /api/task-platform/*` → `<taskPlatformOrigin>/api/*`，只读方法注入 `x-service-token`；路径前缀剥掉、其余原样、query 透传；客户端身份头一律剔除 |
 | `src/client.ts`·`mobile-layout.ts`·`native-mobile.ts` | Client 半边：移动布局、消息、native surface CSS/同步 |
 | `src/config.ts`·`account.ts`·`access.ts`·`control.ts`·`network.ts`·`http-security.ts` | 配置校验与资源上限、**账号与 token 表（`account.ts`，唯一凭据来源；快照上限 `tokenSnapshotLimit(maxTokens) = maxTokens + 64`）**、会话授权原语（`access.ts` 只剩 `AccessError`/`SessionAuthorization`/`BoundedRateLimiter`；**`storage.ts` 已删**）、CIDR、CSRF 与 loopback 信任策略 |
 | `src/funnel.ts`·`cpolar*.ts`·`remote.ts`·`diagnostics.ts`·`extensions.ts` | 远程通道、诊断、扩展注册表 |
@@ -86,6 +87,22 @@ npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x
     **完整透传**并写 `session-list-slice` 日志，绝不截断/回空页。只碰这一条路由；
     `limit` 的合法上界是配置 `sessionListPageSize`（默认 20，配置区间 1..100）。
     参数表、跳位/不重复保证与缓存边界见 `docs/session-list-paging.md`。
+
+16. **工单平台只读代注入（0.3.51）——「移动端只凭网关账密那一枚 token」的落点**：
+    `GET|HEAD /api/task-platform/*` → `<taskPlatformOrigin>/api/*`（默认
+    `http://127.0.0.1:30081`），前缀剥掉、其余原样、query 透传。五条硬约束：
+    - **鉴权在转发之前**：先 `authorize`（同一枚 30 天账号 token），未登录/被踢/过期
+      **401 且不转发**。
+    - **服务令牌只给只读方法**：`GET`/`HEAD` 才注入 `x-service-token`；其余方法一律
+      **405、不转发**——平台侧服务令牌是 bootstrap 身份（读写全权），绝不能给写请求用。
+    - **客户端身份头一律剔除**：`x-service-token` / `x-dsh-session-id` /
+      `x-dsh-actor-type` 连放行列表都进不来（`src/task-platform.ts` 是唯一入口），
+      上游身份只由网关构造。
+    - **令牌只写路径**：配置 `taskPlatformServiceTokenFile` 指文件，不写值；每请求现读
+      （轮换无需重载插件），省略/空文件 = 不注入（平台按匿名 403）；日志只记
+      `method / path / injected`，令牌值与文件路径都不出现。
+    - **不新增服务/端口**：挂在已有 18443/18452 网关上；改配置走 profile patch 的 HMR
+      热路径（加 `taskPlatformServiceTokenFile`），不重启 `dsh-web`。
 
 ## 相关文档
 
