@@ -19,7 +19,8 @@
  *    `GET`/`HEAD` 注入；其余方法一律 405、不转发（写请求保持匿名，不会因网关被提权）。
  * 3. **客户端身份头一律不进上游**：`x-service-token` / `x-dsh-session-id` /
  *    `x-dsh-actor-type` 连放行列表都进不来，这里再显式删一遍——上游身份只由网关构造。
- * 4. **令牌值不进日志**：调用方只记 `method / path / injected`；令牌文件路径也不进日志。
+ * 4. **令牌值不进日志**：日志只记方法 / 路径 / 是否注入 / 上游状态 / 耗时 / 剔头数 /
+ *    结局；令牌值与令牌文件路径都不进日志，令牌长度也可以不记。
  *
  * 不新增服务、不新增端口：挂的是已有 18443/18452 网关上的一个前缀。
  */
@@ -99,4 +100,111 @@ export function taskPlatformUpstreamHeaders(
   const injected = isReadOnlyMethod(options.method) && token !== ''
   if (injected) headers['x-service-token'] = token
   return { headers, injected }
+}
+
+/**
+ * 一次工单平台请求的**结局词表**（网关侧与 `dsh-mobile-backend` 侧逐字共用）。
+ *
+ * - `ok`：上游 2xx/3xx；
+ * - `upstream_rejected`：上游 4xx/5xx——**「注入了但平台仍然拒」就是这一条**，与
+ *   `unauthorized` 分开，正是这次要补的可判别性；
+ * - `upstream_unreachable`：连不上 / 超时（`upstream_status=none` + `upstream_error`）；
+ * - `unauthorized`：网关自己拒（未登录 / 被踢 / 过期），一个字节都没发往上游；
+ * - `method_not_allowed`：写方法 / 非只读方法，405 且在鉴权之前。
+ */
+export type TaskPlatformOutcome =
+  | 'ok'
+  | 'upstream_rejected'
+  | 'upstream_unreachable'
+  | 'unauthorized'
+  | 'method_not_allowed'
+
+/** 结构化日志字段（字段名与后端代理逐字一致）。 */
+export interface TaskPlatformLogFields {
+  readonly method: string
+  /** 编码后的 pathname + 已脱敏的 query。 */
+  readonly path: string
+  /** 是否真的把 `x-service-token` 注入给了上游。 */
+  readonly injected: boolean
+  /** 上游 HTTP 状态码；未得到响应（含未转发）时为 `undefined` → 日志写 `none`。 */
+  readonly upstreamStatus?: number
+  /** 上游不可达 / 超时的原因类别（仅错误码，**绝不带地址与令牌**）。 */
+  readonly upstreamError?: string
+  readonly durationMs: number
+  /** 客户端自带、已被剔除的平台身份头数量。 */
+  readonly clientIdentityHeadersStripped: number
+  readonly outcome: TaskPlatformOutcome
+}
+
+/**
+ * query 里「可能含令牌」的参数名：命中时只留长度（`<redacted:N>`），值不落日志。
+ *
+ * 用分段边界匹配而不是裸子串，避免把 `keyword` 这类正常检索参数误脱敏：
+ * `access_token` / `api_key` / `apikey` / `accessKey` / `sessionId` / `authorization`
+ * 都会命中，`keyword` / `sort` 不会。
+ */
+const SENSITIVE_QUERY_KEY =
+  /(?:^|[_\-.])?(?:token|secret|password|passwd|credential|credentials|authorization|auth|bearer|cookie|signature|sig|sessionid|session|apikey|accesskey|key)(?:$|[_\-.])/iu
+
+/**
+ * 保留 query 串（今天的故障全靠 `?limit=1` 这类路径区分），但把敏感参数的值换成
+ * `<redacted:长度>`。只动值，键与其余参数的原始编码都不变。
+ */
+export function redactTaskPlatformQuery(search: string): string {
+  if (search === '') return ''
+  return search.replace(
+    /([?&])([^=&#]+)=([^&#]*)/gu,
+    (whole: string, lead: string, rawName: string, rawValue: string): string => {
+      let name = rawName
+      try {
+        name = decodeURIComponent(rawName)
+      } catch { /* 非法编码就按原样判 */ }
+      if (!SENSITIVE_QUERY_KEY.test(name)) return whole
+      let value = rawValue
+      try {
+        value = decodeURIComponent(rawValue)
+      } catch { /* 非法编码就按原样计长 */ }
+      return `${lead}${rawName}=<redacted:${String(value.length)}>`
+    },
+  )
+}
+
+/** 客户端自带的平台身份头数量（证明伪造头确实被剔除）。 */
+export function countClientIdentityHeaders(headers: IncomingHttpHeaders | undefined): number {
+  let count = 0
+  for (const name of CLIENT_IDENTITY_HEADERS) if (headers?.[name] !== undefined) count += 1
+  return count
+}
+
+/**
+ * 上游失败原因类别：只取错误码（`ECONNREFUSED` 等）或固定词 `timeout`，
+ * **绝不回显 message**——Node 的 connect 错误 message 里带 `host:port`。
+ */
+export function classifyTaskPlatformUpstreamError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  if (typeof code === 'string' && /^[A-Z0-9_]+$/u.test(code)) return code
+  if (error instanceof Error && error.message === 'task_platform_timeout') return 'timeout'
+  return 'request_failed'
+}
+
+/**
+ * 拼一行 `[task-platform]` 结构化日志。
+ *
+ * 单行、无空值字段；`upstream_status` 永远出现（未拿到响应就是 `none`），
+ * `upstream_error` 只在有原因时出现。字段顺序固定，便于 grep / 解析。
+ */
+export function formatTaskPlatformLog(fields: TaskPlatformLogFields): string {
+  const status = fields.upstreamStatus === undefined ? 'none' : String(fields.upstreamStatus)
+  const parts = [
+    '[task-platform]',
+    `method=${fields.method}`,
+    `path=${fields.path}`,
+    `injected=${String(fields.injected)}`,
+    `upstream_status=${status}`,
+    ...(fields.upstreamError === undefined ? [] : [`upstream_error=${fields.upstreamError}`]),
+    `duration_ms=${String(Math.max(0, Math.round(fields.durationMs)))}`,
+    `client_identity_headers_stripped=${String(fields.clientIdentityHeadersStripped)}`,
+    `outcome=${fields.outcome}`,
+  ]
+  return parts.join(' ')
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  classifyTaskPlatformUpstreamError,
+  countClientIdentityHeaders,
+  formatTaskPlatformLog,
   isReadOnlyMethod,
   isTaskPlatformPath,
+  redactTaskPlatformQuery,
   TASK_PLATFORM_PREFIX,
   taskPlatformUpstreamHeaders,
   taskPlatformUpstreamPath,
@@ -81,5 +85,80 @@ describe('工单平台只读代注入（纯函数）', () => {
     expect(headers.authorization).toBeUndefined()
     expect(headers.cookie).toBeUndefined()
     expect(headers.accept).toBe('application/json')
+  })
+})
+
+describe('工单平台转发日志（纯函数）', () => {
+  it('query 保留，敏感参数只留长度：access_token / api_key / sessionId 都脱敏', () => {
+    expect(redactTaskPlatformQuery('?limit=1&access_token=abc123&q=hello'))
+      .toBe('?limit=1&access_token=<redacted:6>&q=hello')
+    expect(redactTaskPlatformQuery('?api_key=abcdef&keyword=secret&sort=author'))
+      .toBe('?api_key=<redacted:6>&keyword=secret&sort=author')
+    expect(redactTaskPlatformQuery('?sessionId=xyz&signature=deadbeef'))
+      .toBe('?sessionId=<redacted:3>&signature=<redacted:8>')
+  })
+
+  it('没有 query 或没有「=」的裸参数原样保留', () => {
+    expect(redactTaskPlatformQuery('')).toBe('')
+    expect(redactTaskPlatformQuery('?flag&limit=1')).toBe('?flag&limit=1')
+  })
+
+  it('客户端平台身份头数量按实际出现个数计', () => {
+    expect(countClientIdentityHeaders(undefined)).toBe(0)
+    expect(countClientIdentityHeaders({})).toBe(0)
+    expect(countClientIdentityHeaders({
+      'x-service-token': 'forged',
+      'x-dsh-session-id': 'forged',
+      'x-dsh-actor-type': 'forged',
+      accept: 'application/json',
+    })).toBe(3)
+    expect(countClientIdentityHeaders({ 'x-service-token': 'forged' })).toBe(1)
+  })
+
+  it('日志单行包含全部必填字段；未拿到上游响应时 upstream_status=none', () => {
+    const line = formatTaskPlatformLog({
+      method: 'GET',
+      path: '/api/task-platform/api/v1/projects?limit=1',
+      injected: true,
+      upstreamStatus: 200,
+      durationMs: 12.4,
+      clientIdentityHeadersStripped: 2,
+      outcome: 'ok',
+    })
+    expect(line).toBe('[task-platform] method=GET path=/api/task-platform/api/v1/projects?limit=1'
+      + ' injected=true upstream_status=200 duration_ms=12 client_identity_headers_stripped=2 outcome=ok')
+
+    const unavailable = formatTaskPlatformLog({
+      method: 'GET',
+      path: '/api/task-platform/api/v1/projects',
+      injected: true,
+      upstreamError: 'ECONNREFUSED',
+      durationMs: 3,
+      clientIdentityHeadersStripped: 0,
+      outcome: 'upstream_unreachable',
+    })
+    expect(unavailable).toContain('upstream_status=none')
+    expect(unavailable).toContain('upstream_error=ECONNREFUSED')
+    expect(unavailable).toContain('outcome=upstream_unreachable')
+
+    const unauthorized = formatTaskPlatformLog({
+      method: 'GET',
+      path: '/api/task-platform/api/v1/projects',
+      injected: false,
+      upstreamError: 'not_forwarded',
+      durationMs: 0,
+      clientIdentityHeadersStripped: 0,
+      outcome: 'unauthorized',
+    })
+    expect(unauthorized).toContain('upstream_status=none')
+    expect(unauthorized).toContain('outcome=unauthorized')
+  })
+
+  it('上游失败原因只取错误码 / timeout，不回显可能带地址的 message', () => {
+    expect(classifyTaskPlatformUpstreamError(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:30081'), { code: 'ECONNREFUSED' })))
+      .toBe('ECONNREFUSED')
+    expect(classifyTaskPlatformUpstreamError(new Error('task_platform_timeout'))).toBe('timeout')
+    expect(classifyTaskPlatformUpstreamError(new Error('boom at 10.0.0.1:99'))).toBe('request_failed')
+    expect(classifyTaskPlatformUpstreamError(undefined)).toBe('request_failed')
   })
 })

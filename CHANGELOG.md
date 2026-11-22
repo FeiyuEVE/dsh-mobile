@@ -1,3 +1,33 @@
+## 0.3.52 — 2026-11-23 · 代注入链路的可观测性：一次转发一行带 upstream_status 的结构化日志
+
+**背景**：0.3.51 的代注入只记 `injected=true/false`，不记上游返回了什么。于是「注入了
+但平台仍然拒（上游 403/401）」与「网关自己没放行（401）」「上游成功（200）」在日志上
+完全同形，今天的故障根本没法从日志上判别。
+
+**改法**（只改这一件事）：
+
+- `src/task-platform.ts`：新增结局词表 `TaskPlatformOutcome`（`ok` /
+  `upstream_rejected` / `upstream_unreachable` / `unauthorized` /
+  `method_not_allowed`）、query 敏感参数脱敏（`access_token` / `api_key` /
+  `sessionId` 等只留 `<redacted:长度>`，`keyword` / `sort` 不误伤）、客户端身份头
+  计数、上游失败原因归类（只取错误码 / `timeout`，不回显可能带地址的 message）与
+  单行日志格式化。
+- `src/gateway.ts`：`handleTaskPlatform` 在**转发结束后**（含 401/405、上游不可达、
+  客户端提前断开）记恰一行：`method / path（query 保留、敏感参数脱敏）/ injected /
+  upstream_status（未拿到响应为 none）/ [upstream_error] / duration_ms /
+  client_identity_headers_stripped / outcome`。工单平台前缀的写方法改为先落
+  `outcome=method_not_allowed` 再回 405——**状态码与顺序不变**（405 仍在鉴权之前、
+  仍不转发）。令牌值、令牌文件路径与上游地址都不出现。
+- `dsh-mobile-backend/src/modules/task-platform.js`：同一行日志改成同一口径（同一
+  outcome 词表与字段名），同样在响应结束后写、同样不记令牌；后端测试同步更新。
+- 文档：`AGENTS.md` 的准则 16 与后端 `AGENTS.md` / `README.md` 的日志说明同步到新字段。
+
+**判据**：`npm run verify` 退出 0、全量 **344 例**（`tests/task-platform.test.ts` 11 例、
+`tests/gateway.test.ts` 的工单平台 12 例、后端 `npm test` 63 例）。新增用例覆盖五种
+outcome，每类都断言日志字段真的出现（不只看返回码）；反向控制（删掉
+`upstream_status` 字段）→ 5 例 gateway + 1 例纯函数变红，恢复后全绿；本地回环实例
+五种 outcome 各一条真实日志，SAMPLE 行里令牌原文命中 0、`token=<redacted` 形态残留 0。
+
 ## 0.3.51 — 2026-11-23 · 工单平台只读代注入：移动端只凭网关账密那一枚 token 就能读工单
 
 **背景**：主人裁决「本来就应该走账密登录的统一鉴权，移动端那一套可以取缔掉的」——

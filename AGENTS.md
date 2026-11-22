@@ -88,9 +88,9 @@ npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x
     `limit` 的合法上界是配置 `sessionListPageSize`（默认 20，配置区间 1..100）。
     参数表、跳位/不重复保证与缓存边界见 `docs/session-list-paging.md`。
 
-16. **工单平台只读代注入（0.3.51）——「移动端只凭网关账密那一枚 token」的落点**：
+16. **工单平台只读代注入（0.3.51；日志 0.3.52）——「移动端只凭网关账密那一枚 token」的落点**：
     `GET|HEAD /api/task-platform/*` → `<taskPlatformOrigin>/api/*`（默认
-    `http://127.0.0.1:30081`），前缀剥掉、其余原样、query 透传。五条硬约束：
+    `http://127.0.0.1:30081`），前缀剥掉、其余原样、query 透传。六条硬约束：
     - **鉴权在转发之前**：先 `authorize`（同一枚 30 天账号 token），未登录/被踢/过期
       **401 且不转发**。
     - **服务令牌只给只读方法**：`GET`/`HEAD` 才注入 `x-service-token`；其余方法一律
@@ -99,8 +99,13 @@ npm run build:funnel-host # 需 Go 1.26.6，产出 bin/dsh-mobile-funnel-win32-x
       `x-dsh-actor-type` 连放行列表都进不来（`src/task-platform.ts` 是唯一入口），
       上游身份只由网关构造。
     - **令牌只写路径**：配置 `taskPlatformServiceTokenFile` 指文件，不写值；每请求现读
-      （轮换无需重载插件），省略/空文件 = 不注入（平台按匿名 403）；日志只记
-      `method / path / injected`，令牌值与文件路径都不出现。
+      （轮换无需重载插件），省略/空文件 = 不注入（平台按匿名 403）。
+    - **每次请求一行结构化日志（0.3.52）**：转发结束后记
+      `method / path（query 保留、token 类参数只留 <redacted:长度>）/ injected /
+      upstream_status / [upstream_error] / duration_ms / client_identity_headers_stripped /
+      outcome`；`outcome` 只有 `ok|upstream_rejected|upstream_unreachable|unauthorized|
+      method_not_allowed` 五值，网关 401 与上游 403/401 因此可判别。令牌值、令牌文件路径
+      与上游地址都不出现（上游失败只记错误码，如 `ECONNREFUSED`）。
     - **不新增服务/端口**：挂在已有 18443/18452 网关上；改配置走 profile patch 的 HMR
       热路径（加 `taskPlatformServiceTokenFile`），不重启 `dsh-web`。
 

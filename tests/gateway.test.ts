@@ -2349,6 +2349,212 @@ describe('HTTP gateway', () => {
       expect(result.status).toBe(403)
       expect(fake.observations[0]?.headers['x-service-token']).toBeUndefined()
     })
+
+    /** 取一个刚释放的回环端口：连上去必然 ECONNREFUSED（上游不可达用例）。 */
+    async function closedPort(): Promise<number> {
+      const probe = createServer()
+      const port = await listen(probe)
+      await closeServer(probe)
+      return port
+    }
+
+    /** 只保留工单平台那一种结构化日志行（其余模块的 console.log 不参与断言）。 */
+    function taskPlatformLogLines(spy: { readonly mock: { readonly calls: unknown[][] } }): string[] {
+      return spy.mock.calls
+        .map(call => call.map(value => typeof value === 'string' ? value : String(value)).join(' '))
+        .filter(line => line.startsWith('[task-platform] '))
+    }
+
+    function expectStructuredLine(line: string, fields: Record<string, string | RegExp>): void {
+      for (const [name, expected] of Object.entries(fields)) {
+        const match = new RegExp(`(?:^| )${name}=([^ ]*)(?: |$)`, 'u').exec(line)
+        expect(match, `${name} missing in: ${line}`).not.toBeNull()
+        const actual = match?.[1] ?? ''
+        if (expected instanceof RegExp) expect(actual, name).toMatch(expected)
+        else expect(actual, name).toBe(expected)
+      }
+    }
+
+    it('200 ⇒ 一行 outcome=ok：保留 query、记状态码/耗时/剔头数，令牌不落日志', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const secret = 'super-secret-token-value'
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(
+          instance.address().port,
+          `/api/task-platform/api/v1/projects?limit=1&access_token=${secret}&q=hello`,
+          {
+            headers: {
+              ...browserHeaders(instance),
+              authorization: `Bearer ${paired.token}`,
+              'x-service-token': 'forged-service-token',
+              'x-dsh-session-id': 'forged-session',
+              'x-dsh-actor-type': 'forged-actor',
+            },
+          },
+        )
+        expect(result.status).toBe(200)
+        const lines = taskPlatformLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          path: `/api/task-platform/api/v1/projects?limit=1&access_token=<redacted:${String(secret.length)}>&q=hello`,
+          injected: 'true',
+          upstream_status: '200',
+          duration_ms: /^\d+$/u,
+          client_identity_headers_stripped: '3',
+          outcome: 'ok',
+        })
+        expect(line).not.toContain(secret)
+        expect(line).not.toContain('forged-service-token')
+        expect(line).not.toContain(SERVICE_TOKEN)
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('上游 403（注入关闭）⇒ outcome=upstream_rejected，与网关 unauthorized 分清', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, { taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}` })
+      const paired = await signIn(instance)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(instance.address().port, '/api/task-platform/api/v1/projects?limit=1', {
+          headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+        })
+        expect(result.status).toBe(403)
+        const lines = taskPlatformLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          path: '/api/task-platform/api/v1/projects?limit=1',
+          injected: 'false',
+          upstream_status: '403',
+          duration_ms: /^\d+$/u,
+          client_identity_headers_stripped: '0',
+          outcome: 'upstream_rejected',
+        })
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('上游不可达 ⇒ outcome=upstream_unreachable，upstream_status=none + upstream_error', async () => {
+      const port = await closedPort()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(instance.address().port, '/api/task-platform/api/v1/projects', {
+          headers: { ...browserHeaders(instance), authorization: `Bearer ${paired.token}` },
+        })
+        expect(result.status).toBe(502)
+        expect(JSON.parse(result.body)).toEqual({ error: 'task_platform_unavailable' })
+        const lines = taskPlatformLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          injected: 'true',
+          upstream_status: 'none',
+          upstream_error: /^[A-Z_]+$/u,
+          duration_ms: /^\d+$/u,
+          client_identity_headers_stripped: '0',
+          outcome: 'upstream_unreachable',
+        })
+        expect(line).not.toContain(String(port))
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('网关自身 401 ⇒ outcome=unauthorized，一个字节都不发往平台', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        const result = await request(instance.address().port, '/api/task-platform/api/v1/projects?limit=1', {
+          headers: browserHeaders(instance),
+        })
+        expect(result.status).toBe(401)
+        expect(fake.observations).toHaveLength(0)
+        const lines = taskPlatformLogLines(log)
+        expect(lines).toHaveLength(1)
+        const line = lines[0] ?? ''
+        expectStructuredLine(line, {
+          method: 'GET',
+          path: '/api/task-platform/api/v1/projects?limit=1',
+          injected: 'false',
+          upstream_status: 'none',
+          duration_ms: /^\d+$/u,
+          client_identity_headers_stripped: '0',
+          outcome: 'unauthorized',
+        })
+      } finally {
+        log.mockRestore()
+      }
+    })
+
+    it('写方法 405 ⇒ 每个方法一行 outcome=method_not_allowed，且不转发', async () => {
+      const fake = await platform()
+      const instance = await gateway(0, {
+        taskPlatformOrigin: `http://127.0.0.1:${String(fake.port)}`,
+        taskPlatformServiceTokenFile: await tokenFile(),
+      })
+      const paired = await signIn(instance)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      try {
+        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+          const result = await request(instance.address().port, '/api/task-platform/api/v1/tickets', {
+            method,
+            headers: {
+              ...browserHeaders(instance),
+              authorization: `Bearer ${paired.token}`,
+              'content-type': 'application/json',
+            },
+            ...(method === 'POST' ? { body: '{"title":"x"}' } : {}),
+          })
+          expect(result.status, method).toBe(405)
+        }
+        expect(fake.observations).toHaveLength(0)
+        // 405 在鉴权之前：不带任何凭据的写方法同样 405（且照样留一行日志）。
+        const anonymousWrite = await request(instance.address().port, '/api/task-platform/api/v1/tickets', {
+          method: 'DELETE',
+          headers: browserHeaders(instance),
+        })
+        expect(anonymousWrite.status).toBe(405)
+        expect(fake.observations).toHaveLength(0)
+        const lines = taskPlatformLogLines(log)
+        expect(lines).toHaveLength(5)
+        for (const [index, method] of ['POST', 'PUT', 'PATCH', 'DELETE', 'DELETE'].entries()) {
+          const line = lines[index] ?? ''
+          expectStructuredLine(line, {
+            method,
+            path: '/api/task-platform/api/v1/tickets',
+            injected: 'false',
+            upstream_status: 'none',
+            duration_ms: /^\d+$/u,
+            client_identity_headers_stripped: '0',
+            outcome: 'method_not_allowed',
+          })
+        }
+      } finally {
+        log.mockRestore()
+      }
+    })
   })
 
   it('answers an anonymous session probe without side effects and rejects revoked credentials', async () => {
